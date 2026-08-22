@@ -45,6 +45,9 @@ jobs:
       - name: Build EXE
         run: pyinstaller --clean --noconfirm packaging\finance-reconcile.spec
 
+      - name: Smoke test EXE
+        run: python packaging\smoke_windows_exe.py "dist\财务对账工具.exe"
+
       - name: Copy user guide
         run: copy packaging\财务人员使用说明.txt dist\财务人员使用说明.txt
 
