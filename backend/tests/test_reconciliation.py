@@ -1,4 +1,5 @@
 from io import BytesIO
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -106,9 +107,11 @@ def test_reconcile_combined_workbook_splits_by_company_column_and_keeps_blank_al
 
 
 def test_reconcile_combined_workbook_matches_real_expected_sample_counts():
-    source = "/Users/hujiarong/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/wxid_hbmgncpu45ad12_be3e/temp/RWTemp/2026-08/5cf38f7010f4b8821463145fcae85380/1703-2615 截止8.20往来.xlsx"
+    source = Path("/Users/hujiarong/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/wxid_hbmgncpu45ad12_be3e/temp/RWTemp/2026-08/5cf38f7010f4b8821463145fcae85380/1703-2615 截止8.20往来.xlsx")
+    if not source.exists():
+        pytest.skip("本机真实样例文件不存在，跳过样例回归测试")
 
-    result = reconcile_combined_workbook(open(source, "rb"), "1703-2615 截止8.20往来.xlsx")
+    result = reconcile_combined_workbook(source.open("rb"), "1703-2615 截止8.20往来.xlsx")
 
     assert result.summary["匹配成功"]["分配数量"] == 15
     assert result.summary["匹配成功"]["明细行数"] == 61
