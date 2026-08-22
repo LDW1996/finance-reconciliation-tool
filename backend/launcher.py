@@ -36,6 +36,8 @@ def main() -> None:
         host=HOST,
         port=PORT,
         log_level="warning",
+        log_config=None,
+        access_log=False,
         reload=False,
     )
 
