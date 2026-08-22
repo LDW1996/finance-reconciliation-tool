@@ -1,0 +1,22 @@
+.DS_Store
+
+# Python
+.venv/
+.venv-win/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+
+# Node
+node_modules/
+frontend/node_modules/
+frontend/tsconfig.tsbuildinfo
+
+# Build outputs
+build/
+dist/
+frontend/dist/
+
+# Local editor files
+.idea/
+.vscode/
