@@ -3,11 +3,11 @@
 from pathlib import Path
 
 
-ROOT = Path.cwd()
+ROOT = Path(SPECPATH).parent
 
 
 a = Analysis(
-    ["backend/launcher.py"],
+    [str(ROOT / "backend" / "launcher.py")],
     pathex=[str(ROOT / "backend")],
     binaries=[],
     datas=[
