@@ -7,7 +7,8 @@ import re
 from typing import BinaryIO
 
 import pandas as pd
-from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 
 
 REQUIRED_COLUMNS = {"公司代码", "分配", "原币金额"}
@@ -256,6 +257,14 @@ def reconcile_combined_workbook(
         axis=1,
     )
     detail = detail.drop(columns=["_匹配键"])
+    trailing_columns = [
+        f"{company_a_code}原币金额合计",
+        f"{company_b_code}原币金额合计",
+        "两公司原币金额合计",
+        "匹配状态",
+        "未匹配说明",
+    ]
+    detail = detail[[column for column in detail.columns if column not in trailing_columns] + trailing_columns]
 
     matched = detail[detail["匹配状态"] == "匹配成功"].copy()
     differences = detail[detail["匹配状态"] == "金额差异"].copy()
@@ -324,6 +333,14 @@ def _build_combined_summary(
             f"{company_a_code}原币金额合计": float(frame.loc[frame[company_field].astype(str) == company_a_code, "原币金额"].sum()),
             f"{company_b_code}原币金额合计": float(frame.loc[frame[company_field].astype(str) == company_b_code, "原币金额"].sum()),
         }
+    summary["合计"] = {
+        "分配数量": sum(item["分配数量"] for item in summary.values()),
+        "明细行数": sum(item["明细行数"] for item in summary.values()),
+        f"{company_a_code}行数": sum(item[f"{company_a_code}行数"] for item in summary.values()),
+        f"{company_b_code}行数": sum(item[f"{company_b_code}行数"] for item in summary.values()),
+        f"{company_a_code}原币金额合计": sum(item[f"{company_a_code}原币金额合计"] for item in summary.values()),
+        f"{company_b_code}原币金额合计": sum(item[f"{company_b_code}原币金额合计"] for item in summary.values()),
+    }
     return summary
 
 
@@ -367,23 +384,104 @@ def _write_combined_result_excel(
     raw_data: pd.DataFrame,
 ) -> bytes:
     summary_df = pd.DataFrame([{"分类": name, **data} for name, data in summary.items()])
+    matched_out = _format_export_dataframe(matched)
+    differences_out = _format_export_dataframe(differences)
+    unmatched_out = _format_export_dataframe(unmatched)
+    raw_data_out = _format_export_dataframe(raw_data)
+    difference_summary_out = _format_export_dataframe(difference_summary)
     buffer = BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
         summary_df.to_excel(writer, sheet_name="处理汇总", index=False, startrow=2)
-        matched.to_excel(writer, sheet_name="匹配成功", index=False)
-        differences.to_excel(writer, sheet_name="金额差异明细", index=False)
-        unmatched.to_excel(writer, sheet_name="未匹配", index=False)
-        difference_summary.to_excel(writer, sheet_name="金额差异汇总", index=False)
-        raw_data.to_excel(writer, sheet_name="原始数据", index=False)
+        matched_out.to_excel(writer, sheet_name="匹配成功", index=False)
+        differences_out.to_excel(writer, sheet_name="金额差异明细", index=False)
+        unmatched_out.to_excel(writer, sheet_name="未匹配", index=False)
+        difference_summary_out.to_excel(writer, sheet_name="金额差异汇总", index=False)
+        raw_data_out.to_excel(writer, sheet_name="原始数据", index=False)
+        _write_rule_section(writer.book["处理汇总"], summary_df)
         _style_combined_workbook(writer.book, summary_df)
     return buffer.getvalue()
+
+
+def _format_export_dataframe(frame: pd.DataFrame) -> pd.DataFrame:
+    result = frame.copy()
+    if "分配" in result.columns:
+        result["分配"] = result["分配"].replace({"空白": "24"})
+    if "行项目" in result.columns:
+        result["行项目"] = result["行项目"].map(_format_line_item)
+    for column in result.columns:
+        if column.endswith("凭证编号"):
+            result[column] = result[column].map(_format_identifier)
+        elif column in {
+            "凭证编号",
+            "凭证编号1",
+            "凭证编号2",
+            "公司代码or伙伴公司",
+            "总账科目",
+            "合并科目",
+            "年度",
+            "期间",
+            "客户",
+            "供应商",
+        }:
+            result[column] = result[column].map(_format_identifier)
+    computed_columns = {"匹配状态", "未匹配说明"}
+    computed_columns.update(column for column in result.columns if "原币金额合计" in str(column))
+    computed_columns.add("两公司原币金额合计")
+    for column in result.columns:
+        if column in computed_columns:
+            continue
+        result[column] = result[column].where(pd.notna(result[column]), "24").replace("", "24")
+    return result
+
+
+def _format_identifier(value: object) -> object:
+    if pd.isna(value):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
+
+
+def _format_line_item(value: object) -> object:
+    if pd.isna(value):
+        return value
+    text = str(value).strip()
+    if re.fullmatch(r"\d+(\.0)?", text):
+        return f"{int(float(text)):06d}"
+    return text
+
+
+def _write_rule_section(ws, summary_df: pd.DataFrame) -> None:
+    company_columns = [col for col in summary_df.columns if re.match(r"^\d+行数$", str(col))]
+    company_codes = [col.removesuffix("行数") for col in company_columns[:2]]
+    company_a, company_b = company_codes if len(company_codes) == 2 else ("公司A", "公司B")
+    start_row = 3 + len(summary_df) + 2
+    rules = [
+        ("核对规则", "说明"),
+        ("匹配成功", f"分配字段一致，且{company_a}与{company_b}的原币金额汇总后相加等于0。"),
+        ("金额差异", f"分配字段在{company_a}、{company_b}两家公司都存在，但原币金额合计不等于0。"),
+        ("未匹配", "分配字段仅存在于其中一家公司；分配为空的记录也归入未匹配。"),
+        ("金额口径", f"本文件{company_a}和{company_b}的原币均为IDR，因此直接使用“原币金额”核对。"),
+    ]
+    for offset, row in enumerate(rules):
+        ws.cell(start_row + offset, 1, row[0])
+        ws.cell(start_row + offset, 2, row[1])
 
 
 def _style_combined_workbook(workbook, summary_df: pd.DataFrame) -> None:
     header_fill = PatternFill("solid", fgColor="FF1F4E78")
     title_fill = PatternFill("solid", fgColor="FF17365D")
+    total_fill = PatternFill("solid", fgColor="FFEAF2F8")
+    rule_fill = PatternFill("solid", fgColor="FFD9EAF7")
     white_bold = Font(bold=True, color="FFFFFFFF")
+    bold_font = Font(bold=True, color="FF1B1F23")
     header_alignment = Alignment(horizontal="center", vertical="center")
+    thin_border = Border(
+        left=Side(style="thin", color="FFD9E2DD"),
+        right=Side(style="thin", color="FFD9E2DD"),
+        top=Side(style="thin", color="FFD9E2DD"),
+        bottom=Side(style="thin", color="FFD9E2DD"),
+    )
 
     summary_ws = workbook["处理汇总"]
     last_summary_col = summary_ws.max_column
@@ -398,18 +496,35 @@ def _style_combined_workbook(workbook, summary_df: pd.DataFrame) -> None:
     title_cell.fill = title_fill
     title_cell.font = white_bold
     title_cell.alignment = Alignment(horizontal="left", vertical="center")
-    summary_ws.row_dimensions[1].height = 24
+    summary_ws.row_dimensions[1].height = 28
     summary_ws.row_dimensions[3].height = 22
     _style_header_row(summary_ws, 3, header_fill, white_bold, header_alignment)
+    _apply_table_format(summary_ws, 3, 3 + len(summary_df), thin_border)
+    total_row = 3 + len(summary_df)
+    for cell in summary_ws[total_row]:
+        cell.fill = total_fill
+        cell.font = bold_font
+    rule_header_row = 3 + len(summary_df) + 2
+    _style_header_row(summary_ws, rule_header_row, rule_fill, bold_font, header_alignment)
+    _apply_table_format(summary_ws, rule_header_row, rule_header_row + 4, thin_border, max_col=2)
+    summary_ws.freeze_panes = "A4"
+    summary_ws.auto_filter.ref = f"A3:{get_column_letter(last_summary_col)}{3 + len(summary_df)}"
     _set_widths(summary_ws, {"A": 18, "B": 72, "C": 12, "D": 12, "E": 12, "F": 22, "G": 22})
+    _format_numeric_columns(summary_ws, 4, 3 + len(summary_df))
 
     for sheet_name in ["匹配成功", "金额差异明细", "未匹配", "原始数据"]:
         ws = workbook[sheet_name]
         _style_header_row(ws, 1, header_fill, white_bold, header_alignment)
-        _set_detail_widths(ws)
+        _apply_table_format(ws, 1, ws.max_row, thin_border)
+        _format_numeric_columns(ws, 2, ws.max_row)
+        _auto_fit_sheet(ws)
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = ws.dimensions
 
     diff_summary = workbook["金额差异汇总"]
     _style_header_row(diff_summary, 1, header_fill, white_bold, header_alignment)
+    _apply_table_format(diff_summary, 1, diff_summary.max_row, thin_border)
+    _format_numeric_columns(diff_summary, 2, diff_summary.max_row)
     _set_widths(
         diff_summary,
         {
@@ -424,6 +539,9 @@ def _style_combined_workbook(workbook, summary_df: pd.DataFrame) -> None:
             "I": 38,
         },
     )
+    _auto_fit_sheet(diff_summary, max_width=48)
+    diff_summary.freeze_panes = "A2"
+    diff_summary.auto_filter.ref = diff_summary.dimensions
 
 
 def _style_header_row(ws, row: int, fill: PatternFill, font: Font, alignment: Alignment) -> None:
@@ -431,6 +549,45 @@ def _style_header_row(ws, row: int, fill: PatternFill, font: Font, alignment: Al
         cell.fill = fill
         cell.font = font
         cell.alignment = alignment
+
+
+def _apply_table_format(ws, start_row: int, end_row: int, border: Border, max_col: int | None = None) -> None:
+    max_column = max_col or ws.max_column
+    for row in ws.iter_rows(min_row=start_row, max_row=end_row, max_col=max_column):
+        for cell in row:
+            cell.border = border
+            cell.alignment = Alignment(vertical="center", wrap_text=True)
+
+
+def _format_numeric_columns(ws, start_row: int, end_row: int) -> None:
+    for column_cells in ws.iter_cols(min_row=1, max_row=end_row):
+        header = str(column_cells[0].value or "")
+        if any(keyword in header for keyword in ["金额", "差额"]):
+            for cell in column_cells[start_row - 1 :]:
+                if isinstance(cell.value, (int, float)):
+                    cell.number_format = "#,##0"
+        elif header.endswith("行数") or header in {"分配数量", "明细行数"}:
+            for cell in column_cells[start_row - 1 :]:
+                if isinstance(cell.value, (int, float)):
+                    cell.number_format = "#,##0"
+
+
+def _auto_fit_sheet(ws, min_width: float = 10, max_width: float = 42) -> None:
+    for column_index in range(1, ws.max_column + 1):
+        letter = get_column_letter(column_index)
+        best_width = min_width
+        for cell in ws[letter]:
+            text = "" if cell.value is None else str(cell.value)
+            best_width = max(best_width, min(max_width, len(text) * 1.15 + 3))
+        ws.column_dimensions[letter].width = best_width
+    for row_index in range(1, ws.max_row + 1):
+        max_lines = 1
+        for cell in ws[row_index]:
+            if cell.value is None:
+                continue
+            width = ws.column_dimensions[get_column_letter(cell.column)].width or 12
+            max_lines = max(max_lines, int(len(str(cell.value)) / max(width, 8)) + 1)
+        ws.row_dimensions[row_index].height = min(72, max(20, max_lines * 18))
 
 
 def _set_widths(ws, widths: dict[str, float]) -> None:
@@ -484,7 +641,12 @@ def _prepare(df: pd.DataFrame, match_field: str, amount_field: str, side: str) -
 
 def _join_unique(values: pd.Series) -> str:
     items = [str(value).strip() for value in values.dropna().tolist() if str(value).strip()]
-    return "、".join(dict.fromkeys(items))
+    unique_items = list(dict.fromkeys(items))
+    return ", ".join(sorted(unique_items, key=_natural_sort_key))
+
+
+def _natural_sort_key(value: str) -> list[object]:
+    return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", value)]
 
 
 def _build_matched_sheet(rows: pd.DataFrame, source_a: pd.DataFrame, match_field: str) -> pd.DataFrame:

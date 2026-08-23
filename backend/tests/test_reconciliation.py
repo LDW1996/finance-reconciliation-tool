@@ -145,7 +145,8 @@ def test_reconcile_combined_workbook_exports_expected_visual_style():
     detail = wb["匹配成功"]
     assert detail["A1"].fill.fgColor.rgb == "FF1F4E78"
     assert detail["A1"].font.color.rgb == "FFFFFFFF"
-    assert detail.column_dimensions["A"].width == 13
+    assert detail.column_dimensions["A"].width >= 10
+    assert detail.freeze_panes == "A2"
 
 
 def test_inspect_combined_workbook_reports_valid_file_summary():
