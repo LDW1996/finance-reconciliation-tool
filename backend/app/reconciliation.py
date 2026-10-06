@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
+import math
 import re
 from typing import BinaryIO
 
@@ -14,6 +15,7 @@ from openpyxl.utils import get_column_letter
 REQUIRED_COLUMNS = {"公司代码", "分配", "原币金额"}
 COMBINED_COMPANY_COLUMN = "公司代码or伙伴公司"
 DISPLAY_COLUMNS = ["公司代码", "凭证编号", "分配", "文本", "原币金额"]
+DEFAULT_TOLERANCE = 100.0
 
 
 class ReconciliationError(Exception):
@@ -196,7 +198,10 @@ def reconcile_combined_workbook(
     match_field: str = "分配",
     amount_field: str = "原币金额",
     company_field: str = COMBINED_COMPANY_COLUMN,
+    tolerance: float = DEFAULT_TOLERANCE,
 ) -> ReconciliationResult:
+    if not math.isfinite(tolerance) or tolerance < 0:
+        raise ReconciliationError("金额容差必须是大于或等于 0 的数字")
     df = read_excel(workbook_file, filename)
     _validate_combined_dataframe(df, match_field, amount_field, company_field)
 
@@ -223,6 +228,7 @@ def reconcile_combined_workbook(
     rows_pivot = grouped.pivot(index="_匹配键", columns=company_field, values="明细行数").fillna(0)
 
     status_by_key: dict[str, str] = {}
+    match_type_by_key: dict[str, str] = {}
     totals_by_key: dict[str, dict[str, float]] = {}
     for match_key in amount_pivot.index:
         amount_a = float(amount_pivot.loc[match_key].get(company_a_code, 0))
@@ -232,11 +238,18 @@ def reconcile_combined_workbook(
         combined = amount_a + amount_b
         if rows_a and rows_b and abs(combined) < 0.000001:
             status = "匹配成功"
+            match_type = "完全一致"
+        elif rows_a and rows_b and abs(combined) <= tolerance:
+            status = "匹配成功"
+            match_type = "容差匹配"
         elif rows_a and rows_b:
             status = "金额差异"
+            match_type = ""
         else:
             status = "未匹配"
+            match_type = ""
         status_by_key[match_key] = status
+        match_type_by_key[match_key] = match_type
         totals_by_key[match_key] = {
             f"{company_a_code}原币金额合计": amount_a,
             f"{company_b_code}原币金额合计": amount_b,
@@ -248,6 +261,7 @@ def reconcile_combined_workbook(
     detail = work.copy()
     detail["分配"] = detail["_匹配键"]
     detail["匹配状态"] = detail["_匹配键"].map(status_by_key)
+    detail["匹配类型"] = detail["_匹配键"].map(match_type_by_key)
     for column in [f"{company_a_code}原币金额合计", f"{company_b_code}原币金额合计", "两公司原币金额合计"]:
         detail[column] = detail["_匹配键"].map(lambda key: totals_by_key[key][column])
     detail["未匹配说明"] = detail.apply(
@@ -262,6 +276,7 @@ def reconcile_combined_workbook(
         f"{company_b_code}原币金额合计",
         "两公司原币金额合计",
         "匹配状态",
+        "匹配类型",
         "未匹配说明",
     ]
     detail = detail[[column for column in detail.columns if column not in trailing_columns] + trailing_columns]
@@ -269,11 +284,19 @@ def reconcile_combined_workbook(
     matched = detail[detail["匹配状态"] == "匹配成功"].copy()
     differences = detail[detail["匹配状态"] == "金额差异"].copy()
     unmatched = detail[detail["匹配状态"] == "未匹配"].copy()
+    exceptions = pd.concat([differences, unmatched], ignore_index=True)
     difference_summary = _build_difference_summary(
         grouped, status_by_key, company_a_code, company_b_code, company_field
     )
     summary = _build_combined_summary(matched, differences, unmatched, company_field, company_a_code, company_b_code)
-    excel_bytes = _write_combined_result_excel(summary, matched, differences, unmatched, difference_summary, df)
+    for label in ("完全一致", "容差匹配"):
+        summary[label] = _build_combined_summary(
+            matched[matched["匹配类型"] == label], differences.iloc[0:0], unmatched.iloc[0:0],
+            company_field, company_a_code, company_b_code,
+        )["匹配成功"]
+    excel_bytes = _write_combined_result_excel(
+        summary, matched, differences, unmatched, exceptions, difference_summary, detail, tolerance
+    )
     return ReconciliationResult(
         company_a_code=company_a_code,
         company_b_code=company_b_code,
@@ -380,13 +403,16 @@ def _write_combined_result_excel(
     matched: pd.DataFrame,
     differences: pd.DataFrame,
     unmatched: pd.DataFrame,
+    exceptions: pd.DataFrame,
     difference_summary: pd.DataFrame,
     raw_data: pd.DataFrame,
+    tolerance: float,
 ) -> bytes:
-    summary_df = pd.DataFrame([{"分类": name, **data} for name, data in summary.items()])
+    summary_df = pd.DataFrame([{"分类": name, **summary[name]} for name in ("完全一致", "容差匹配", "匹配成功", "金额差异", "未匹配", "合计")])
     matched_out = _format_export_dataframe(matched)
     differences_out = _format_export_dataframe(differences)
     unmatched_out = _format_export_dataframe(unmatched)
+    exceptions_out = _format_export_dataframe(exceptions)
     raw_data_out = _format_export_dataframe(raw_data)
     difference_summary_out = _format_export_dataframe(difference_summary)
     buffer = BytesIO()
@@ -395,9 +421,10 @@ def _write_combined_result_excel(
         matched_out.to_excel(writer, sheet_name="匹配成功", index=False)
         differences_out.to_excel(writer, sheet_name="金额差异明细", index=False)
         unmatched_out.to_excel(writer, sheet_name="未匹配", index=False)
+        exceptions_out.to_excel(writer, sheet_name="异常明细", index=False)
         difference_summary_out.to_excel(writer, sheet_name="金额差异汇总", index=False)
         raw_data_out.to_excel(writer, sheet_name="原始数据", index=False)
-        _write_rule_section(writer.book["处理汇总"], summary_df)
+        _write_rule_section(writer.book["处理汇总"], summary_df, tolerance)
         _style_combined_workbook(writer.book, summary_df)
     return buffer.getvalue()
 
@@ -424,7 +451,7 @@ def _format_export_dataframe(frame: pd.DataFrame) -> pd.DataFrame:
             "供应商",
         }:
             result[column] = result[column].map(_format_identifier)
-    computed_columns = {"匹配状态", "未匹配说明"}
+    computed_columns = {"匹配状态", "匹配类型", "未匹配说明"}
     computed_columns.update(column for column in result.columns if "原币金额合计" in str(column))
     computed_columns.add("两公司原币金额合计")
     for column in result.columns:
@@ -451,15 +478,16 @@ def _format_line_item(value: object) -> object:
     return text
 
 
-def _write_rule_section(ws, summary_df: pd.DataFrame) -> None:
+def _write_rule_section(ws, summary_df: pd.DataFrame, tolerance: float) -> None:
     company_columns = [col for col in summary_df.columns if re.match(r"^\d+行数$", str(col))]
     company_codes = [col.removesuffix("行数") for col in company_columns[:2]]
     company_a, company_b = company_codes if len(company_codes) == 2 else ("公司A", "公司B")
     start_row = 3 + len(summary_df) + 2
     rules = [
         ("核对规则", "说明"),
-        ("匹配成功", f"分配字段一致，且{company_a}与{company_b}的原币金额汇总后相加等于0。"),
-        ("金额差异", f"分配字段在{company_a}、{company_b}两家公司都存在，但原币金额合计不等于0。"),
+        ("完全一致", f"分配字段一致，且{company_a}与{company_b}的原币金额汇总后相加等于0；标绿色。"),
+        ("容差匹配", f"双方均存在且差额绝对值大于0、不超过 IDR {tolerance:g}；标黄色。"),
+        ("金额差异", f"分配字段在两家公司都存在，但差额绝对值超过 IDR {tolerance:g}。"),
         ("未匹配", "分配字段仅存在于其中一家公司；分配为空的记录也归入未匹配。"),
         ("金额口径", f"本文件{company_a}和{company_b}的原币均为IDR，因此直接使用“原币金额”核对。"),
     ]
@@ -506,13 +534,13 @@ def _style_combined_workbook(workbook, summary_df: pd.DataFrame) -> None:
         cell.font = bold_font
     rule_header_row = 3 + len(summary_df) + 2
     _style_header_row(summary_ws, rule_header_row, rule_fill, bold_font, header_alignment)
-    _apply_table_format(summary_ws, rule_header_row, rule_header_row + 4, thin_border, max_col=2)
+    _apply_table_format(summary_ws, rule_header_row, rule_header_row + 5, thin_border, max_col=2)
     summary_ws.freeze_panes = "A4"
     summary_ws.auto_filter.ref = f"A3:{get_column_letter(last_summary_col)}{3 + len(summary_df)}"
     _set_widths(summary_ws, {"A": 18, "B": 72, "C": 12, "D": 12, "E": 12, "F": 22, "G": 22})
     _format_numeric_columns(summary_ws, 4, 3 + len(summary_df))
 
-    for sheet_name in ["匹配成功", "金额差异明细", "未匹配", "原始数据"]:
+    for sheet_name in ["匹配成功", "金额差异明细", "未匹配", "异常明细", "原始数据"]:
         ws = workbook[sheet_name]
         _style_header_row(ws, 1, header_fill, white_bold, header_alignment)
         _apply_table_format(ws, 1, ws.max_row, thin_border)
@@ -520,6 +548,18 @@ def _style_combined_workbook(workbook, summary_df: pd.DataFrame) -> None:
         _auto_fit_sheet(ws)
         ws.freeze_panes = "A2"
         ws.auto_filter.ref = ws.dimensions
+        if sheet_name in {"原始数据", "匹配成功"}:
+            type_column = next((cell.column for cell in ws[1] if cell.value == "匹配类型"), None)
+            if type_column:
+                fills = {
+                    "完全一致": PatternFill("solid", fgColor="FFE2F3E7"),
+                    "容差匹配": PatternFill("solid", fgColor="FFFFF2CC"),
+                }
+                for row in ws.iter_rows(min_row=2):
+                    fill = fills.get(row[type_column - 1].value)
+                    if fill:
+                        for cell in row:
+                            cell.fill = fill
 
     diff_summary = workbook["金额差异汇总"]
     _style_header_row(diff_summary, 1, header_fill, white_bold, header_alignment)

@@ -149,6 +149,52 @@ def test_reconcile_combined_workbook_exports_expected_visual_style():
     assert detail.freeze_panes == "A2"
 
 
+def test_combined_tolerance_marks_original_rows_and_separates_exceptions():
+    rows = [
+        {"公司代码or伙伴公司": company, "分配": key, "原币金额": amount}
+        for company, key, amount in [
+            ("1703", "EXACT", 200), ("2615", "EXACT", -200),
+            ("1703", "NEAR", 200), ("2615", "NEAR", -100),
+            ("1703", "DIFF", 200), ("2615", "DIFF", -99),
+            ("1703", "ONLY", 50),
+        ]
+    ]
+    result = reconcile_combined_workbook(workbook_bytes(rows), "往来.xlsx")
+    wb = load_workbook(BytesIO(result.excel_bytes))
+
+    assert result.summary["匹配成功"]["分配数量"] == 2
+    assert result.summary["完全一致"]["分配数量"] == 1
+    assert result.summary["容差匹配"]["分配数量"] == 1
+    assert result.summary["金额差异"]["分配数量"] == 1
+    assert result.summary["未匹配"]["分配数量"] == 1
+    raw = wb["原始数据"]
+    headers = [cell.value for cell in raw[1]]
+    key_col = headers.index("分配") + 1
+    type_col = headers.index("匹配类型") + 1
+    rows_by_key = {raw.cell(row, key_col).value: row for row in range(2, raw.max_row + 1)}
+    assert raw.cell(rows_by_key["EXACT"], type_col).value == "完全一致"
+    assert raw.cell(rows_by_key["EXACT"], 1).fill.fgColor.rgb == "FFE2F3E7"
+    assert raw.cell(rows_by_key["NEAR"], type_col).value == "容差匹配"
+    assert raw.cell(rows_by_key["NEAR"], 1).fill.fgColor.rgb == "FFFFF2CC"
+    exceptions = pd.read_excel(BytesIO(result.excel_bytes), sheet_name="异常明细")
+    assert set(exceptions["分配"]) == {"DIFF", "ONLY"}
+    assert "IDR 100" in wb["处理汇总"]["B13"].value
+
+    strict = reconcile_combined_workbook(workbook_bytes(rows), "往来.xlsx", tolerance=0)
+    assert strict.summary["匹配成功"]["分配数量"] == 1
+    assert strict.summary["金额差异"]["分配数量"] == 2
+
+
+def test_combined_tolerance_rejects_invalid_values():
+    rows = [
+        {"公司代码or伙伴公司": "1703", "分配": "A", "原币金额": 100},
+        {"公司代码or伙伴公司": "2615", "分配": "A", "原币金额": -100},
+    ]
+    for value in (-1, float("nan")):
+        with pytest.raises(ReconciliationError, match="金额容差"):
+            reconcile_combined_workbook(workbook_bytes(rows), "往来.xlsx", tolerance=value)
+
+
 def test_inspect_combined_workbook_reports_valid_file_summary():
     workbook = workbook_bytes(
         [

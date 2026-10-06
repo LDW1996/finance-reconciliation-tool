@@ -11,6 +11,8 @@ export interface AnalyzeSummary {
   matchedAllocations: number
   differenceAllocations: number
   unmatchedAllocations: number
+  exactAllocations: number
+  toleranceAllocations: number
   blob: Blob
 }
 
@@ -42,11 +44,13 @@ export async function analyzeCombinedExcel(
   workbook: File,
   matchField: string,
   amountField: string,
+  tolerance: number,
 ): Promise<AnalyzeSummary> {
   const form = new FormData()
   form.append('workbook', workbook)
   form.append('match_field', matchField)
   form.append('amount_field', amountField)
+  form.append('tolerance', String(tolerance))
 
   const response = await axios.post('/api/analyze-combined', form, { responseType: 'blob' })
   const headers = response.headers
@@ -61,6 +65,8 @@ export async function analyzeCombinedExcel(
     matchedAllocations: Number(headers['x-allocation-matched'] ?? 0),
     differenceAllocations: Number(headers['x-allocation-differences'] ?? 0),
     unmatchedAllocations: Number(headers['x-allocation-unmatched'] ?? 0),
+    exactAllocations: Number(headers['x-allocation-exact'] ?? 0),
+    toleranceAllocations: Number(headers['x-allocation-tolerance'] ?? 0),
     blob: response.data,
   }
 }

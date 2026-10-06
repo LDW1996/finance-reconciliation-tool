@@ -82,6 +82,7 @@ async def analyze_combined(
     workbook: UploadFile = File(...),
     match_field: str = Form("分配"),
     amount_field: str = Form("原币金额"),
+    tolerance: float = Form(100),
 ):
     try:
         result = reconcile_combined_workbook(
@@ -89,6 +90,7 @@ async def analyze_combined(
             workbook.filename or "往来.xlsx",
             match_field=match_field,
             amount_field=amount_field,
+            tolerance=tolerance,
         )
     except ReconciliationError as exc:
         raise HTTPException(status_code=400, detail=exc.user_message) from exc
@@ -109,6 +111,8 @@ async def analyze_combined(
         "X-Allocation-Matched": str(result.summary["匹配成功"]["分配数量"]),
         "X-Allocation-Differences": str(result.summary["金额差异"]["分配数量"]),
         "X-Allocation-Unmatched": str(result.summary["未匹配"]["分配数量"]),
+        "X-Allocation-Exact": str(result.summary["完全一致"]["分配数量"]),
+        "X-Allocation-Tolerance": str(result.summary["容差匹配"]["分配数量"]),
         "X-Output-Filename": encoded_filename,
     }
     return StreamingResponse(

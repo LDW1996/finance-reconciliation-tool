@@ -37,7 +37,7 @@
                 <h3>匹配规则说明</h3>
                 <p>系统会按“匹配字段”把往来明细分组，当前默认使用“分配”。</p>
                 <p>每个分组内分别汇总两家公司的“金额字段”，当前默认使用“原币金额”。</p>
-                <p>两家公司金额相加等于 0 时为匹配成功；不等于 0 时为金额差异；只在单方出现时为未匹配。</p>
+                <p>两家公司金额相加等于 0 时标绿；差额绝对值在金额容差内时标黄；超过容差为金额差异。</p>
               </div>
             </el-popover>
           </div>
@@ -47,6 +47,9 @@
             </el-form-item>
             <el-form-item label="金额字段">
               <el-input v-model="amountField" clearable />
+            </el-form-item>
+            <el-form-item label="金额容差（IDR）">
+              <el-input-number v-model="tolerance" :min="0" :precision="2" :step="100" controls-position="right" />
             </el-form-item>
           </el-form>
 
@@ -147,6 +150,8 @@
             <dl class="metrics">
               <div><dt>处理明细</dt><dd>{{ result.total }} 行</dd></div>
               <div><dt>匹配成功</dt><dd>{{ result.matchedAllocations }} 个分配 / {{ result.matched }} 行</dd></div>
+              <div><dt>完全一致</dt><dd>{{ result.exactAllocations }} 个分配</dd></div>
+              <div><dt>容差匹配</dt><dd>{{ result.toleranceAllocations }} 个分配</dd></div>
               <div><dt>金额差异</dt><dd>{{ result.differenceAllocations }} 个分配 / {{ result.differences }} 行</dd></div>
               <div><dt>未匹配</dt><dd>{{ result.unmatchedAllocations }} 个分配 / {{ result.unmatched }} 行</dd></div>
             </dl>
@@ -176,6 +181,7 @@ import {
 const workbook = ref<File | null>(null)
 const matchField = ref('分配')
 const amountField = ref('原币金额')
+const tolerance = ref(100)
 const isAnalyzing = ref(false)
 const isInspecting = ref(false)
 const errorMessage = ref('')
@@ -206,6 +212,8 @@ const canAnalyze = computed(() =>
   && inspectionReport.value?.valid
   && matchField.value
   && amountField.value
+  && Number.isFinite(tolerance.value)
+  && tolerance.value >= 0
   && !isAnalyzing.value
   && !isInspecting.value,
 )
@@ -217,6 +225,7 @@ const companyCodeText = computed(() => {
 
 async function handleFileSelected(file: File) {
   workbook.value = file
+  inspectionReport.value = null
   result.value = null
   errorMessage.value = ''
   activeStep.value = 0
@@ -225,11 +234,14 @@ async function handleFileSelected(file: File) {
 
 async function inspectWorkbook() {
   if (!workbook.value) return
+  const currentFile = workbook.value
   inspectionReport.value = null
   isInspecting.value = true
   try {
-    inspectionReport.value = await inspectCombinedExcel(workbook.value, matchField.value, amountField.value)
+    const report = await inspectCombinedExcel(currentFile, matchField.value, amountField.value)
+    if (workbook.value === currentFile) inspectionReport.value = report
   } catch {
+    if (workbook.value !== currentFile) return
     inspectionReport.value = {
       valid: false,
       errors: ['表格检查失败，请重新上传Excel文件'],
@@ -240,12 +252,13 @@ async function inspectWorkbook() {
       requiredColumns: ['公司代码or伙伴公司', '分配', '原币金额'],
     }
   } finally {
-    isInspecting.value = false
+    if (workbook.value === currentFile) isInspecting.value = false
   }
 }
 
 async function handleAnalyze() {
   if (!workbook.value) return
+  const currentFile = workbook.value
   errorMessage.value = ''
   result.value = null
   isAnalyzing.value = true
@@ -256,10 +269,13 @@ async function handleAnalyze() {
   }, 450)
 
   try {
-    result.value = await analyzeCombinedExcel(workbook.value, matchField.value, amountField.value)
+    const analyzed = await analyzeCombinedExcel(currentFile, matchField.value, amountField.value, tolerance.value)
+    if (workbook.value !== currentFile) return
+    result.value = analyzed
     activeStep.value = 5
     ElMessage.success('分析完成')
   } catch (error: any) {
+    if (workbook.value !== currentFile) return
     activeStep.value = 0
     const detail = error?.response?.data instanceof Blob
       ? await error.response.data.text()

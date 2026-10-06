@@ -8,9 +8,9 @@
     </div>
 
     <el-upload
+      ref="uploadRef"
       drag
       :auto-upload="false"
-      :limit="1"
       :show-file-list="false"
       accept=".xlsx,.xls"
       :on-change="handleChange"
@@ -37,7 +37,10 @@
 
 <script setup lang="ts">
 import { UploadFilled } from '@element-plus/icons-vue'
-import type { UploadFile } from 'element-plus'
+import { ref } from 'vue'
+import type { UploadFile, UploadInstance } from 'element-plus'
+
+const uploadRef = ref<UploadInstance>()
 
 defineProps<{
   title: string
@@ -53,6 +56,7 @@ const emit = defineEmits<{
 function handleChange(uploadFile: UploadFile) {
   const raw = uploadFile.raw
   if (!raw) return
+  uploadRef.value?.clearFiles()
   emit('selected', raw)
 }
 </script>
