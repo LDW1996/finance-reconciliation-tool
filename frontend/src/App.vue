@@ -9,6 +9,13 @@
         <el-tag effect="plain" type="success">数据不离开本机</el-tag>
       </header>
 
+      <nav class="function-nav" aria-label="功能菜单">
+        <el-menu :default-active="outputMode" mode="horizontal" @select="handleMenuSelect">
+          <el-menu-item index="detailed" :disabled="isAnalyzing">对账结果</el-menu-item>
+          <el-menu-item index="marked" :disabled="isAnalyzing">原表标色</el-menu-item>
+        </el-menu>
+      </nav>
+
       <div class="layout-grid">
         <section class="panel upload-panel single-upload" aria-label="Excel文件上传">
           <FileDrop
@@ -143,7 +150,7 @@
         </div>
 
         <div class="result-column">
-          <h2>分析结果</h2>
+          <h2>{{ outputMode === 'marked' ? '标色结果' : '分析结果' }}</h2>
           <el-empty v-if="!result" :description="resultEmptyText" />
           <div v-else class="result-box">
             <div class="result-title">分析完成</div>
@@ -156,7 +163,7 @@
               <div><dt>未匹配</dt><dd>{{ result.unmatchedAllocations }} 个分配 / {{ result.unmatched }} 行</dd></div>
             </dl>
             <el-button type="success" :icon="Download" @click="downloadResult">
-              下载结果Excel
+              {{ outputMode === 'marked' ? '下载标色Excel' : '下载对账Excel' }}
             </el-button>
           </div>
         </div>
@@ -182,6 +189,7 @@ const workbook = ref<File | null>(null)
 const matchField = ref('分配')
 const amountField = ref('原币金额')
 const tolerance = ref(100)
+const outputMode = ref<'detailed' | 'marked'>('detailed')
 const isAnalyzing = ref(false)
 const isInspecting = ref(false)
 const errorMessage = ref('')
@@ -223,6 +231,14 @@ const companyCodeText = computed(() => {
   return undefined
 })
 
+function handleMenuSelect(index: string) {
+  if (index !== 'detailed' && index !== 'marked') return
+  outputMode.value = index
+  result.value = null
+  errorMessage.value = ''
+  activeStep.value = 0
+}
+
 async function handleFileSelected(file: File) {
   workbook.value = file
   inspectionReport.value = null
@@ -259,6 +275,7 @@ async function inspectWorkbook() {
 async function handleAnalyze() {
   if (!workbook.value) return
   const currentFile = workbook.value
+  const currentMode = outputMode.value
   errorMessage.value = ''
   result.value = null
   isAnalyzing.value = true
@@ -269,13 +286,13 @@ async function handleAnalyze() {
   }, 450)
 
   try {
-    const analyzed = await analyzeCombinedExcel(currentFile, matchField.value, amountField.value, tolerance.value)
-    if (workbook.value !== currentFile) return
+    const analyzed = await analyzeCombinedExcel(currentFile, matchField.value, amountField.value, tolerance.value, currentMode)
+    if (workbook.value !== currentFile || outputMode.value !== currentMode) return
     result.value = analyzed
     activeStep.value = 5
     ElMessage.success('分析完成')
   } catch (error: any) {
-    if (workbook.value !== currentFile) return
+    if (workbook.value !== currentFile || outputMode.value !== currentMode) return
     activeStep.value = 0
     const detail = error?.response?.data instanceof Blob
       ? await error.response.data.text()

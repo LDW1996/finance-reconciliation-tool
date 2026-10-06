@@ -45,12 +45,14 @@ export async function analyzeCombinedExcel(
   matchField: string,
   amountField: string,
   tolerance: number,
+  outputMode: 'detailed' | 'marked',
 ): Promise<AnalyzeSummary> {
   const form = new FormData()
   form.append('workbook', workbook)
   form.append('match_field', matchField)
   form.append('amount_field', amountField)
   form.append('tolerance', String(tolerance))
+  form.append('output_mode', outputMode)
 
   const response = await axios.post('/api/analyze-combined', form, { responseType: 'blob' })
   const headers = response.headers

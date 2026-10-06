@@ -83,6 +83,7 @@ async def analyze_combined(
     match_field: str = Form("分配"),
     amount_field: str = Form("原币金额"),
     tolerance: float = Form(100),
+    output_mode: str = Form("detailed"),
 ):
     try:
         result = reconcile_combined_workbook(
@@ -91,6 +92,7 @@ async def analyze_combined(
             match_field=match_field,
             amount_field=amount_field,
             tolerance=tolerance,
+            output_mode=output_mode,
         )
     except ReconciliationError as exc:
         raise HTTPException(status_code=400, detail=exc.user_message) from exc

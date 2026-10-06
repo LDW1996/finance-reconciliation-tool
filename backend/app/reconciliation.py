@@ -8,6 +8,7 @@ import re
 from typing import BinaryIO
 
 import pandas as pd
+from openpyxl import load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
@@ -16,6 +17,7 @@ REQUIRED_COLUMNS = {"公司代码", "分配", "原币金额"}
 COMBINED_COMPANY_COLUMN = "公司代码or伙伴公司"
 DISPLAY_COLUMNS = ["公司代码", "凭证编号", "分配", "文本", "原币金额"]
 DEFAULT_TOLERANCE = 100.0
+MATCH_GREEN = "FFD2EEDA"
 
 
 class ReconciliationError(Exception):
@@ -199,10 +201,14 @@ def reconcile_combined_workbook(
     amount_field: str = "原币金额",
     company_field: str = COMBINED_COMPANY_COLUMN,
     tolerance: float = DEFAULT_TOLERANCE,
+    output_mode: str = "detailed",
 ) -> ReconciliationResult:
     if not math.isfinite(tolerance) or tolerance < 0:
         raise ReconciliationError("金额容差必须是大于或等于 0 的数字")
-    df = read_excel(workbook_file, filename)
+    if output_mode not in {"detailed", "marked"}:
+        raise ReconciliationError("请选择有效的结果类型")
+    source_bytes = workbook_file.read()
+    df = read_excel(BytesIO(source_bytes), filename)
     _validate_combined_dataframe(df, match_field, amount_field, company_field)
 
     work = df.copy()
@@ -284,19 +290,22 @@ def reconcile_combined_workbook(
     matched = detail[detail["匹配状态"] == "匹配成功"].copy()
     differences = detail[detail["匹配状态"] == "金额差异"].copy()
     unmatched = detail[detail["匹配状态"] == "未匹配"].copy()
-    exceptions = pd.concat([differences, unmatched], ignore_index=True)
-    difference_summary = _build_difference_summary(
-        grouped, status_by_key, company_a_code, company_b_code, company_field
-    )
     summary = _build_combined_summary(matched, differences, unmatched, company_field, company_a_code, company_b_code)
     for label in ("完全一致", "容差匹配"):
         summary[label] = _build_combined_summary(
             matched[matched["匹配类型"] == label], differences.iloc[0:0], unmatched.iloc[0:0],
             company_field, company_a_code, company_b_code,
         )["匹配成功"]
-    excel_bytes = _write_combined_result_excel(
-        summary, matched, differences, unmatched, exceptions, difference_summary, detail, tolerance
-    )
+    if output_mode == "marked":
+        excel_bytes = _write_marked_data_excel(source_bytes, filename, df, match_field, match_type_by_key)
+    else:
+        exceptions = pd.concat([differences, unmatched], ignore_index=True)
+        difference_summary = _build_difference_summary(
+            grouped, status_by_key, company_a_code, company_b_code, company_field
+        )
+        excel_bytes = _write_combined_result_excel(
+            summary, matched, differences, unmatched, exceptions, difference_summary, detail, tolerance
+        )
     return ReconciliationResult(
         company_a_code=company_a_code,
         company_b_code=company_b_code,
@@ -306,7 +315,10 @@ def reconcile_combined_workbook(
         unmatched=unmatched,
         raw_data=df,
         excel_bytes=excel_bytes,
-        output_filename=f"{company_a_code}_{company_b_code}_分配原币金额对账结果.xlsx",
+        output_filename=(
+            f"{company_a_code}_{company_b_code}_原表标色.xlsx" if output_mode == "marked"
+            else f"{company_a_code}_{company_b_code}_分配原币金额对账结果.xlsx"
+        ),
     )
 
 
@@ -365,6 +377,40 @@ def _build_combined_summary(
         f"{company_b_code}原币金额合计": sum(item[f"{company_b_code}原币金额合计"] for item in summary.values()),
     }
     return summary
+
+
+def _write_marked_data_excel(
+    source_bytes: bytes,
+    filename: str,
+    raw_data: pd.DataFrame,
+    match_field: str,
+    match_type_by_key: dict[str, str],
+) -> bytes:
+    if Path(filename).suffix.lower() == ".xlsx":
+        workbook = load_workbook(BytesIO(source_bytes))
+        data_sheet = workbook.worksheets[0]
+        for sheet in list(workbook.worksheets[1:]):
+            workbook.remove(sheet)
+    else:
+        buffer = BytesIO()
+        with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+            raw_data.to_excel(writer, sheet_name="Data", index=False)
+        workbook = load_workbook(BytesIO(buffer.getvalue()))
+        data_sheet = workbook.active
+
+    fills = {
+        "完全一致": PatternFill("solid", fgColor=MATCH_GREEN),
+        "容差匹配": PatternFill("solid", fgColor="FFFFF2CC"),
+    }
+    for excel_row, key in enumerate(_normalize_match_key(raw_data[match_field]), start=2):
+        fill = fills.get(match_type_by_key.get(key, ""))
+        if fill:
+            for cell in data_sheet[excel_row]:
+                cell.fill = fill
+
+    output = BytesIO()
+    workbook.save(output)
+    return output.getvalue()
 
 
 def _build_difference_summary(
@@ -552,7 +598,7 @@ def _style_combined_workbook(workbook, summary_df: pd.DataFrame) -> None:
             type_column = next((cell.column for cell in ws[1] if cell.value == "匹配类型"), None)
             if type_column:
                 fills = {
-                    "完全一致": PatternFill("solid", fgColor="FFE2F3E7"),
+                    "完全一致": PatternFill("solid", fgColor=MATCH_GREEN),
                     "容差匹配": PatternFill("solid", fgColor="FFFFF2CC"),
                 }
                 for row in ws.iter_rows(min_row=2):

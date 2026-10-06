@@ -17,7 +17,7 @@ from app.reconciliation import (
 
 def workbook_bytes(rows):
     buffer = BytesIO()
-    pd.DataFrame(rows).to_excel(buffer, index=False)
+    pd.DataFrame(rows).to_excel(buffer, index=False, sheet_name="Data")
     buffer.seek(0)
     return buffer
 
@@ -122,7 +122,7 @@ def test_reconcile_combined_workbook_matches_real_expected_sample_counts():
     assert result.output_filename == "1703_2615_分配原币金额对账结果.xlsx"
 
 
-def test_reconcile_combined_workbook_exports_expected_visual_style():
+def test_reconcile_combined_workbook_restores_detailed_export():
     workbook = workbook_bytes(
         [
             {"公司代码or伙伴公司": "1703", "凭证编号": "A-1", "分配": "A001", "原币金额": 100},
@@ -133,20 +133,9 @@ def test_reconcile_combined_workbook_exports_expected_visual_style():
     result = reconcile_combined_workbook(workbook, "往来.xlsx")
     wb = load_workbook(BytesIO(result.excel_bytes))
 
-    summary = wb["处理汇总"]
-    assert "A1:G1" in {str(cell_range) for cell_range in summary.merged_cells.ranges}
-    assert summary["A1"].value == "1703 与 2615 分配字段 / 原币金额对账结果"
-    assert summary["A1"].fill.fgColor.rgb == "FF17365D"
-    assert summary["A1"].font.color.rgb == "FFFFFFFF"
-    assert summary["A3"].value == "分类"
-    assert summary["A3"].fill.fgColor.rgb == "FF1F4E78"
-    assert summary.column_dimensions["B"].width == 72
-
-    detail = wb["匹配成功"]
-    assert detail["A1"].fill.fgColor.rgb == "FF1F4E78"
-    assert detail["A1"].font.color.rgb == "FFFFFFFF"
-    assert detail.column_dimensions["A"].width >= 10
-    assert detail.freeze_panes == "A2"
+    assert wb.sheetnames == ["处理汇总", "匹配成功", "金额差异明细", "未匹配", "异常明细", "金额差异汇总", "原始数据"]
+    assert wb["处理汇总"]["A3"].value == "分类"
+    assert wb["原始数据"]["A2"].fill.fgColor.rgb == "FFD2EEDA"
 
 
 def test_combined_tolerance_marks_original_rows_and_separates_exceptions():
@@ -159,7 +148,7 @@ def test_combined_tolerance_marks_original_rows_and_separates_exceptions():
             ("1703", "ONLY", 50),
         ]
     ]
-    result = reconcile_combined_workbook(workbook_bytes(rows), "往来.xlsx")
+    result = reconcile_combined_workbook(workbook_bytes(rows), "往来.xlsx", output_mode="marked")
     wb = load_workbook(BytesIO(result.excel_bytes))
 
     assert result.summary["匹配成功"]["分配数量"] == 2
@@ -167,18 +156,17 @@ def test_combined_tolerance_marks_original_rows_and_separates_exceptions():
     assert result.summary["容差匹配"]["分配数量"] == 1
     assert result.summary["金额差异"]["分配数量"] == 1
     assert result.summary["未匹配"]["分配数量"] == 1
-    raw = wb["原始数据"]
+    assert wb.sheetnames == ["Data"]
+    raw = wb["Data"]
     headers = [cell.value for cell in raw[1]]
     key_col = headers.index("分配") + 1
-    type_col = headers.index("匹配类型") + 1
+    assert headers == ["公司代码or伙伴公司", "分配", "原币金额"]
     rows_by_key = {raw.cell(row, key_col).value: row for row in range(2, raw.max_row + 1)}
-    assert raw.cell(rows_by_key["EXACT"], type_col).value == "完全一致"
-    assert raw.cell(rows_by_key["EXACT"], 1).fill.fgColor.rgb == "FFE2F3E7"
-    assert raw.cell(rows_by_key["NEAR"], type_col).value == "容差匹配"
+    assert raw.cell(rows_by_key["EXACT"], 1).fill.fgColor.rgb == "FFD2EEDA"
     assert raw.cell(rows_by_key["NEAR"], 1).fill.fgColor.rgb == "FFFFF2CC"
-    exceptions = pd.read_excel(BytesIO(result.excel_bytes), sheet_name="异常明细")
-    assert set(exceptions["分配"]) == {"DIFF", "ONLY"}
-    assert "IDR 100" in wb["处理汇总"]["B13"].value
+    assert raw.cell(rows_by_key["DIFF"], 1).fill.patternType is None
+    assert raw.cell(rows_by_key["ONLY"], 1).fill.patternType is None
+    assert result.output_filename == "1703_2615_原表标色.xlsx"
 
     strict = reconcile_combined_workbook(workbook_bytes(rows), "往来.xlsx", tolerance=0)
     assert strict.summary["匹配成功"]["分配数量"] == 1

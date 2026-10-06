@@ -52,6 +52,25 @@ body {
   margin-bottom: 16px;
 }
 
+.function-nav {
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.function-nav .el-menu {
+  border-bottom: 0;
+  background: transparent;
+}
+
+.function-nav .el-menu-item {
+  min-width: 128px;
+  justify-content: center;
+  font-weight: 600;
+}
+
 .eyebrow {
   margin: 0 0 6px;
   color: var(--accent);
