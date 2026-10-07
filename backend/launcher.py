@@ -4,6 +4,7 @@ import socket
 import threading
 import time
 import webbrowser
+import sys
 
 import uvicorn
 
@@ -13,25 +14,38 @@ PORT = 8765
 URL = f"http://{HOST}:{PORT}"
 
 
-def wait_for_server(timeout_seconds: int = 20) -> bool:
+def port_in_use() -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        return sock.connect_ex((HOST, PORT)) == 0
+
+
+def open_browser_when_ready(server: uvicorn.Server, timeout_seconds: int = 20) -> None:
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.settimeout(0.5)
-            if sock.connect_ex((HOST, PORT)) == 0:
-                return True
+        if server.started:
+            webbrowser.open(URL)
+            return
+        if server.should_exit:
+            return
         time.sleep(0.2)
-    return False
 
 
-def open_browser_when_ready() -> None:
-    if wait_for_server():
-        webbrowser.open(URL)
+def show_port_error() -> None:
+    message = "本地端口 8765 已被占用。请在任务管理器中结束旧版财务对账工具，再重新打开新版程序。"
+    if sys.platform == "win32":
+        import ctypes
+
+        ctypes.windll.user32.MessageBoxW(None, message, "财务对账工具无法启动", 0x10)
+    else:
+        print(message, file=sys.stderr)
 
 
 def main() -> None:
-    threading.Thread(target=open_browser_when_ready, daemon=True).start()
-    uvicorn.run(
+    if port_in_use():
+        show_port_error()
+        return
+    config = uvicorn.Config(
         "app.main:app",
         host=HOST,
         port=PORT,
@@ -40,6 +54,9 @@ def main() -> None:
         access_log=False,
         reload=False,
     )
+    server = uvicorn.Server(config)
+    threading.Thread(target=open_browser_when_ready, args=(server,), daemon=True).start()
+    server.run()
 
 
 if __name__ == "__main__":

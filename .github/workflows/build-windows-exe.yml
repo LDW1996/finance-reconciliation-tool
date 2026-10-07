@@ -31,6 +31,8 @@ jobs:
 
       - name: Build frontend
         run: npm run frontend:build
+        env:
+          VITE_BUILD_COMMIT: ${{ github.sha }}
 
       - name: Install Python dependencies
         run: |

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from io import BytesIO
+import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -8,6 +11,7 @@ from pathlib import Path
 
 import httpx
 import pandas as pd
+from openpyxl import load_workbook
 
 
 APP_URL = "http://127.0.0.1:8765"
@@ -43,6 +47,16 @@ def assert_frontend_served() -> None:
     response.raise_for_status()
     if '<div id="app"></div>' not in response.text:
         raise AssertionError("Frontend index.html was not served by the EXE")
+    asset = re.search(r'src="(/assets/[^"]+\.js)"', response.text)
+    if not asset:
+        raise AssertionError("Frontend JavaScript asset was not linked")
+    script = httpx.get(f"{APP_URL}{asset.group(1)}", timeout=10)
+    script.raise_for_status()
+    if "原表标色" not in script.text:
+        raise AssertionError("The EXE contains an outdated frontend build")
+    commit = os.environ.get("GITHUB_SHA", "")
+    if commit and commit[:8] not in script.text:
+        raise AssertionError("The EXE does not contain the current workflow commit")
 
 
 def assert_excel_flow(sample_path: Path) -> None:
@@ -72,12 +86,34 @@ def assert_excel_flow(sample_path: Path) -> None:
         raise AssertionError(f"Unexpected matched count headers: {response.headers}")
     if len(response.content) < 5000:
         raise AssertionError("Generated Excel response is unexpectedly small")
+    detailed = load_workbook(BytesIO(response.content), read_only=True)
+    if "处理汇总" not in detailed.sheetnames or "原始数据" not in detailed.sheetnames:
+        raise AssertionError(f"Detailed export has unexpected sheets: {detailed.sheetnames}")
+
+    with sample_path.open("rb") as file_obj:
+        marked_response = httpx.post(
+            f"{APP_URL}/api/analyze-combined",
+            files={"workbook": (sample_path.name, file_obj, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+            data={"output_mode": "marked", "tolerance": "100"},
+            timeout=30,
+        )
+    marked_response.raise_for_status()
+    marked = load_workbook(BytesIO(marked_response.content), read_only=False)
+    if marked.sheetnames != ["Sheet1"] or marked.active["A2"].fill.fgColor.rgb != "FFD2EEDA":
+        raise AssertionError("Marked export did not color the original sheet")
 
 
 def main() -> int:
     exe_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("dist") / "财务对账工具.exe"
     if not exe_path.exists():
         raise FileNotFoundError(exe_path)
+
+    try:
+        httpx.get(f"{APP_URL}/api/health", timeout=2)
+    except httpx.RequestError:
+        pass
+    else:
+        raise RuntimeError("Port 8765 is already serving an app; cannot verify the new EXE")
 
     process = subprocess.Popen([str(exe_path)])
     try:

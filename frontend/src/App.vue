@@ -3,7 +3,7 @@
     <section class="workspace" aria-labelledby="page-title">
       <header class="page-header">
         <div>
-          <p class="eyebrow">本地处理 · localhost</p>
+          <p class="eyebrow">本地处理 · 版本 {{ buildCommit }}</p>
           <h1 id="page-title">财务Excel自动核对工具</h1>
         </div>
         <el-tag effect="plain" type="success">数据不离开本机</el-tag>
@@ -184,6 +184,8 @@ import {
   type AnalyzeSummary,
   type InspectReport,
 } from './services/api'
+
+const buildCommit = import.meta.env.VITE_BUILD_COMMIT?.slice(0, 8) || '开发版'
 
 const workbook = ref<File | null>(null)
 const matchField = ref('分配')
