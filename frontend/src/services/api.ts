@@ -1,4 +1,5 @@
 import axios from 'axios'
+import type { Locale } from '../i18n'
 
 export interface AnalyzeSummary {
   companyA: string
@@ -30,11 +31,13 @@ export async function inspectCombinedExcel(
   workbook: File,
   matchField: string,
   amountField: string,
+  locale: Locale,
 ): Promise<InspectReport> {
   const form = new FormData()
   form.append('workbook', workbook)
   form.append('match_field', matchField)
   form.append('amount_field', amountField)
+  form.append('locale', locale)
 
   const response = await axios.post<InspectReport>('/api/inspect-combined', form)
   return response.data
@@ -46,6 +49,7 @@ export async function analyzeCombinedExcel(
   amountField: string,
   tolerance: number,
   outputMode: 'detailed' | 'marked',
+  locale: Locale,
 ): Promise<AnalyzeSummary> {
   const form = new FormData()
   form.append('workbook', workbook)
@@ -53,13 +57,14 @@ export async function analyzeCombinedExcel(
   form.append('amount_field', amountField)
   form.append('tolerance', String(tolerance))
   form.append('output_mode', outputMode)
+  form.append('locale', locale)
 
   const response = await axios.post('/api/analyze-combined', form, { responseType: 'blob' })
   const headers = response.headers
   return {
     companyA: headers['x-company-a-code'] ?? '-',
     companyB: headers['x-company-b-code'] ?? '-',
-    filename: decodeURIComponent(headers['x-output-filename'] ?? '对账结果.xlsx'),
+    filename: decodeURIComponent(headers['x-output-filename'] ?? 'reconciliation-result.xlsx'),
     matched: Number(headers['x-summary-matched'] ?? 0),
     differences: Number(headers['x-summary-differences'] ?? 0),
     unmatched: Number(headers['x-summary-unmatched'] ?? 0),

@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from .reconciliation import (
     ReconciliationError,
     inspect_combined_workbook,
+    localize_message,
     reconcile_combined_workbook,
     reconcile_workbooks,
 )
@@ -84,6 +85,7 @@ async def analyze_combined(
     amount_field: str = Form("原币金额"),
     tolerance: float = Form(100),
     output_mode: str = Form("detailed"),
+    locale: str = Form("zh-CN"),
 ):
     try:
         result = reconcile_combined_workbook(
@@ -93,9 +95,10 @@ async def analyze_combined(
             amount_field=amount_field,
             tolerance=tolerance,
             output_mode=output_mode,
+            locale=locale,
         )
     except ReconciliationError as exc:
-        raise HTTPException(status_code=400, detail=exc.user_message) from exc
+        raise HTTPException(status_code=400, detail=localize_message(exc.user_message, locale)) from exc
 
     encoded_filename = quote(result.output_filename)
     headers = {
@@ -129,12 +132,14 @@ async def inspect_combined(
     workbook: UploadFile = File(...),
     match_field: str = Form("分配"),
     amount_field: str = Form("原币金额"),
+    locale: str = Form("zh-CN"),
 ):
     return inspect_combined_workbook(
         BytesIO(await workbook.read()),
         workbook.filename or "往来.xlsx",
         match_field=match_field,
         amount_field=amount_field,
+        locale=locale,
     )
 
 

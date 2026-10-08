@@ -52,6 +52,18 @@ body {
   margin-bottom: 16px;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.header-actions .el-radio-group {
+  white-space: nowrap;
+}
+
 .function-nav {
   margin-bottom: 16px;
   border: 1px solid var(--border);
@@ -423,5 +435,9 @@ dd {
   .page-header {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .header-actions {
+    justify-content: flex-start;
   }
 }

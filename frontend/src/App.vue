@@ -1,35 +1,50 @@
 <template>
+  <el-config-provider :locale="elementLocale">
   <main class="app-shell">
     <section class="workspace" aria-labelledby="page-title">
       <header class="page-header">
         <div>
-          <p class="eyebrow">本地处理 · 版本 {{ buildCommit }}</p>
-          <h1 id="page-title">财务Excel自动核对工具</h1>
+          <p class="eyebrow">{{ t('localVersion') }} {{ buildCommit }}</p>
+          <h1 id="page-title">{{ t('title') }}</h1>
         </div>
-        <el-tag effect="plain" type="success">数据不离开本机</el-tag>
+        <div class="header-actions">
+          <el-radio-group v-model="language" size="small" :aria-label="t('languageLabel')">
+            <el-radio-button v-for="option in localeOptions" :key="option.value" :value="option.value" :disabled="isAnalyzing">{{ option.label }}</el-radio-button>
+          </el-radio-group>
+          <el-tag effect="plain" type="success">{{ t('localData') }}</el-tag>
+        </div>
       </header>
 
-      <nav class="function-nav" aria-label="功能菜单">
+      <nav class="function-nav" :aria-label="t('menuLabel')">
         <el-menu :default-active="outputMode" mode="horizontal" @select="handleMenuSelect">
-          <el-menu-item index="detailed" :disabled="isAnalyzing">对账结果</el-menu-item>
-          <el-menu-item index="marked" :disabled="isAnalyzing">原表标色</el-menu-item>
+          <el-menu-item index="detailed" :disabled="isAnalyzing">{{ t('detailedMode') }}</el-menu-item>
+          <el-menu-item index="marked" :disabled="isAnalyzing">{{ t('markedMode') }}</el-menu-item>
         </el-menu>
       </nav>
 
       <div class="layout-grid">
-        <section class="panel upload-panel single-upload" aria-label="Excel文件上传">
+        <section class="panel upload-panel single-upload" :aria-label="t('uploadLabel')">
           <FileDrop
-            title="往来Excel文件"
+            :title="t('workbookTitle')"
             :file="workbook"
             :company-code="companyCodeText"
             :checking="isInspecting"
+            :checking-text="t('dropStatusChecking')"
+            :uploaded-text="t('uploaded')"
+            :pending-text="t('pendingUpload')"
+            :upload-prompt="t('uploadPrompt')"
+            :supported-text="t('supportedFiles')"
+            :filename-label="t('filename')"
+            :not-selected-text="t('notSelected')"
+            :company-code-label="t('companyCode')"
+            :identify-after-text="t('identifyAfter')"
             @selected="handleFileSelected"
           />
         </section>
 
-        <aside class="panel settings-panel" aria-label="匹配规则">
+        <aside class="panel settings-panel" :aria-label="t('matchingRules')">
           <div class="section-title-row">
-            <h2>匹配规则</h2>
+            <h2>{{ t('matchingRules') }}</h2>
             <el-popover placement="left" trigger="click" width="300">
               <template #reference>
                 <el-button
@@ -37,36 +52,36 @@
                   circle
                   text
                   :icon="QuestionFilled"
-                  aria-label="查看匹配规则说明"
+                  :aria-label="t('ruleHelp')"
                 />
               </template>
               <div class="help-content">
-                <h3>匹配规则说明</h3>
-                <p>系统会按“匹配字段”把往来明细分组，当前默认使用“分配”。</p>
-                <p>每个分组内分别汇总两家公司的“金额字段”，当前默认使用“原币金额”。</p>
-                <p>两家公司金额相加等于 0 时标绿；差额绝对值在金额容差内时标黄；超过容差为金额差异。</p>
+                <h3>{{ t('helpTitle') }}</h3>
+                <p>{{ t('helpMatch') }}</p>
+                <p>{{ t('helpAmount') }}</p>
+                <p>{{ t('helpTolerance') }}</p>
               </div>
             </el-popover>
           </div>
           <el-form label-position="top">
-            <el-form-item label="匹配字段">
+            <el-form-item :label="t('matchField')">
               <el-input v-model="matchField" clearable />
             </el-form-item>
-            <el-form-item label="金额字段">
+            <el-form-item :label="t('amountField')">
               <el-input v-model="amountField" clearable />
             </el-form-item>
-            <el-form-item label="金额容差（IDR）">
+            <el-form-item :label="t('tolerance')">
               <el-input-number v-model="tolerance" :min="0" :precision="2" :step="100" controls-position="right" />
             </el-form-item>
           </el-form>
 
           <div class="standard-box">
-            <h3>表格格式要求</h3>
+            <h3>{{ t('formatRequirements') }}</h3>
             <ul>
-              <li>必须包含：公司代码or伙伴公司、分配、原币金额</li>
-              <li>公司代码or伙伴公司必须且只能有两家公司</li>
-              <li>原币金额必须是可识别数字</li>
-              <li>空白分配会统一按“空白”分组处理</li>
+              <li>{{ t('requiredFields') }}</li>
+              <li>{{ t('twoCompanies') }}</li>
+              <li>{{ t('numericAmount') }}</li>
+              <li>{{ t('blankAllocation') }}</li>
             </ul>
           </div>
 
@@ -79,7 +94,7 @@
             :disabled="!canAnalyze"
             @click="handleAnalyze"
           >
-            开始分析
+            {{ t('startAnalysis') }}
           </el-button>
 
           <el-alert
@@ -93,28 +108,28 @@
         </aside>
       </div>
 
-      <section class="panel inspection-panel" aria-label="表格内容检查">
+      <section class="panel inspection-panel" :aria-label="t('inspection')">
         <div class="inspection-header">
-          <h2>表格内容检查</h2>
-          <el-tag v-if="!inspectionReport && !isInspecting" effect="plain">等待上传</el-tag>
-          <el-tag v-else-if="isInspecting" type="warning" effect="plain">检查中</el-tag>
-          <el-tag v-else-if="inspectionReport?.valid" type="success" effect="plain">检查通过</el-tag>
-          <el-tag v-else type="danger" effect="plain">不符合要求</el-tag>
+          <h2>{{ t('inspection') }}</h2>
+          <el-tag v-if="!inspectionReport && !isInspecting" effect="plain">{{ t('waitingUpload') }}</el-tag>
+          <el-tag v-else-if="isInspecting" type="warning" effect="plain">{{ t('checking') }}</el-tag>
+          <el-tag v-else-if="inspectionReport?.valid" type="success" effect="plain">{{ t('passed') }}</el-tag>
+          <el-tag v-else type="danger" effect="plain">{{ t('invalid') }}</el-tag>
         </div>
 
         <el-skeleton v-if="isInspecting" :rows="3" animated />
-        <el-empty v-else-if="!inspectionReport" description="上传往来Excel后自动检查" />
+        <el-empty v-else-if="!inspectionReport" :description="t('emptyInspection')" />
         <div v-else class="inspection-content">
           <dl class="inspection-summary">
-            <div><dt>识别公司</dt><dd>{{ inspectionReport.companyCodes.join(' / ') || '-' }}</dd></div>
-            <div><dt>明细行数</dt><dd>{{ inspectionReport.rowCount }} 行</dd></div>
-            <div><dt>分配数量</dt><dd>{{ inspectionReport.allocationCount }} 个</dd></div>
+            <div><dt>{{ t('recognizeCompanies') }}</dt><dd>{{ inspectionReport.companyCodes.join(' / ') || '-' }}</dd></div>
+            <div><dt>{{ t('detailRows') }}</dt><dd>{{ inspectionReport.rowCount }} {{ t('rows') }}</dd></div>
+            <div><dt>{{ t('allocationCount') }}</dt><dd>{{ inspectionReport.allocationCount }} {{ t('items') }}</dd></div>
           </dl>
 
           <el-alert
             v-if="inspectionReport.valid"
             type="success"
-            title="表格符合比对要求，可以开始分析"
+            :title="t('inspectionPassed')"
             :closable="false"
             show-icon
           />
@@ -141,41 +156,45 @@
         </div>
       </section>
 
-      <section class="panel status-panel" aria-label="分析过程和结果">
+      <section class="panel status-panel" :aria-label="`${t('process')} / ${t('analysisResult')}`">
         <div class="status-column">
-          <h2>分析过程</h2>
+          <h2>{{ t('process') }}</h2>
           <el-steps direction="vertical" :active="activeStep" finish-status="success">
             <el-step v-for="step in displaySteps" :key="step" :title="step" />
           </el-steps>
         </div>
 
         <div class="result-column">
-          <h2>{{ outputMode === 'marked' ? '标色结果' : '分析结果' }}</h2>
+          <h2>{{ outputMode === 'marked' ? t('markedResult') : t('analysisResult') }}</h2>
           <el-empty v-if="!result" :description="resultEmptyText" />
           <div v-else class="result-box">
-            <div class="result-title">分析完成</div>
+            <div class="result-title">{{ t('analysisDone') }}</div>
             <dl class="metrics">
-              <div><dt>处理明细</dt><dd>{{ result.total }} 行</dd></div>
-              <div><dt>匹配成功</dt><dd>{{ result.matchedAllocations }} 个分配 / {{ result.matched }} 行</dd></div>
-              <div><dt>完全一致</dt><dd>{{ result.exactAllocations }} 个分配</dd></div>
-              <div><dt>容差匹配</dt><dd>{{ result.toleranceAllocations }} 个分配</dd></div>
-              <div><dt>金额差异</dt><dd>{{ result.differenceAllocations }} 个分配 / {{ result.differences }} 行</dd></div>
-              <div><dt>未匹配</dt><dd>{{ result.unmatchedAllocations }} 个分配 / {{ result.unmatched }} 行</dd></div>
+              <div><dt>{{ t('processedDetails') }}</dt><dd>{{ result.total }} {{ t('rows') }}</dd></div>
+              <div><dt>{{ t('matchSuccess') }}</dt><dd>{{ result.matchedAllocations }} {{ t('allocationRows') }} {{ result.matched }} {{ t('rows') }}</dd></div>
+              <div><dt>{{ t('exactMatch') }}</dt><dd>{{ result.exactAllocations }} {{ t('items') }}</dd></div>
+              <div><dt>{{ t('toleranceMatch') }}</dt><dd>{{ result.toleranceAllocations }} {{ t('items') }}</dd></div>
+              <div><dt>{{ t('amountDifference') }}</dt><dd>{{ result.differenceAllocations }} {{ t('allocationRows') }} {{ result.differences }} {{ t('rows') }}</dd></div>
+              <div><dt>{{ t('unmatched') }}</dt><dd>{{ result.unmatchedAllocations }} {{ t('allocationRows') }} {{ result.unmatched }} {{ t('rows') }}</dd></div>
             </dl>
             <el-button type="success" :icon="Download" @click="downloadResult">
-              {{ outputMode === 'marked' ? '下载标色Excel' : '下载对账Excel' }}
+              {{ outputMode === 'marked' ? t('downloadMarked') : t('downloadDetailed') }}
             </el-button>
           </div>
         </div>
       </section>
     </section>
   </main>
+  </el-config-provider>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { Cpu, Download, QuestionFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+import en from 'element-plus/es/locale/lang/en'
+import id from 'element-plus/es/locale/lang/id'
+import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import FileDrop from './components/FileDrop.vue'
 import {
   analyzeCombinedExcel,
@@ -184,8 +203,19 @@ import {
   type AnalyzeSummary,
   type InspectReport,
 } from './services/api'
+import { localeOptions, translate, type Locale } from './i18n'
 
 const buildCommit = import.meta.env.VITE_BUILD_COMMIT?.slice(0, 8) || '开发版'
+const supportedLocales: Locale[] = ['zh-CN', 'en', 'id']
+const storedLocale = localStorage.getItem('finance-reconcile-locale') as Locale | null
+const language = ref<Locale>(storedLocale && supportedLocales.includes(storedLocale) ? storedLocale : 'zh-CN')
+const elementLocale = computed(() => ({ 'zh-CN': zhCn, en, id }[language.value]))
+const t = (key: string) => translate(language.value, key)
+
+watch(language, (locale) => {
+  localStorage.setItem('finance-reconcile-locale', locale)
+  document.documentElement.lang = locale === 'zh-CN' ? 'zh-CN' : locale
+}, { immediate: true })
 
 const workbook = ref<File | null>(null)
 const matchField = ref('分配')
@@ -199,23 +229,27 @@ const activeStep = ref(0)
 const result = ref<AnalyzeSummary | null>(null)
 const inspectionReport = ref<InspectReport | null>(null)
 
-const pendingSteps = ['等待上传Excel', '等待表格检查', '等待开始分析', '等待生成结果', '完成后可下载']
-const readySteps = ['Excel已上传', '表格检查通过', '等待开始分析', '等待生成结果', '完成后可下载']
-const analyzingSteps = ['正在读取Excel...', '正在校验字段...', '正在匹配数据...', '正在生成结果...', '完成']
-const invalidSteps = ['Excel已上传', '表格检查未通过', '请按提示修改表格', '等待重新上传', '完成后可下载']
+watch(language, () => {
+  if (workbook.value && !isAnalyzing.value) void inspectWorkbook()
+})
+
+const pendingSteps = computed(() => ['pendingExcel', 'pendingCheck', 'pendingAnalysis', 'pendingGenerate', 'downloadable'].map(t))
+const readySteps = computed(() => ['excelUploaded', 'passed', 'pendingAnalysis', 'pendingGenerate', 'downloadable'].map(t))
+const analyzingSteps = computed(() => ['readingExcel', 'validatingFields', 'matchingData', 'generating', 'completed'].map(t))
+const invalidSteps = computed(() => ['excelUploaded', 'checkFailed', 'fixAccording', 'reupload', 'downloadable'].map(t))
 const displaySteps = computed(() => {
-  if (isAnalyzing.value || result.value) return analyzingSteps
-  if (!workbook.value) return pendingSteps
-  if (inspectionReport.value?.valid) return readySteps
-  if (inspectionReport.value && !inspectionReport.value.valid) return invalidSteps
-  return ['Excel已上传', '正在检查表格...', '等待开始分析', '等待生成结果', '完成后可下载']
+  if (isAnalyzing.value || result.value) return analyzingSteps.value
+  if (!workbook.value) return pendingSteps.value
+  if (inspectionReport.value?.valid) return readySteps.value
+  if (inspectionReport.value && !inspectionReport.value.valid) return invalidSteps.value
+  return [t('excelUploaded'), t('checkingTable'), t('pendingAnalysis'), t('pendingGenerate'), t('downloadable')]
 })
 const resultEmptyText = computed(() => {
-  if (!workbook.value) return '请先上传往来Excel'
-  if (isInspecting.value) return '正在检查表格内容'
-  if (inspectionReport.value && !inspectionReport.value.valid) return '表格不符合要求，请按上方提示修改后重新上传'
-  if (inspectionReport.value?.valid) return '表格检查通过，点击开始分析'
-  return '上传往来Excel后自动检查'
+  if (!workbook.value) return t('noWorkbook')
+  if (isInspecting.value) return t('checkingContent')
+  if (inspectionReport.value && !inspectionReport.value.valid) return t('invalidAdvice')
+  if (inspectionReport.value?.valid) return t('readyAdvice')
+  return t('uploadAutoCheck')
 })
 const canAnalyze = computed(() =>
   workbook.value
@@ -253,16 +287,17 @@ async function handleFileSelected(file: File) {
 async function inspectWorkbook() {
   if (!workbook.value) return
   const currentFile = workbook.value
+  const currentLocale = language.value
   inspectionReport.value = null
   isInspecting.value = true
   try {
-    const report = await inspectCombinedExcel(currentFile, matchField.value, amountField.value)
-    if (workbook.value === currentFile) inspectionReport.value = report
+    const report = await inspectCombinedExcel(currentFile, matchField.value, amountField.value, currentLocale)
+    if (workbook.value === currentFile && language.value === currentLocale) inspectionReport.value = report
   } catch {
-    if (workbook.value !== currentFile) return
+    if (workbook.value !== currentFile || language.value !== currentLocale) return
     inspectionReport.value = {
       valid: false,
-      errors: ['表格检查失败，请重新上传Excel文件'],
+      errors: [t('inspectionFailed')],
       warnings: [],
       companyCodes: [],
       rowCount: 0,
@@ -270,7 +305,7 @@ async function inspectWorkbook() {
       requiredColumns: ['公司代码or伙伴公司', '分配', '原币金额'],
     }
   } finally {
-    if (workbook.value === currentFile) isInspecting.value = false
+    if (workbook.value === currentFile && language.value === currentLocale) isInspecting.value = false
   }
 }
 
@@ -288,11 +323,11 @@ async function handleAnalyze() {
   }, 450)
 
   try {
-    const analyzed = await analyzeCombinedExcel(currentFile, matchField.value, amountField.value, tolerance.value, currentMode)
+    const analyzed = await analyzeCombinedExcel(currentFile, matchField.value, amountField.value, tolerance.value, currentMode, language.value)
     if (workbook.value !== currentFile || outputMode.value !== currentMode) return
     result.value = analyzed
     activeStep.value = 5
-    ElMessage.success('分析完成')
+    ElMessage.success(t('analysisDone'))
   } catch (error: any) {
     if (workbook.value !== currentFile || outputMode.value !== currentMode) return
     activeStep.value = 0
@@ -307,12 +342,12 @@ async function handleAnalyze() {
 }
 
 function parseError(detail: string | undefined) {
-  if (!detail) return '分析失败，请检查Excel文件后重试'
+  if (!detail) return t('analysisFailed')
   try {
     const parsed = JSON.parse(detail)
-    return parsed.detail ?? '分析失败，请检查Excel文件后重试'
+    return parsed.detail ?? t('analysisFailed')
   } catch {
-    return detail
+    return t('analysisFailed')
   }
 }
 

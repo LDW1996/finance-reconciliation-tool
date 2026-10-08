@@ -18,6 +18,115 @@ COMBINED_COMPANY_COLUMN = "公司代码or伙伴公司"
 DISPLAY_COLUMNS = ["公司代码", "凭证编号", "分配", "文本", "原币金额"]
 DEFAULT_TOLERANCE = 100.0
 MATCH_GREEN = "FFD2EEDA"
+SUPPORTED_LOCALES = {"zh-CN", "en", "id"}
+
+EXPORT_TEXT = {
+    "en": {
+        "处理汇总": "Summary", "匹配成功": "Matched", "金额差异明细": "Discrepancy details",
+        "未匹配": "Unmatched", "异常明细": "Exceptions", "金额差异汇总": "Discrepancy summary",
+        "原始数据": "Source data", "分类": "Category", "分配数量": "Assignment count",
+        "明细行数": "Detail rows", "匹配状态": "Match status", "匹配类型": "Match type",
+        "未匹配说明": "Unmatched reason", "完全一致": "Exact match", "容差匹配": "Within tolerance",
+        "金额差异": "Discrepancy", "未匹配原因": "Unmatched reason", "仅单方存在": "Present on one side only",
+        "来源文件": "Source company", "公司A": "Company A", "公司B": "Company B",
+        "对方金额": "Counterparty amount", "合计金额": "Combined amount", "两公司原币金额合计": "Combined original-currency amount",
+        "差额绝对值": "Absolute difference", "两公司金额合计(差额)": "Combined amount (difference)",
+        "凭证编号": "Document number", "两公司金额合计(差额)": "Combined amount (difference)",
+        "核对规则": "Reconciliation rules", "说明": "Description", "金额口径": "Amount basis",
+        "数量": "Count", "金额": "Amount", "分配": "Assignment", "原币金额": "Original currency amount",
+        "差异金额": "Difference amount", "公司A金额": "Company A amount", "公司B金额": "Company B amount",
+        "公司代码": "Company code", "文本": "Text", "行项目": "Line item", "年份": "Year", "年度": "Year", "期间": "Period",
+    },
+    "id": {
+        "处理汇总": "Ringkasan", "匹配成功": "Cocok", "金额差异明细": "Rincian perbedaan",
+        "未匹配": "Tidak cocok", "异常明细": "Pengecualian", "金额差异汇总": "Ringkasan perbedaan",
+        "原始数据": "Data sumber", "分类": "Kategori", "分配数量": "Jumlah assignment",
+        "明细行数": "Baris detail", "匹配状态": "Status pencocokan", "匹配类型": "Jenis pencocokan",
+        "未匹配说明": "Alasan tidak cocok", "完全一致": "Cocok tepat", "容差匹配": "Dalam toleransi",
+        "金额差异": "Perbedaan", "未匹配原因": "Alasan tidak cocok", "仅单方存在": "Hanya ada di satu pihak",
+        "来源文件": "Perusahaan sumber", "公司A": "Perusahaan A", "公司B": "Perusahaan B",
+        "对方金额": "Jumlah pihak lawan", "合计金额": "Jumlah gabungan", "两公司原币金额合计": "Total mata uang asli gabungan",
+        "差额绝对值": "Nilai absolut selisih", "两公司金额合计(差额)": "Jumlah gabungan (selisih)",
+        "凭证编号": "Nomor dokumen", "核对规则": "Aturan rekonsiliasi", "说明": "Keterangan", "金额口径": "Dasar jumlah",
+        "数量": "Jumlah", "金额": "Jumlah", "分配": "Assignment", "原币金额": "Jumlah mata uang asli",
+        "差异金额": "Jumlah selisih", "公司A金额": "Jumlah perusahaan A", "公司B金额": "Jumlah perusahaan B",
+        "公司代码": "Kode perusahaan", "文本": "Teks", "行项目": "Item baris", "年度": "Tahun", "期间": "Periode",
+    },
+}
+
+
+def normalize_locale(locale: str) -> str:
+    return locale if locale in SUPPORTED_LOCALES else "zh-CN"
+
+
+def localize_message(message: str, locale: str) -> str:
+    locale = normalize_locale(locale)
+    if locale == "zh-CN":
+        return message
+    en = {
+        "文件格式错误，请选择 .xlsx 或 .xls 文件": "Invalid file type. Please choose an .xlsx or .xls Excel file.",
+        "Excel读取失败，请检查文件是否损坏或格式是否正确": "Could not read the Excel file. Check that it is valid and not corrupted.",
+        "往来表没有可分析的数据，请检查Excel内容": "The workbook contains no data rows to analyze.",
+        "两个文件属于同一家公司，无法进行比对": "Both files belong to the same company and cannot be reconciled.",
+        "金额容差必须是大于或等于 0 的数字": "The amount tolerance must be a number greater than or equal to 0.",
+        "请选择有效的结果类型": "Select a valid output type.",
+        "往来表必须且只能包含两家公司代码，请检查公司代码or伙伴公司字段": "The workbook must contain exactly two company codes in 公司代码or伙伴公司.",
+        "请检查模板": "Please check the workbook template.",
+    }
+    id_text = {
+        "文件格式错误，请选择 .xlsx 或 .xls 文件": "Jenis file tidak valid. Pilih file Excel .xlsx atau .xls.",
+        "Excel读取失败，请检查文件是否损坏或格式是否正确": "File Excel tidak dapat dibaca. Pastikan format benar dan file tidak rusak.",
+        "往来表没有可分析的数据，请检查Excel内容": "File tidak memiliki baris data untuk dianalisis.",
+        "两个文件属于同一家公司，无法进行比对": "Kedua file berasal dari perusahaan yang sama dan tidak dapat direkonsiliasi.",
+        "金额容差必须是大于或等于 0 的数字": "Toleransi jumlah harus berupa angka yang lebih besar dari atau sama dengan 0.",
+        "请选择有效的结果类型": "Pilih jenis hasil yang valid.",
+        "往来表必须且只能包含两家公司代码，请检查公司代码or伙伴公司字段": "File harus berisi tepat dua kode perusahaan pada kolom 公司代码or伙伴公司.",
+        "请检查模板": "Periksa template file.",
+    }
+    dictionary = en if locale == "en" else id_text
+    if message == "文件格式错误，请选择Excel文件":
+        return dictionary["文件格式错误，请选择 .xlsx 或 .xls 文件"]
+    if message.startswith("Excel缺少字段："):
+        columns = message.removeprefix("Excel缺少字段：").split("，")[0]
+        if locale == "en":
+            return f"Missing required column(s): {_translate_source_fields(columns, locale)}. Please check the workbook template."
+        return f"Kolom wajib tidak ditemukan: {_translate_source_fields(columns, locale)}. Periksa template file."
+    if "Excel缺少字段：" in message:
+        columns = message.split("Excel缺少字段：", 1)[1].split("，")[0]
+        if locale == "en":
+            return f"Missing required column(s): {_translate_source_fields(columns, locale)}. Please check the workbook template."
+        return f"Kolom wajib tidak ditemukan: {_translate_source_fields(columns, locale)}. Periksa template file."
+    if message.startswith("原币金额存在 "):
+        count = message.split("原币金额存在 ", 1)[1].split(" 行", 1)[0]
+        return (f"{count} row(s) in 原币金额 could not be read as numbers. Check the amount column."
+                if locale == "en" else f"{count} baris pada 原币金额 tidak dapat dibaca sebagai angka. Periksa kolom jumlah.")
+    if message.startswith("公司代码or伙伴公司必须且只能包含两家公司代码"):
+        codes = message.split("当前识别到：", 1)[-1]
+        return (f"公司代码or伙伴公司 must contain exactly two company codes. Detected: {codes}."
+                if locale == "en" else f"公司代码or伙伴公司 harus berisi tepat dua kode perusahaan. Terdeteksi: {codes}.")
+    if message.startswith("存在 ") and "行分配为空" in message:
+        count = message.split("存在 ", 1)[1].split(" 行", 1)[0]
+        return (f"{count} row(s) have a blank assignment; they will be grouped together as blank."
+                if locale == "en" else f"{count} baris memiliki assignment kosong; semuanya akan dikelompokkan bersama.")
+    if message.startswith("往来表必须且只能包含两家公司代码"):
+        return dictionary["往来表必须且只能包含两家公司代码，请检查公司代码or伙伴公司字段"]
+    for source, translated in dictionary.items():
+        if message == source:
+            return translated
+    if "请检查模板" in message:
+        prefix = message.split("，请检查模板", 1)[0]
+        return f"{prefix}. {dictionary['请检查模板']}"
+    return message
+
+
+def _translate_source_fields(fields: str, locale: str) -> str:
+    labels = {
+        "公司代码or伙伴公司": "company/partner code" if locale == "en" else "kode perusahaan/mitra",
+        "分配": "assignment" if locale == "en" else "assignment",
+        "原币金额": "original-currency amount" if locale == "en" else "jumlah mata uang asli",
+    }
+    names = [part.strip() for part in fields.split("、")]
+    return ", ".join(f"{name} ({labels[name]})" if name in labels else name for name in names)
 
 
 class ReconciliationError(Exception):
@@ -56,7 +165,9 @@ def inspect_combined_workbook(
     match_field: str = "分配",
     amount_field: str = "原币金额",
     company_field: str = COMBINED_COMPANY_COLUMN,
+    locale: str = "zh-CN",
 ) -> dict[str, object]:
+    locale = normalize_locale(locale)
     report: dict[str, object] = {
         "valid": False,
         "errors": [],
@@ -72,14 +183,14 @@ def inspect_combined_workbook(
     suffix = Path(filename).suffix.lower()
     if suffix not in {".xlsx", ".xls"}:
         errors.append("文件格式错误，请选择 .xlsx 或 .xls 文件")
-        report["errors"] = errors
+        report["errors"] = [localize_message(message, locale) for message in errors]
         return report
 
     try:
         df = pd.read_excel(workbook_file)
     except Exception:
         errors.append("Excel读取失败，请检查文件是否损坏或格式是否正确")
-        report["errors"] = errors
+        report["errors"] = [localize_message(message, locale) for message in errors]
         return report
 
     report["rowCount"] = int(len(df))
@@ -90,8 +201,8 @@ def inspect_combined_workbook(
     missing = sorted(required - set(df.columns))
     if missing:
         errors.append(f"Excel缺少字段：{'、'.join(missing)}，请检查模板")
-        report["errors"] = errors
-        report["warnings"] = warnings
+        report["errors"] = [localize_message(message, locale) for message in errors]
+        report["warnings"] = [localize_message(message, locale) for message in warnings]
         return report
 
     company_codes = sorted(
@@ -114,8 +225,8 @@ def inspect_combined_workbook(
         warnings.append(f"存在 {blank_allocations} 行分配为空，系统会统一按“空白”分组处理")
 
     report["valid"] = len(errors) == 0
-    report["errors"] = errors
-    report["warnings"] = warnings
+    report["errors"] = [localize_message(message, locale) for message in errors]
+    report["warnings"] = [localize_message(message, locale) for message in warnings]
     return report
 
 
@@ -202,7 +313,9 @@ def reconcile_combined_workbook(
     company_field: str = COMBINED_COMPANY_COLUMN,
     tolerance: float = DEFAULT_TOLERANCE,
     output_mode: str = "detailed",
+    locale: str = "zh-CN",
 ) -> ReconciliationResult:
+    locale = normalize_locale(locale)
     if not math.isfinite(tolerance) or tolerance < 0:
         raise ReconciliationError("金额容差必须是大于或等于 0 的数字")
     if output_mode not in {"detailed", "marked"}:
@@ -304,7 +417,7 @@ def reconcile_combined_workbook(
             grouped, status_by_key, company_a_code, company_b_code, company_field
         )
         excel_bytes = _write_combined_result_excel(
-            summary, matched, differences, unmatched, exceptions, difference_summary, detail, tolerance
+            summary, matched, differences, unmatched, exceptions, difference_summary, detail, tolerance, locale
         )
     return ReconciliationResult(
         company_a_code=company_a_code,
@@ -316,8 +429,8 @@ def reconcile_combined_workbook(
         raw_data=df,
         excel_bytes=excel_bytes,
         output_filename=(
-            f"{company_a_code}_{company_b_code}_原表标色.xlsx" if output_mode == "marked"
-            else f"{company_a_code}_{company_b_code}_分配原币金额对账结果.xlsx"
+            f"{company_a_code}_{company_b_code}_{'原表标色' if locale == 'zh-CN' else 'highlighted-source' if locale == 'en' else 'data-ditandai'}.xlsx" if output_mode == "marked"
+            else f"{company_a_code}_{company_b_code}_{'分配原币金额对账结果' if locale == 'zh-CN' else 'reconciliation-result' if locale == 'en' else 'hasil-rekonsiliasi'}.xlsx"
         ),
     )
 
@@ -453,6 +566,7 @@ def _write_combined_result_excel(
     difference_summary: pd.DataFrame,
     raw_data: pd.DataFrame,
     tolerance: float,
+    locale: str = "zh-CN",
 ) -> bytes:
     summary_df = pd.DataFrame([{"分类": name, **summary[name]} for name in ("完全一致", "容差匹配", "匹配成功", "金额差异", "未匹配", "合计")])
     matched_out = _format_export_dataframe(matched)
@@ -470,8 +584,9 @@ def _write_combined_result_excel(
         exceptions_out.to_excel(writer, sheet_name="异常明细", index=False)
         difference_summary_out.to_excel(writer, sheet_name="金额差异汇总", index=False)
         raw_data_out.to_excel(writer, sheet_name="原始数据", index=False)
-        _write_rule_section(writer.book["处理汇总"], summary_df, tolerance)
+        _write_rule_section(writer.book["处理汇总"], summary_df, tolerance, locale)
         _style_combined_workbook(writer.book, summary_df)
+        _translate_export_workbook(writer.book, locale)
     return buffer.getvalue()
 
 
@@ -524,7 +639,7 @@ def _format_line_item(value: object) -> object:
     return text
 
 
-def _write_rule_section(ws, summary_df: pd.DataFrame, tolerance: float) -> None:
+def _write_rule_section(ws, summary_df: pd.DataFrame, tolerance: float, locale: str = "zh-CN") -> None:
     company_columns = [col for col in summary_df.columns if re.match(r"^\d+行数$", str(col))]
     company_codes = [col.removesuffix("行数") for col in company_columns[:2]]
     company_a, company_b = company_codes if len(company_codes) == 2 else ("公司A", "公司B")
@@ -537,9 +652,72 @@ def _write_rule_section(ws, summary_df: pd.DataFrame, tolerance: float) -> None:
         ("未匹配", "分配字段仅存在于其中一家公司；分配为空的记录也归入未匹配。"),
         ("金额口径", f"本文件{company_a}和{company_b}的原币均为IDR，因此直接使用“原币金额”核对。"),
     ]
+    if locale == "en":
+        rules = [
+            ("Reconciliation rules", "Description"),
+            ("Exact match", f"Assignment matches and the combined original-currency amounts for {company_a} and {company_b} equal zero; highlighted green."),
+            ("Within tolerance", f"Both companies have entries and the absolute difference is greater than zero and no more than IDR {tolerance:g}; highlighted yellow."),
+            ("Discrepancy", f"Both companies have the assignment, but the absolute difference exceeds IDR {tolerance:g}."),
+            ("Unmatched", "The assignment appears in only one company; blank assignments are also classified as unmatched."),
+            ("Amount basis", f"Both {company_a} and {company_b} use IDR as the original currency, so the original-currency amounts are compared directly."),
+        ]
+    elif locale == "id":
+        rules = [
+            ("Aturan rekonsiliasi", "Keterangan"),
+            ("Cocok tepat", f"Assignment sama dan jumlah mata uang asli gabungan {company_a} dan {company_b} adalah nol; ditandai hijau."),
+            ("Dalam toleransi", f"Kedua perusahaan memiliki data dan selisih absolut lebih dari nol tetapi tidak melebihi IDR {tolerance:g}; ditandai kuning."),
+            ("Perbedaan", f"Assignment terdapat di kedua perusahaan, tetapi selisih absolut melebihi IDR {tolerance:g}."),
+            ("Tidak cocok", "Assignment hanya terdapat di satu perusahaan; assignment kosong juga diklasifikasikan sebagai tidak cocok."),
+            ("Dasar jumlah", f"Mata uang asli {company_a} dan {company_b} adalah IDR, sehingga jumlah mata uang asli dibandingkan langsung."),
+        ]
     for offset, row in enumerate(rules):
         ws.cell(start_row + offset, 1, row[0])
         ws.cell(start_row + offset, 2, row[1])
+
+
+def _translate_export_workbook(workbook, locale: str) -> None:
+    if locale == "zh-CN":
+        return
+    translations = EXPORT_TEXT[locale]
+    sheet_names = {
+        "处理汇总": translations["处理汇总"], "匹配成功": translations["匹配成功"],
+        "金额差异明细": translations["金额差异明细"], "未匹配": translations["未匹配"],
+        "异常明细": translations["异常明细"], "金额差异汇总": translations["金额差异汇总"],
+        "原始数据": translations["原始数据"],
+    }
+    source_headers = {"公司代码", "公司代码or伙伴公司", "凭证编号", "分配", "文本", "原币金额", "行项目", "年度", "年份", "期间"}
+    for ws in workbook.worksheets:
+        original_sheet_name = ws.title
+        ws.title = sheet_names.get(ws.title, ws.title)
+        for row in ws.iter_rows():
+            for cell in row:
+                if not isinstance(cell.value, str):
+                    continue
+                value = cell.value
+                if original_sheet_name == "原始数据" and cell.row == 1 and value in source_headers:
+                    continue
+                if original_sheet_name == "处理汇总" and cell.row == 1 and cell.column == 1:
+                    company_match = re.match(r"(\d+) 与 (\d+) 分配字段 / 原币金额对账结果", value)
+                    if company_match:
+                        company_a, company_b = company_match.groups()
+                        cell.value = (f"{company_a} & {company_b} Assignment / original-currency reconciliation result"
+                                      if locale == "en" else f"{company_a} 与 {company_b} Assignment / 原币金额对账结果")
+                        continue
+                if value in translations:
+                    cell.value = translations[value]
+                    continue
+                match = re.fullmatch(r"(\d+)(行数|原币金额合计|凭证编号)", value)
+                if match:
+                    code, suffix = match.groups()
+                    suffix_en = {"行数": " rows", "原币金额合计": " original-currency total", "凭证编号": " document numbers"}
+                    suffix_id = {"行数": " baris", "原币金额合计": " total mata uang asli", "凭证编号": " nomor dokumen"}
+                    cell.value = f"{code}{suffix_en[suffix] if locale == 'en' else suffix_id[suffix]}"
+                else:
+                    reason = re.fullmatch(r"仅(.+)存在", value)
+                    if reason:
+                        cell.value = (f"Only {reason.group(1)} exists" if locale == "en" else f"Hanya {reason.group(1)} yang tercatat")
+                    elif value.startswith("仅") and value.endswith("存在"):
+                        cell.value = "Present on one side only" if locale == "en" else "Hanya ada di satu pihak"
 
 
 def _style_combined_workbook(workbook, summary_df: pd.DataFrame) -> None:

@@ -2,9 +2,9 @@
   <div class="file-card">
     <div class="file-card-header">
       <h2>{{ title }}</h2>
-      <el-tag v-if="checking" type="warning" effect="plain">检查中</el-tag>
-      <el-tag v-else-if="file" type="success" effect="plain">已上传</el-tag>
-      <el-tag v-else effect="plain">待上传</el-tag>
+      <el-tag v-if="checking" type="warning" effect="plain">{{ checkingText }}</el-tag>
+      <el-tag v-else-if="file" type="success" effect="plain">{{ uploadedText }}</el-tag>
+      <el-tag v-else effect="plain">{{ pendingText }}</el-tag>
     </div>
 
     <el-upload
@@ -16,20 +16,20 @@
       :on-change="handleChange"
     >
       <el-icon class="upload-icon"><UploadFilled /></el-icon>
-      <div class="upload-text">点击选择或拖拽Excel到这里</div>
+      <div class="upload-text">{{ uploadPrompt }}</div>
       <template #tip>
-        <div class="upload-tip">支持 .xlsx / .xls</div>
+        <div class="upload-tip">{{ supportedText }}</div>
       </template>
     </el-upload>
 
     <dl class="file-status">
       <div class="status-item">
-        <dt>文件名</dt>
-        <dd>{{ file?.name ?? '未选择' }}</dd>
+        <dt>{{ filenameLabel }}</dt>
+        <dd>{{ file?.name ?? notSelectedText }}</dd>
       </div>
       <div class="status-item">
-        <dt>公司代码</dt>
-        <dd>{{ companyCode ?? '分析后识别' }}</dd>
+        <dt>{{ companyCodeLabel }}</dt>
+        <dd>{{ companyCode ?? identifyAfterText }}</dd>
       </div>
     </dl>
   </div>
@@ -47,6 +47,15 @@ defineProps<{
   file: File | null
   companyCode?: string
   checking?: boolean
+  checkingText: string
+  uploadedText: string
+  pendingText: string
+  uploadPrompt: string
+  supportedText: string
+  filenameLabel: string
+  notSelectedText: string
+  companyCodeLabel: string
+  identifyAfterText: string
 }>()
 
 const emit = defineEmits<{
