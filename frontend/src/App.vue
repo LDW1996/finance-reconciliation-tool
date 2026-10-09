@@ -4,14 +4,18 @@
     <section class="workspace" aria-labelledby="page-title">
       <header class="page-header">
         <div>
-          <p class="eyebrow">{{ t('localVersion') }} {{ buildCommit }}</p>
           <h1 id="page-title">{{ t('title') }}</h1>
         </div>
         <div class="header-actions">
-          <el-radio-group v-model="language" size="small" :aria-label="t('languageLabel')">
-            <el-radio-button v-for="option in localeOptions" :key="option.value" :value="option.value" :disabled="isAnalyzing">{{ option.label }}</el-radio-button>
-          </el-radio-group>
-          <el-tag effect="plain" type="success">{{ t('localData') }}</el-tag>
+          <el-select
+            v-model="language"
+            class="language-select"
+            size="small"
+            :aria-label="t('languageLabel')"
+            :disabled="isAnalyzing"
+          >
+            <el-option v-for="option in localeOptions" :key="option.value" :label="option.label" :value="option.value" />
+          </el-select>
         </div>
       </header>
 
@@ -205,7 +209,6 @@ import {
 } from './services/api'
 import { localeOptions, translate, type Locale } from './i18n'
 
-const buildCommit = import.meta.env.VITE_BUILD_COMMIT?.slice(0, 8) || '开发版'
 const supportedLocales: Locale[] = ['zh-CN', 'en', 'id']
 const storedLocale = localStorage.getItem('finance-reconcile-locale') as Locale | null
 const language = ref<Locale>(storedLocale && supportedLocales.includes(storedLocale) ? storedLocale : 'zh-CN')
