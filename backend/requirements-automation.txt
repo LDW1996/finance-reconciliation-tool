@@ -1,3 +1,2 @@
-# Optional query runner; separate from the packaged reconciliation app.
+# Compatibility entry point for the browser runner dependencies.
 -r requirements.txt
-playwright==1.55.0

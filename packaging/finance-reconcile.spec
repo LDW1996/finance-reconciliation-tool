@@ -14,6 +14,12 @@ hiddenimports = [
     "app.main",
     "app.reconciliation",
     "app.accounts",
+    "app.ilog_tasks",
+    "app.ilog_retention",
+    "app.ilog_unlock",
+    "app.ilog_query",
+    "playwright.sync_api",
+    "json5",
     "cryptography.fernet",
     "uvicorn.logging",
     "uvicorn.loops",
@@ -30,7 +36,7 @@ hiddenimports = [
     "xlrd",
 ]
 
-for package_name in ["numpy", "pandas"]:
+for package_name in ["numpy", "pandas", "playwright"]:
     package_datas, package_binaries, package_hiddenimports = collect_all(package_name)
     datas += package_datas
     binaries += package_binaries

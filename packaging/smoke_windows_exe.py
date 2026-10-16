@@ -103,6 +103,22 @@ def assert_excel_flow(sample_path: Path) -> None:
         raise AssertionError("Marked export did not color the original sheet")
 
 
+def assert_ilog_local_services() -> None:
+    # Never log in to iLog or submit business operations in CI.
+    for endpoint in ('/api/ilog/runtime','/api/ilog/retention','/api/ilog/tasks?limit=20&offset=0'):
+        response=httpx.get(APP_URL+endpoint,timeout=10)
+        response.raise_for_status()
+    headers={'X-Finance-Local':'1'}
+    created=httpx.post(APP_URL+'/api/ilog/accounts',json={
+        'name':'Smoke test','username':'smoke-test-only','password':'not-a-real-password'},headers=headers,timeout=10)
+    created.raise_for_status()
+    account=created.json()
+    if not account.get('hasPassword') or 'not-a-real-password' in created.text:
+        raise AssertionError('Account storage or secret redaction failed')
+    response=httpx.delete(APP_URL+'/api/ilog/accounts/'+account['id'],headers=headers,timeout=10)
+    response.raise_for_status()
+
+
 def main() -> int:
     exe_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("dist") / "财务对账工具.exe"
     if not exe_path.exists():
@@ -115,10 +131,12 @@ def main() -> int:
     else:
         raise RuntimeError("Port 8765 is already serving an app; cannot verify the new EXE")
 
-    process = subprocess.Popen([str(exe_path)])
+    sandbox = tempfile.TemporaryDirectory(prefix='finance-exe-smoke-')
+    process = subprocess.Popen([str(exe_path)], env={**os.environ,'FINANCE_RECONCILE_DATA_DIR':sandbox.name})
     try:
         wait_for_health()
         assert_frontend_served()
+        assert_ilog_local_services()
         with tempfile.TemporaryDirectory() as temp_dir:
             sample_path = Path(temp_dir) / "sample.xlsx"
             make_sample_workbook(sample_path)
@@ -129,6 +147,8 @@ def main() -> int:
             process.wait(timeout=10)
         except subprocess.TimeoutExpired:
             process.kill()
+            process.wait(timeout=10)
+        sandbox.cleanup()
     return 0
 
 
