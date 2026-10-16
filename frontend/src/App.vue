@@ -3,14 +3,14 @@
   <main class="app-shell">
     <section class="workspace" aria-labelledby="page-title">
       <header class="page-header">
-        <div>
+        <div class="header-title">
+          <el-icon class="brand-icon"><DataAnalysis /></el-icon>
           <h1 id="page-title">{{ t('title') }}</h1>
         </div>
         <div class="header-actions">
           <el-select
             v-model="language"
             class="language-select"
-            size="small"
             :aria-label="t('languageLabel')"
             :disabled="isAnalyzing"
           >
@@ -21,12 +21,13 @@
 
       <nav class="function-nav" :aria-label="t('menuLabel')">
         <el-menu :default-active="outputMode" mode="horizontal" @select="handleMenuSelect">
-          <el-menu-item index="detailed" :disabled="isAnalyzing">{{ t('detailedMode') }}</el-menu-item>
-          <el-menu-item index="marked" :disabled="isAnalyzing">{{ t('markedMode') }}</el-menu-item>
+          <el-menu-item index="detailed" :disabled="isAnalyzing"><el-icon><Document /></el-icon>{{ t('detailedMode') }}</el-menu-item>
+          <el-menu-item index="marked" :disabled="isAnalyzing"><el-icon><Brush /></el-icon>{{ t('markedMode') }}</el-menu-item>
         </el-menu>
       </nav>
 
       <div class="layout-grid">
+        <div class="work-column">
         <section class="panel upload-panel single-upload" :aria-label="t('uploadLabel')">
           <FileDrop
             :title="t('workbookTitle')"
@@ -45,73 +46,6 @@
             @selected="handleFileSelected"
           />
         </section>
-
-        <aside class="panel settings-panel" :aria-label="t('matchingRules')">
-          <div class="section-title-row">
-            <h2>{{ t('matchingRules') }}</h2>
-            <el-popover placement="left" trigger="click" width="300">
-              <template #reference>
-                <el-button
-                  class="help-button"
-                  circle
-                  text
-                  :icon="QuestionFilled"
-                  :aria-label="t('ruleHelp')"
-                />
-              </template>
-              <div class="help-content">
-                <h3>{{ t('helpTitle') }}</h3>
-                <p>{{ t('helpMatch') }}</p>
-                <p>{{ t('helpAmount') }}</p>
-                <p>{{ t('helpTolerance') }}</p>
-              </div>
-            </el-popover>
-          </div>
-          <el-form label-position="top">
-            <el-form-item :label="t('matchField')">
-              <el-input v-model="matchField" clearable />
-            </el-form-item>
-            <el-form-item :label="t('amountField')">
-              <el-input v-model="amountField" clearable />
-            </el-form-item>
-            <el-form-item :label="t('tolerance')">
-              <el-input-number v-model="tolerance" :min="0" :precision="2" :step="100" controls-position="right" />
-            </el-form-item>
-          </el-form>
-
-          <div class="standard-box">
-            <h3>{{ t('formatRequirements') }}</h3>
-            <ul>
-              <li>{{ t('requiredFields') }}</li>
-              <li>{{ t('twoCompanies') }}</li>
-              <li>{{ t('numericAmount') }}</li>
-              <li>{{ t('blankAllocation') }}</li>
-            </ul>
-          </div>
-
-          <el-button
-            class="analyze-button"
-            type="primary"
-            size="large"
-            :icon="Cpu"
-            :loading="isAnalyzing"
-            :disabled="!canAnalyze"
-            @click="handleAnalyze"
-          >
-            {{ t('startAnalysis') }}
-          </el-button>
-
-          <el-alert
-            v-if="errorMessage"
-            class="message"
-            type="error"
-            :title="errorMessage"
-            :closable="false"
-            show-icon
-          />
-        </aside>
-      </div>
-
       <section class="panel inspection-panel" :aria-label="t('inspection')">
         <div class="inspection-header">
           <h2>{{ t('inspection') }}</h2>
@@ -122,7 +56,7 @@
         </div>
 
         <el-skeleton v-if="isInspecting" :rows="3" animated />
-        <el-empty v-else-if="!inspectionReport" :description="t('emptyInspection')" />
+        <div v-else-if="!inspectionReport" class="quiet-state" role="status"><el-icon><Checked /></el-icon><p>{{ t('emptyInspection') }}</p></div>
         <div v-else class="inspection-content">
           <dl class="inspection-summary">
             <div><dt>{{ t('recognizeCompanies') }}</dt><dd>{{ inspectionReport.companyCodes.join(' / ') || '-' }}</dd></div>
@@ -159,18 +93,84 @@
           />
         </div>
       </section>
+        </div>
+        <aside class="panel settings-panel" :aria-label="t('matchingRules')">
+          <div class="section-title-row">
+            <h2>{{ t('matchingRules') }}</h2>
+            <el-popover placement="left" trigger="click" width="300">
+              <template #reference>
+                <el-button
+                  class="help-button"
+                  circle
+                  text
+                  :icon="QuestionFilled"
+                  :aria-label="t('ruleHelp')"
+                />
+              </template>
+              <div class="help-content">
+                <h3>{{ t('helpTitle') }}</h3>
+                <p>{{ t('helpMatch') }}</p>
+                <p>{{ t('helpAmount') }}</p>
+                <p>{{ t('helpTolerance') }}</p>
+              </div>
+            </el-popover>
+          </div>
+          <el-form label-position="top">
+            <el-form-item :label="t('matchField')">
+              <el-input v-model="matchField" name="match-field" :aria-label="t('matchField')" :disabled="isAnalyzing" clearable />
+            </el-form-item>
+            <el-form-item :label="t('amountField')">
+              <el-input v-model="amountField" name="amount-field" :aria-label="t('amountField')" :disabled="isAnalyzing" clearable />
+            </el-form-item>
+            <el-form-item :label="t('tolerance')">
+              <el-input-number v-model="tolerance" name="tolerance" :aria-label="t('tolerance')" :disabled="isAnalyzing" :min="0" :precision="2" :step="100" controls-position="right" />
+            </el-form-item>
+          </el-form>
+
+          <div class="standard-box">
+            <h3>{{ t('formatRequirements') }}</h3>
+            <ul>
+              <li>{{ t('requiredFields') }}</li>
+              <li>{{ t('twoCompanies') }}</li>
+              <li>{{ t('numericAmount') }}</li>
+              <li>{{ t('blankAllocation') }}</li>
+            </ul>
+          </div>
+
+          <el-button
+            class="analyze-button"
+            type="primary"
+            size="large"
+            :icon="Cpu"
+            :loading="isAnalyzing"
+            :disabled="!canAnalyze"
+            @click="handleAnalyze"
+          >
+            {{ t('startAnalysis') }}
+          </el-button>
+
+          <el-alert
+            v-if="errorMessage"
+            class="message"
+            type="error"
+            :title="errorMessage"
+            :closable="false"
+            show-icon
+          />
+        </aside>
+      </div>
 
       <section class="panel status-panel" :aria-label="`${t('process')} / ${t('analysisResult')}`">
         <div class="status-column">
           <h2>{{ t('process') }}</h2>
-          <el-steps direction="vertical" :active="activeStep" finish-status="success">
+          <el-steps :active="activeStep" finish-status="success" align-center>
             <el-step v-for="step in displaySteps" :key="step" :title="step" />
           </el-steps>
         </div>
 
         <div class="result-column">
           <h2>{{ outputMode === 'marked' ? t('markedResult') : t('analysisResult') }}</h2>
-          <el-empty v-if="!result" :description="resultEmptyText" />
+          <div v-if="!result" class="quiet-state result-empty" role="status"><el-icon><Document /></el-icon><p>{{ resultEmptyText }}</p></div>
           <div v-else class="result-box">
             <div class="result-title">{{ t('analysisDone') }}</div>
             <dl class="metrics">
@@ -181,7 +181,7 @@
               <div><dt>{{ t('amountDifference') }}</dt><dd>{{ result.differenceAllocations }} {{ t('allocationRows') }} {{ result.differences }} {{ t('rows') }}</dd></div>
               <div><dt>{{ t('unmatched') }}</dt><dd>{{ result.unmatchedAllocations }} {{ t('allocationRows') }} {{ result.unmatched }} {{ t('rows') }}</dd></div>
             </dl>
-            <el-button type="success" :icon="Download" @click="downloadResult">
+            <el-button type="primary" plain :icon="Download" @click="downloadResult">
               {{ outputMode === 'marked' ? t('downloadMarked') : t('downloadDetailed') }}
             </el-button>
           </div>
@@ -194,7 +194,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { Cpu, Download, QuestionFilled } from '@element-plus/icons-vue'
+import { Brush, Checked, Cpu, DataAnalysis, Document, Download, QuestionFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import en from 'element-plus/es/locale/lang/en'
 import id from 'element-plus/es/locale/lang/id'
