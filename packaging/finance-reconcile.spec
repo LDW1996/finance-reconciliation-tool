@@ -13,6 +13,8 @@ binaries = []
 hiddenimports = [
     "app.main",
     "app.reconciliation",
+    "app.accounts",
+    "cryptography.fernet",
     "uvicorn.logging",
     "uvicorn.loops",
     "uvicorn.loops.auto",

@@ -5,10 +5,13 @@ from pathlib import Path
 import sys
 from urllib.parse import quote
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Request
+from pydantic import BaseModel, Field, SecretStr
+from urllib.parse import urlparse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from .accounts import AccountStore
 
 from .reconciliation import (
     ReconciliationError,
@@ -39,6 +42,66 @@ def bundled_frontend_dir() -> Path:
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/ilog/accounts")
+def ilog_accounts() -> list[dict[str, object]]:
+    try:
+        return AccountStore().list_accounts()
+    except Exception:
+        raise HTTPException(status_code=503, detail="无法读取本机账号数据，请检查应用数据目录") from None
+
+
+class AccountUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=40)
+    username: str = Field(min_length=1, max_length=100)
+    password: SecretStr | None = None
+
+
+def require_local_account_write(request: Request):
+    origin = request.headers.get("origin")
+    if request.headers.get("x-finance-local") != "1" or (origin and urlparse(origin).hostname not in {"localhost", "127.0.0.1", "::1"}):
+        raise HTTPException(status_code=403, detail="请通过本机账号管理页面修改")
+
+
+def account_values(body: AccountUpdate):
+    name, username = body.name.strip(), body.username.strip()
+    if not name or not username:
+        raise HTTPException(status_code=400, detail="账号名称和用户名不能为空")
+    return name, username, body.password.get_secret_value() if body.password is not None else None
+
+
+@app.post("/api/ilog/accounts", status_code=201)
+def create_ilog_account(body: AccountUpdate, request: Request):
+    require_local_account_write(request)
+    values = account_values(body)
+    try:
+        return AccountStore().create(*values)
+    except Exception:
+        raise HTTPException(status_code=503, detail="保存失败，请检查应用数据目录是否可写") from None
+
+
+@app.put("/api/ilog/accounts/{account_id}")
+def update_ilog_account(account_id: str, body: AccountUpdate, request: Request):
+    require_local_account_write(request)
+    values = account_values(body)
+    try:
+        return AccountStore().update(account_id, *values)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="账号不存在，请刷新页面后重试") from None
+    except Exception:
+        raise HTTPException(status_code=503, detail="保存失败，请检查应用数据目录是否可写") from None
+
+
+@app.delete("/api/ilog/accounts/{account_id}", status_code=204)
+def delete_ilog_account(account_id: str, request: Request):
+    require_local_account_write(request)
+    try:
+        AccountStore().delete(account_id)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="账号不存在，请刷新页面后重试") from None
+    except Exception:
+        raise HTTPException(status_code=503, detail="删除失败，请检查应用数据目录是否可写") from None
 
 
 @app.post("/api/analyze")

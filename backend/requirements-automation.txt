@@ -1,0 +1,3 @@
+# Optional query runner; separate from the packaged reconciliation app.
+-r requirements.txt
+playwright==1.55.0
