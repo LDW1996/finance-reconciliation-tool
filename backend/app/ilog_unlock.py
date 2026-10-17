@@ -40,12 +40,41 @@ def outcome(reply, before, after, kind=None):
     return 'needs_verification'
 
 
-def reserve_operation(directory, account, bill, kind):
+def reserve_operation(directory, account, bill, kind, *, current_lock=None, legacy_bill=None):
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     key = hashlib.sha256(json.dumps([account, bill, kind]).encode()).hexdigest()
     path = directory / f'{key}.json'
+    previous = None
+    candidates = []
+    if legacy_bill is not None:
+        legacy_key = hashlib.sha256(json.dumps([account, legacy_bill, kind]).encode()).hexdigest()
+        legacy = directory / f'{legacy_key}.json'
+        if legacy != path and legacy.exists():
+            candidates.append(legacy)
+    if path.exists():
+        candidates.append(path)
+    index = 1
+    while (directory / f'{key}.{index}.json').exists():
+        candidates.append(directory / f'{key}.{index}.json')
+        index += 1
+    for candidate in candidates:
+        try:
+            prior = json.loads(candidate.read_text())
+            after = prior.get('after') or {}
+            allowed = (kind == 'order' and current_lock in ('A', 'B')
+                       and prior.get('status') == 'verified_unlocked'
+                       and prior.get('platform_success') is True
+                       and str(after.get('id')) == str(bill) and after.get('lock') == 'U')
+        except (ValueError, OSError, AttributeError):
+            allowed = False
+        if not allowed:
+            raise FileExistsError('Prior submission is not verified successful')
+        previous = candidate.name
+    if candidates:
+        path = directory / f'{key}.{index}.json'
     with os.fdopen(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), 'w') as f:
         json.dump({'account': account, 'bill': bill, 'kind': kind,
+                   'previous_submission': previous, 'current_lock': current_lock,
                    'status': 'reserved_before_submission',
                    'time': datetime.now(timezone.utc).isoformat()}, f)
         f.flush()
@@ -180,11 +209,12 @@ def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed
                     else:
                         route.abort()
                 page.route('**/order_unlock', guard)
-                legacy_key = hashlib.sha256(json.dumps([account_id,bill,kind]).encode()).hexdigest()
-                if (directory / 'submitted' / f'{legacy_key}.json').exists():
-                    raise FileExistsError('Prior bill-based reservation exists')
                 # Use the record ID so mbl/hbl aliases cannot bypass duplicate protection.
-                journal = reserve_operation(directory / 'submitted', account_id, str(record['id']), kind)
+                journal = reserve_operation(directory / 'submitted', account_id, str(record['id']), kind,
+                                            current_lock=record['lock'], legacy_bill=bill)
+                reservation = json.loads(journal.read_text())
+                result['previous_submission'] = reservation['previous_submission']
+                result['relocked_resubmission'] = bool(reservation['previous_submission'])
                 result['submitted'] = True  # Intent is durable before the irreversible click.
                 private_report(journal, result)
                 reply = None

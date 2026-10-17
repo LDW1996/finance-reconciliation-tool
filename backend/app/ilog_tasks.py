@@ -255,7 +255,7 @@ class TaskManager:
                     latest = json.loads(db.execute('SELECT data FROM tasks WHERE id=?',(task_id,)).fetchone()[0])
                     latest['rows'][index].update(status='success' if ok else 'attention', detail=result,
                         actualAccount=actual_account,actualAccountName=actual_name,attempts=attempts,
-                        message=notes.get(result.get('status'),'执行异常，请人工核实') + ('；'+str(result['message']) if not ok and result.get('message') else ''),
+                        message=('历史已成功，当前再次有锁，本次重新解锁；' if result.get('relocked_resubmission') else '') + notes.get(result.get('status'),'执行异常，请人工核实') + ('；'+str(result['message']) if not ok and result.get('message') else ''),
                         time=datetime.now(timezone.utc).isoformat())
                     if not any(r['status']=='waiting' for r in latest['rows']): latest['state']='completed'
                     elif not ok: latest['state']='paused'

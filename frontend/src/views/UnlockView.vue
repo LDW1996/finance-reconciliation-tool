@@ -1,23 +1,29 @@
 <template>
   <main class="unlock-shell">
     <header class="unlock-heading">
-      <h1>{{ view === 'accounts' ? '账号管理' : '批量解锁' }}</h1>
-      <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><template v-if="view === 'unlock'"><el-button :icon="Clock" @click="openHistory">历史记录</el-button><el-button :icon="Setting" @click="openRetention">保存设置</el-button><el-tag v-if="!runtimeAvailable" type="warning">执行环境未就绪</el-tag></template></div>
+      <h1>{{ {accounts:'账号管理',history:'解锁历史',retention:'保存设置',unlock:'批量解锁'}[view] }}</h1>
+      <el-button v-if="view === 'accounts'" type="primary" :icon="Plus" :disabled="busy" @click="openAccount()">添加账号</el-button>
+      <el-button v-if="view === 'history'" :icon="RefreshRight" :loading="historyLoading" @click="loadHistory">刷新</el-button>
+      <el-tag v-if="view === 'unlock' && !runtimeAvailable" type="warning">执行环境未就绪</el-tag>
+      <el-button v-if="view === 'unlock'" :icon="Plus" :disabled="busy || controlling || !taskSyncReady" :loading="resetting" @click="newTask">新建任务</el-button>
     </header>
 
     <template v-if="view === 'unlock'">
       <div class="unlock-account-strip">
-        <el-icon><User /></el-icon><span>主账号</span>
-        <el-select v-model="accountId" aria-label="业务账号" :disabled="busy" placeholder="选择账号" style="width:220px">
+        <div class="unlock-account-field">
+        <div class="unlock-account-label"><span><el-icon><User /></el-icon>首选账号</span></div>
+        <el-select v-model="accountId" aria-label="首选账号" :disabled="busy" placeholder="选择账号">
           <el-option v-for="a in accounts" :key="a.id" :label="a.name" :value="a.id" />
         </el-select>
         <span class="account-caption">{{ selectedAccount?.username || '请先添加业务账号' }}</span>
-        <el-switch v-model="fallbackEnabled" :disabled="busy" aria-label="启用账号兜底" active-text="查无订单时兜底"/>
-        <el-select v-if="fallbackEnabled && fallbackCandidates.length" v-model="selectedFallbackId" :disabled="busy" aria-label="兜底账号" style="width:220px">
+        </div>
+        <div class="unlock-account-field">
+        <div class="unlock-account-label"><span>备用账号</span><el-switch v-model="fallbackEnabled" :disabled="busy" aria-label="启用备用账号"/></div>
+        <el-select v-model="selectedFallbackId" :disabled="busy || !fallbackEnabled || !fallbackCandidates.length" aria-label="备用账号" placeholder="没有可用备用账号">
           <el-option v-for="a in fallbackCandidates" :key="a.id" :label="a.name" :value="a.id"/>
         </el-select>
-        <el-text v-else-if="fallbackEnabled" type="warning">没有可用兜底账号，仅使用主账号</el-text>
-        <el-button text :disabled="busy" @click="emit('navigate', 'accounts')">管理账号</el-button>
+        <span class="account-caption" :class="{ 'account-warning': fallbackEnabled && !fallbackCandidates.length }">{{ !fallbackEnabled ? '未启用，仅使用首选账号' : fallbackCandidates.length ? '仅首选账号查无订单时使用' : '没有可用备用账号，仅使用首选账号' }}</span>
+        </div>
       </div>
       <div class="unlock-layout">
         <aside class="unlock-inputs">
@@ -32,14 +38,14 @@
             </div>
             <el-text v-if="inspections[kind.key].some(r => r.status === 'invalid')" type="danger">有格式异常的单号，请在核对清单中查看并返回修改。</el-text>
           </section>
-          <el-button class="unlock-start" size="large" type="primary" :disabled="busy || !reviewRows.length || !selectedAccount" :icon="VideoPlay" @click="openReview">校验单号并核对清单</el-button>
+          <div class="unlock-input-actions"><el-button class="unlock-start" size="large" type="primary" :disabled="busy || resetting || !taskSyncReady || !reviewRows.length || !selectedAccount" :icon="VideoPlay" @click="openReview">校验单号并核对清单</el-button></div>
           <p v-if="!runtimeAvailable" class="demo-note">{{ runtimeMessage }}</p>
         </aside>
 
         <section class="unlock-execution">
           <section class="unlock-progress-panel">
             <div class="unlock-section-heading"><h2>执行进度</h2><div v-if="taskState === 'running' || taskState === 'paused'"><el-button :disabled="controlling" :icon="paused ? VideoPlay : VideoPause" @click="controlTask(paused ? 'resume' : 'pause')">{{ paused ? '继续剩余项' : '暂停后续项' }}</el-button><el-button :disabled="controlling" @click="cancelRemaining">取消剩余项</el-button></div><el-tag v-else effect="plain" :type="attentionCount ? 'warning' : rows.length ? 'success' : 'info'">{{ rows.length ? '任务已结束' : '等待开始' }}</el-tag></div>
-            <div class="progress-number">{{ done }}<span>/ {{ rows.length || total }}</span><small>{{ paused ? '已暂停后续项' : busy ? '真实处理中' : rows.length ? '条已处理' : '条待处理' }}</small></div>
+            <div class="progress-number">{{ done }}<span>/ {{ rows.length || total }}</span><small>{{ paused ? '已暂停后续项' : taskState === 'running' ? '真实处理中' : rows.length ? '条已处理' : '条待处理' }}</small></div>
             <el-progress :percentage="percentage" :show-text="false" :stroke-width="12" color="var(--accent)" />
             <div class="progress-description"><span>{{ currentRow ? `正在处理 ${currentRow.bill}` : paused ? '已暂停，继续将跳过待核实项。' : rows.length ? `任务账号：${taskAccountName}` : '等待提交任务' }}</span><span v-if="pollError" class="progress-tip" role="alert"><el-icon><InfoFilled /></el-icon>{{ pollError }}</span></div>
           </section>
@@ -64,19 +70,17 @@
       </div>
     </template>
 
-    <section v-else class="account-page">
-      <div class="account-toolbar"><h2>业务账号 <span>{{ accounts.length }}</span></h2><el-button type="primary" :icon="Plus" :disabled="busy" @click="openAccount()">添加账号</el-button></div>
+    <section v-else-if="view === 'accounts'" class="management-section">
       <el-table :data="accounts" empty-text="添加第一个业务账号">
         <el-table-column prop="name" label="账号名称" min-width="180"/>
         <el-table-column prop="username" label="用户名" min-width="180"/>
         <el-table-column label="密码状态" min-width="140"><template #default="{ row }"><el-tag :type="row.hasPassword ? 'success' : 'info'">{{ row.hasPassword ? '已保存密码' : '未登记密码' }}</el-tag></template></el-table-column>
         <el-table-column label="操作" width="160"><template #default="{ row }"><el-button link type="primary" :disabled="busy" @click="openAccount(row)">编辑</el-button><el-button link type="danger" :disabled="busy" @click="removeAccount(row)">删除</el-button></template></el-table-column>
       </el-table>
-      <el-button class="back-unlock" :icon="ArrowLeft" @click="emit('navigate', 'unlock')">返回批量解锁</el-button>
     </section>
 
-    <el-dialog v-model="historyOpen" class="bill-review-dialog" title="解锁历史记录" width="min(1000px,94vw)" top="4vh">
-      <el-table v-loading="historyLoading" :data="historyItems" empty-text="暂无历史任务" max-height="480">
+    <section v-if="view === 'history'" class="management-section">
+      <el-table v-loading="historyLoading" :data="historyItems" empty-text="暂无历史任务">
         <el-table-column label="创建时间" min-width="170"><template #default="{ row }">{{ formatDate(row.createdAt) }}</template></el-table-column>
         <el-table-column prop="accountName" label="主账号" min-width="180"/>
         <el-table-column prop="fallbackAccountName" label="兜底账号" min-width="180"/>
@@ -85,9 +89,9 @@
         <el-table-column prop="attention" label="待核实" width="80"/>
         <el-table-column label="操作" width="90"><template #default="{ row }"><el-button link type="primary" @click="viewHistory(row.id)">查看</el-button></template></el-table-column>
       </el-table>
-      <template #footer><el-pagination v-model:current-page="historyPage" :page-size="20" :total="historyTotal" layout="prev,pager,next,total" @current-change="loadHistory"/></template>
-    </el-dialog>
-    <el-dialog v-model="historyDetailOpen" class="bill-review-dialog" title="历史任务详情" width="min(1100px,94vw)" top="4vh">
+      <div class="management-footer"><el-pagination v-model:current-page="historyPage" :page-size="20" :total="historyTotal" layout="prev,pager,next,total" @current-change="loadHistory"/></div>
+    </section>
+    <el-dialog v-model="historyDetailOpen" append-to-body class="bill-review-dialog" title="历史任务详情" width="min(1100px,94vw)" top="4vh">
       <p>{{ historyTask?.accountName }} · {{ formatDate(historyTask?.createdAt) }}</p>
       <el-table :data="historyTask?.rows || []" max-height="480" empty-text="暂无记录">
         <el-table-column prop="bill" label="单号" min-width="180"/>
@@ -99,15 +103,17 @@
       </el-table>
       <template #footer><el-button :icon="Download" :disabled="!historyTask" @click="exportResults(historyTask || undefined)">导出本任务</el-button><el-button @click="historyDetailOpen=false">关闭</el-button></template>
     </el-dialog>
-    <el-dialog v-model="retentionOpen" title="记录保存与清理" width="min(520px,94vw)">
-      <el-form label-position="top" :disabled="retentionSaving">
+    <section v-if="view === 'retention'" class="management-section retention-settings">
+      <h2>记录保存</h2>
+      <el-form label-position="top" :disabled="retentionSaving" class="retention-fields">
         <el-form-item label="截图保留天数"><el-input-number v-model="retentionForm.screenshot_days" :min="1" :max="36500" controls-position="right"/></el-form-item>
         <el-form-item label="任务结果保留天数"><el-input-number v-model="retentionForm.record_days" :min="1" :max="36500" controls-position="right"/></el-form-item>
         <el-form-item label="自动清理过期数据"><el-switch v-model="retentionForm.auto_enabled" aria-label="自动清理过期数据"/></el-form-item>
       </el-form>
       <el-alert type="info" :closable="false" title="运行中、暂停中及待核实记录不会自动清理；防重复凭据始终单独保留。" description="自动清理在打开页面、查看历史或新建任务时检查，每 24 小时最多一次；有任务正在执行时延后。清理不会修改 iLog。"/>
-      <template #footer><el-button :disabled="retentionSaving" @click="cleanupExpired">预览并清理过期数据</el-button><el-button type="primary" :loading="retentionSaving" @click="saveRetention">保存规则</el-button></template>
-    </el-dialog>
+      <div class="management-footer"><el-button type="primary" :loading="retentionSaving" @click="saveRetention">保存规则</el-button></div>
+      <div class="retention-cleanup"><h2>过期数据清理</h2><el-button :disabled="retentionSaving" @click="cleanupExpired">预览并清理过期数据</el-button></div>
+    </section>
     <el-dialog v-model="reviewOpen" class="bill-review-dialog" title="单号校验与二次确认" width="min(900px, 94vw)" top="4vh">
       <el-descriptions :column="1" border><el-descriptions-item label="业务账号">{{ selectedAccount?.name }}</el-descriptions-item><el-descriptions-item label="费用解锁（小锁）">{{ parsed.fee.length }} 条</el-descriptions-item><el-descriptions-item label="订单解锁（大锁）">{{ parsed.order.length }} 条</el-descriptions-item></el-descriptions>
       <el-alert class="review-alert" type="info" :closable="false" :title="fallbackAccount && fallbackEnabled ? `主账号：${selectedAccount?.name}；兜底账号：${fallbackAccount.name}` : '仅使用主账号'" description="主账号查无订单才使用兜底账号；异常或多条匹配时暂停。"/>
@@ -141,7 +147,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onBeforeUnmount, onMounted } from 'vue'
+import { computed, ref, onBeforeUnmount, onMounted, watch } from 'vue'
 import axios from 'axios'
 import { User, Unlock, VideoPlay, VideoPause, Download, RefreshRight, InfoFilled, List, Plus, ArrowLeft, Clock, Setting } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -198,7 +204,11 @@ async function cleanupExpired() {
   finally { retentionSaving.value=false }
 }
 type Account = { id: string; name: string; username: string; example?: boolean; hasPassword?: boolean }
-defineProps<{ view: 'unlock' | 'accounts' }>()
+const props = defineProps<{ view: 'unlock' | 'accounts' | 'history' | 'retention' }>()
+watch(() => props.view, (view) => {
+  if (view === 'history') void openHistory()
+  if (view === 'retention') void openRetention()
+}, { immediate: true })
 const emit = defineEmits<{ navigate: [value: 'unlock' | 'accounts'] }>()
 const storageKey = 'finance-ilog-account-metadata-v1'
 const accounts = ref<Account[]>([])
@@ -224,7 +234,8 @@ onMounted(async () => {
     runtimeAvailable.value = runtime.data.available
     runtimeMessage.value = runtime.data.message
     const latest = await axios.get<Task | null>('/api/ilog/tasks/latest')
-    if (latest.data) applyTask(latest.data)
+    if (latest.data && latest.data.state !== 'completed') applyTask(latest.data)
+    taskSyncReady.value = true
   } catch { pollError.value = '无法连接任务服务，请检查本地服务状态' }
 })
 const selectedAccount = computed(() => accounts.value.find(a => a.id === accountId.value))
@@ -260,8 +271,10 @@ const runtimeAvailable = ref(false)
 const runtimeMessage = ref('正在检查真实执行环境')
 const submitting = ref(false)
 const controlling = ref(false)
+const resetting = ref(false)
+const taskSyncReady = ref(false)
 const pollError = ref('')
-const busy = computed(() => submitting.value || taskState.value === 'running' || taskState.value === 'paused')
+const busy = computed(() => submitting.value || resetting.value || taskState.value === 'running' || taskState.value === 'paused')
 const paused = computed(() => taskState.value === 'paused')
 const filter = ref('all')
 const reviewOpen = ref(false)
@@ -284,16 +297,46 @@ function applyTask(task: Task) {
 }
 async function refreshTask() {
   if (!taskId.value || disposed) return
+  const requestedId = taskId.value
   try {
-    const response = await axios.get<Task>(`/api/ilog/tasks/${encodeURIComponent(taskId.value)}`)
+    const response = await axios.get<Task>(`/api/ilog/tasks/${encodeURIComponent(requestedId)}`)
+    if (taskId.value !== requestedId || disposed) return
     pollError.value = ''; applyTask(response.data)
   } catch {
+    if (taskId.value !== requestedId || disposed) return
     pollError.value = '连接中断，结果尚未同步；请勿重新提交'
     clearTimeout(timer); if (!disposed) timer = setTimeout(refreshTask,4000)
   }
 }
+async function newTask() {
+  if (busy.value || controlling.value || resetting.value || !taskSyncReady.value) return
+  resetting.value = true
+  try {
+    if (localStorage.getItem('finance-ilog-pending-task')) {
+      ElMessage.warning('上次提交结果尚未确认，请先核对历史记录，当前凭据不会清除')
+      return
+    }
+    if (input.value.fee.trim() || input.value.order.trim()) {
+      await ElMessageBox.confirm('将清空当前单号、进度和结果；历史记录、截图和防重复凭据仍保留。', '新建任务', { confirmButtonText: '新建任务', cancelButtonText: '取消' })
+    }
+    const latest = (await axios.get<Task | null>('/api/ilog/tasks/latest')).data
+    if (latest && latest.state !== 'completed') {
+      applyTask(latest)
+      ElMessage.warning('有尚未结束的任务，已恢复；请先完成或取消剩余项')
+      return
+    }
+    clearTimeout(timer)
+    taskId.value = ''; taskState.value = ''; rows.value = []
+    taskAccountName.value = ''; taskFallbackName.value = ''
+    input.value = { fee: '', order: '' }; filter.value = 'all'
+    pollError.value = ''; reviewOpen.value = false; reviewAcknowledged.value = false
+    ElMessage.success('可以开始新任务，上次结果可在管理 → 解锁历史中查看')
+  } catch (error) {
+    if (axios.isAxiosError(error)) ElMessage.error('无法确认任务状态，未清空当前工作区')
+  } finally { resetting.value = false }
+}
 async function start() {
-  if (busy.value || !total.value || !selectedAccount.value || invalidCount.value || !reviewAcknowledged.value) return
+  if (busy.value || resetting.value || !taskSyncReady.value || !total.value || !selectedAccount.value || invalidCount.value || !reviewAcknowledged.value) return
   if (!runtimeAvailable.value || total.value > 2000) return
   const payload = { account_id: accountId.value, fallback_account_id: fallbackEnabled.value ? fallbackAccount.value?.id || null : null, fee: parsed.value.fee, order: parsed.value.order, confirmed: true }
   const signature = JSON.stringify(payload)
