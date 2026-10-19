@@ -250,6 +250,14 @@ class TaskManager:
                     'not_found':'当前账号未找到单号，未提交',
                     'ambiguous':'查询结果不唯一或单号不精确匹配，未提交',
                     'rejected':'平台拒绝解锁，请查看平台说明'}
+                if result.get('failed_stage'):
+                    stage_names = {'login':'登录平台','query_order':'查询订单','select_record':'选中订单',
+                        'open_unlock_menu':'打开解锁菜单','choose_unlock_action':'选择解锁操作',
+                        'read_confirmation':'读取确认窗口','reserve_submission':'登记提交凭据',
+                        'submit_and_wait_response':'提交并等待平台响应','parse_platform_response':'解析平台响应',
+                        'verify_order_state':'复查锁状态','capture_result':'保存结果截图'}
+                    stage = stage_names.get(result['failed_stage'], result['failed_stage'])
+                    notes[result.get('status')] = f"失败步骤：{stage}；" + result.get('failure_cause','具体原因尚未确认') + '；' + ('已进入提交阶段，结果待核实' if result.get('submitted') else '未进入解锁提交阶段') + '；' + result.get('next_action','请人工核实')
                 with self.db() as db:
                     db.execute('BEGIN IMMEDIATE')
                     latest = json.loads(db.execute('SELECT data FROM tasks WHERE id=?',(task_id,)).fetchone()[0])

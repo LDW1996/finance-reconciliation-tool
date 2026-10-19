@@ -1,7 +1,33 @@
 import pytest
 import json
 
-from app.ilog_unlock import parse_reply, outcome, reserve_operation
+from app.ilog_unlock import parse_reply, outcome, reserve_operation, record_step, compact_success
+
+
+def test_execution_steps_have_order_and_timestamps(tmp_path):
+    result = {}
+    report = tmp_path / 'report.json'
+    record_step(result, report, 'select_record')
+    record_step(result, report, 'open_unlock_menu')
+    saved = json.loads(report.read_text())
+    assert saved['stage'] == 'open_unlock_menu'
+    assert [step['stage'] for step in saved['steps']] == ['select_record', 'open_unlock_menu']
+    assert all(step['time'] for step in saved['steps'])
+
+
+def test_only_success_discards_diagnostic_details():
+    success = {'status': 'verified_unlocked', 'steps': [{'stage':'login'}],
+               'stage':'completed', 'selected_ids':['record1'], 'confirmation_text':'confirm',
+               'before':{'id':'record1','lock':'B'}, 'after':{'id':'record1','lock':'U'},
+               'platform_success':True, 'submitted':True, 'screenshot':'proof.png'}
+    compact_success(success)
+    assert 'steps' not in success and 'stage' not in success and 'selected_ids' not in success
+    assert success['after']['lock'] == 'U' and success['submitted']
+    assert success['screenshot'] == 'proof.png'
+    failure = {'status':'needs_verification','steps':[{'stage':'read_confirmation'}],
+               'failed_stage':'read_confirmation','error_type':'TimeoutError'}
+    compact_success(failure)
+    assert failure['steps'] and failure['failed_stage'] == 'read_confirmation'
 
 
 def test_legacy_reply_is_parsed_as_data():

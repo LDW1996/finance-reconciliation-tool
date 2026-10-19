@@ -103,6 +103,20 @@ def records(page):
     }''')
 
 
+def record_step(result, report_path, stage):
+    result['stage'] = stage
+    result.setdefault('steps', []).append({'stage': stage, 'time': datetime.now(timezone.utc).isoformat()})
+    private_report(report_path, result)
+
+
+def compact_success(result):
+    if result.get('status') in ('inspected', 'already_unlocked', 'already_fee_unlocked',
+                                'verified_unlocked', 'verified_fee_unlocked'):
+        for key in ('steps', 'stage', 'selected_ids', 'matched_count', 'confirmation_text',
+                    'action', 'response_error_type', 'response_note'):
+            result.pop(key, None)
+
+
 def search_bill(page, bill):
     import json5
     field = page.locator('input[name=search]')
@@ -150,11 +164,16 @@ def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed
               'mode': 'execute' if execute else 'inspect', 'status': 'needs_verification',
               'submitted': False, 'time': datetime.now(timezone.utc).isoformat()}
     journal = None
+    page = None
+    authenticated = False
+    def step(stage):
+        record_step(result, report_path, stage)
     with sync_playwright() as p:
         browser = p.chromium.launch(channel=channel, headless=not headed)
         try:
             page = browser.new_page(viewport={'width':1440,'height':1000})
             page.set_default_timeout(20000)
+            step('login')
             page.goto(URL)
             language = page.locator('[name=language]')
             language.wait_for(state='attached')
@@ -167,6 +186,8 @@ def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed
             page.locator('[name=status]').uncheck()
             page.get_by_role('button', name='登陆', exact=True).click()
             page.get_by_text('委托单列表', exact=True).click()
+            authenticated = True
+            step('query_order')
             page.locator('input[name=search]').wait_for()
             found = search_bill(page, bill)
             if len(found) != 1 or bill not in (found[0]['mbl'], found[0]['hbl']):
@@ -174,6 +195,7 @@ def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed
                 return result
             record = found[0]
             result['before'] = record
+            result['matched_count'] = len(found)
             if not execute:
                 result['status'] = 'inspected'
             elif record['lock'] == 'U':
@@ -181,6 +203,7 @@ def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed
             elif kind == 'fee' and record['lock'] == 'B':
                 result['status'] = 'already_fee_unlocked'
             else:
+                step('select_record')
                 rows = page.locator('.x-grid3-row:visible')
                 if rows.count() != 1:
                     raise RuntimeError('Visible list mismatch')
@@ -190,13 +213,19 @@ def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed
                   return c.grid.getSelectionModel().getSelections().map(r=>r.get('jobOrderId'))}''')
                 if selected != [record['id']]:
                     raise RuntimeError('Selection mismatch')
+                result['selected_ids'] = selected
                 action = '3' if kind == 'fee' else '4'
+                result['action'] = action
+                step('open_unlock_menu')
                 button = page.get_by_role('button', name='订单解锁', exact=True)
                 arrow = button.locator('..')
                 bounds = arrow.bounding_box()
                 arrow.click(position={'x':bounds['width']-4,'y':bounds['height']/2})
+                step('choose_unlock_action')
                 page.locator('.x-menu:visible').get_by_text('费用解锁' if kind == 'fee' else '订单解锁', exact=True).click()
+                step('read_confirmation')
                 confirm = page.locator('.ext-mb-text:visible').inner_text()
+                result['confirmation_text'] = confirm[:500]
                 if confirm != '确认取消锁定吗?':
                     raise RuntimeError('Unexpected confirmation')
                 def expected(request):
@@ -209,6 +238,7 @@ def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed
                     else:
                         route.abort()
                 page.route('**/order_unlock', guard)
+                step('reserve_submission')
                 # Use the record ID so mbl/hbl aliases cannot bypass duplicate protection.
                 journal = reserve_operation(directory / 'submitted', account_id, str(record['id']), kind,
                                             current_lock=record['lock'], legacy_bill=bill)
@@ -219,17 +249,26 @@ def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed
                 private_report(journal, result)
                 reply = None
                 try:
+                    step('submit_and_wait_response')
                     with page.expect_response(lambda r: urlparse(r.url).path.endswith('/order_unlock') and expected(r.request)) as pending:
                         page.get_by_role('button', name='Yes', exact=True).click()
                     response = pending.value
                     result['http_status'] = response.status
                     if response.ok:
+                        step('parse_platform_response')
                         reply = parse_reply(response.text())
                         result['platform_success'] = reply['success']
                         result['message'] = str(reply.get('msg', ''))[:3000]
-                except Exception:
+                except Exception as error:
+                    result['response_error_type'] = type(error).__name__
+                    result['failed_stage'] = result['stage']
+                    result['error_type'] = type(error).__name__
+                    result['failure_cause'] = ('平台已返回响应，但无法可靠解析解锁结果'
+                        if result['stage'] == 'parse_platform_response' else '提交确认或等待平台响应时发生异常，是否实际执行需核实')
+                    result['next_action'] = '先在 iLog 核对锁状态及订单跟踪，不要直接重复解锁'
                     result['response_note'] = 'Unrecognized reply or timeout; never automatically resubmit'
                 # A new authenticated query does not depend on dismissing a result dialog.
+                step('verify_order_state')
                 page.goto(URL)
                 page.get_by_text('委托单列表', exact=True).click()
                 page.locator('input[name=search]').wait_for()
@@ -237,17 +276,46 @@ def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed
                 if len(after) == 1 and after[0]['id'] == record['id']:
                     result['after'] = after[0]
                 result['status'] = outcome(reply, record['lock'], result.get('after', {}).get('lock'),kind)
+                if result['status'] == 'needs_verification' and not result.get('failed_stage'):
+                    result.update(failed_stage='verify_order_state', error_type='VerificationIncomplete',
+                        failure_cause=f"平台返回未充分确认成功，或复查未达到目标状态（HTTP {result.get('http_status', '未知')}，复查状态 {result.get('after', {}).get('lock', '未取得')}）",
+                        next_action='先在 iLog 核对锁状态及订单跟踪，不要直接重复解锁')
+            step('capture_result')
             screenshot = directory / f'{report_path.stem}.png'
             page.screenshot(path=str(screenshot), full_page=True)
             screenshot.chmod(0o600)
             result['screenshot'] = str(screenshot)
+            step('completed')
         except FileExistsError:
             result['status'] = 'blocked_duplicate'
             result['reason'] = 'Prior submission exists; inspect before deciding whether any further operation is needed'
-        except Exception:
+        except Exception as error:
+            result['failed_stage'] = result.get('stage', 'browser_setup')
+            result['error_type'] = type(error).__name__
+            known_errors = {
+                'Visible list mismatch': '页面可见记录数量与查询结果不一致，已停止以避免选错订单',
+                'Selection mismatch': '页面实际选中的记录与目标订单不一致，已停止以避免误操作',
+                'Unexpected confirmation': '平台确认窗口的内容与预期不同，未继续确认',
+                'Query failed': '订单查询接口返回异常，未能取得可靠查询结果',
+                'Unexpected query response': '订单查询返回的数据格式与预期不同',
+            }
+            result['failure_cause'] = known_errors.get(str(error),
+                '等待页面控件或平台响应超时；具体是加载缓慢、页面变化还是网络问题，尚未确认'
+                if type(error).__name__ == 'TimeoutError' else '页面或执行流程异常；具体原因尚未确认，请结合失败步骤和截图核查')
+            result['next_action'] = ('先在 iLog 核对锁状态及订单跟踪，不要直接重复解锁'
+                                     if result['submitted'] else '先检查失败截图、登录状态及订单页面，再决定是否重新发起任务')
             result['reason'] = 'Stopped on page or network error; no automatic retry'
         finally:
+            if result['status'] in ('needs_verification', 'blocked_duplicate') and authenticated and page:
+                try:
+                    screenshot = directory / f'{report_path.stem}-failure.png'
+                    page.screenshot(path=str(screenshot), full_page=True, timeout=5000)
+                    screenshot.chmod(0o600)
+                    result['screenshot'] = str(screenshot)
+                except Exception:
+                    result['screenshot_note'] = 'Failure screenshot unavailable'
             result['report'] = str(report_path)
+            compact_success(result)
             private_report(report_path, result)
             if journal:
                 private_report(journal, result)
