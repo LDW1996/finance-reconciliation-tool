@@ -61,7 +61,7 @@ def reserve_operation(directory, account, bill, kind, *, current_lock=None, lega
         index += 1
     for candidate in candidates:
         try:
-            prior = json.loads(candidate.read_text())
+            prior = json.loads(candidate.read_text(encoding='utf-8'))
             after = prior.get('after') or {}
             allowed = (kind == 'order' and current_lock in ('A', 'B')
                        and prior.get('status') == 'verified_unlocked'
@@ -74,7 +74,7 @@ def reserve_operation(directory, account, bill, kind, *, current_lock=None, lega
         previous = candidate.name
     if candidates:
         path = directory / f'{key}.{index}.json'
-    with os.fdopen(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), 'w') as f:
+    with os.fdopen(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), 'w', encoding='utf-8') as f:
         json.dump({'account': account, 'bill': bill, 'kind': kind,
                    'previous_submission': previous, 'current_lock': current_lock,
                    'status': 'reserved_before_submission',
@@ -86,7 +86,7 @@ def reserve_operation(directory, account, bill, kind, *, current_lock=None, lega
 
 def private_report(path, data):
     temp = path.with_name(uuid4().hex + '.tmp')
-    with os.fdopen(os.open(temp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), 'w') as f:
+    with os.fdopen(os.open(temp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
         f.flush()
         os.fsync(f.fileno())
@@ -338,7 +338,7 @@ def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed
                 # Use the record ID so mbl/hbl aliases cannot bypass duplicate protection.
                 journal = reserve_operation(directory / 'submitted', account_id, str(record['id']), kind,
                                             current_lock=record['lock'], legacy_bill=bill)
-                reservation = json.loads(journal.read_text())
+                reservation = json.loads(journal.read_text(encoding='utf-8'))
                 result['previous_submission'] = reservation['previous_submission']
                 result['relocked_resubmission'] = bool(reservation['previous_submission'])
                 result['submitted'] = True  # Intent is durable before the irreversible click.

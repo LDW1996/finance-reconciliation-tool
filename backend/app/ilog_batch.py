@@ -45,7 +45,7 @@ def execute_batch(page, found, result, report_path, directory, step):
             except FileExistsError:
                 row.update(status='blocked_duplicate',reason='有历史未核实提交，本条未再次解锁')
                 continue
-            row['previous_submission']=json.loads(path.read_text()).get('previous_submission')
+            row['previous_submission']=json.loads(path.read_text(encoding='utf-8')).get('previous_submission')
             row['relocked_resubmission']=bool(row['previous_submission'])
             journals.append((row,path))
             private_report(path,row)

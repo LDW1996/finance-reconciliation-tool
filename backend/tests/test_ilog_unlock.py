@@ -4,6 +4,35 @@ import json
 from app.ilog_unlock import parse_reply, outcome, reserve_operation, record_step, compact_success, error_context, retry_verification
 
 
+def test_private_report_writes_utf8_under_windows_default_encoding(tmp_path, monkeypatch):
+    import os
+    from app.ilog_unlock import private_report
+    original = os.fdopen
+    def windows_fdopen(fd, mode='r', *args, **kwargs):
+        kwargs.setdefault('encoding', 'cp1252')
+        return original(fd, mode, *args, **kwargs)
+    monkeypatch.setattr(os, 'fdopen', windows_fdopen)
+    path = tmp_path / 'report.json'
+    data = {'message': '查询失败，请核实记录', 'status': 'needs_verification'}
+    private_report(path, data)
+    assert json.loads(path.read_text(encoding='utf-8')) == data
+    assert not list(tmp_path.glob('*.tmp'))
+
+
+def test_duplicate_guard_reads_utf8_under_windows_default_encoding(tmp_path, monkeypatch):
+    from pathlib import Path
+    from app.ilog_unlock import private_report
+    path = reserve_operation(tmp_path, 'east', 'record', 'order')
+    private_report(path, {'status':'verified_unlocked','platform_success':True,
+                          'after':{'id':'record','lock':'U'},'message':'解锁成功'})
+    original = Path.read_text
+    def windows_read_text(self, encoding=None, errors=None):
+        return original(self, encoding=encoding or 'cp1252', errors=errors)
+    monkeypatch.setattr(Path, 'read_text', windows_read_text)
+    retry = reserve_operation(tmp_path, 'east', 'record', 'order', current_lock='B')
+    assert retry != path
+
+
 def test_verification_recovers_on_third_retry(monkeypatch):
     from playwright.sync_api import TimeoutError
     delays = []
