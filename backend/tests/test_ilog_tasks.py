@@ -21,7 +21,7 @@ def test_confirmation_validation_and_dedup(tmp_path):
         m.create('west', 'West', ['TRBTSTHP2607S'], [], 'other', True)
 
 
-def test_uncertain_pauses_without_repeating(tmp_path):
+def test_uncertain_continues_without_repeating(tmp_path):
     calls = []
     def runner(account, bill, kind, **kw):
         calls.append(bill)
@@ -30,10 +30,8 @@ def test_uncertain_pauses_without_repeating(tmp_path):
     job = m.create('west', 'West', ['TRBTSTZH2606S', 'TRBTSTHP2607S'], [], 'key', True)
     m.drain(job['id'])
     job = m.get(job['id'])
-    assert job['state'] == 'paused'
-    assert [r['status'] for r in job['rows']] == ['attention', 'waiting']
-    m.control(job['id'], 'resume')
-    m.drain(job['id'])
+    assert job['state'] == 'completed'
+    assert [r['status'] for r in job['rows']] == ['attention', 'attention']
     assert calls == ['TRBTSTZH2606S', 'TRBTSTHP2607S']
     assert m.get(job['id'])['state'] == 'completed'
 
@@ -148,7 +146,7 @@ def test_fallback_is_part_of_confirmation_and_not_primary(tmp_path):
         m.create('east','East',['TRBTSTHP2607S'],[],'key',True)
 
 
-def test_both_accounts_empty_pause_remaining_and_keep_trail(tmp_path):
+def test_both_accounts_empty_continue_and_keep_trail(tmp_path):
     calls=[]
     def runner(account,*args,**kwargs):
         calls.append(account);return {'status':'not_found','submitted':False}
@@ -156,11 +154,56 @@ def test_both_accounts_empty_pause_remaining_and_keep_trail(tmp_path):
     job=m.create('east','East',['TRBTSTHP2607S','TRBTSTZH2606S'],[],'key',True,fallback_account='west',fallback_name='West')
     m.drain(job['id'])
     result=m.get(job['id'])
-    assert calls==['east','west']
-    assert result['state']=='paused'
+    assert calls==['east','west','east','west']
+    assert result['state']=='completed'
     assert result['rows'][0]['actualAccount']=='west'
-    assert [r['status'] for r in result['rows']]==['attention','waiting']
+    assert [r['status'] for r in result['rows']]==['attention','attention']
     assert [a['status'] for a in result['rows'][0]['attempts']]==['not_found','not_found']
+
+
+@pytest.mark.parametrize('status', ['rejected','ambiguous','blocked_duplicate','needs_verification'])
+def test_failed_order_does_not_block_next_order(tmp_path, status):
+    calls=[]
+    def runner(account,bill,kind,**kwargs):
+        calls.append(bill)
+        return {'status':status,'submitted':status=='needs_verification'} if len(calls)==1 else {'status':'verified_unlocked'}
+    m=manager(tmp_path,runner)
+    job=m.create('west','West',[],['BILL123456','BILL234567'],'key',True)
+    m.drain(job['id'])
+    result=m.get(job['id'])
+    assert calls==['BILL123456','BILL234567']
+    assert result['state']=='completed'
+    assert [r['status'] for r in result['rows']]==['attention','success']
+
+
+def test_explicit_pause_still_stops_after_current_failure(tmp_path):
+    calls=[]
+    def runner(account,bill,kind,**kwargs):
+        calls.append(bill)
+        m.control(job['id'],'pause')
+        return {'status':'needs_verification','submitted':True}
+    m=manager(tmp_path,runner)
+    job=m.create('west','West',[],['BILL123456','BILL234567'],'key',True)
+    m.drain(job['id'])
+    result=m.get(job['id'])
+    assert result['state']=='paused' and calls==['BILL123456']
+    assert [r['status'] for r in result['rows']]==['attention','waiting']
+
+
+def test_runner_exception_keeps_failure_and_continues(tmp_path):
+    calls=[]
+    def runner(account,bill,kind,**kwargs):
+        calls.append(bill)
+        if len(calls)==1:
+            raise RuntimeError('simulated browser failure')
+        return {'status':'verified_unlocked'}
+    m=manager(tmp_path,runner)
+    job=m.create('west','West',[],['BILL123456','BILL234567'],'key',True)
+    m.drain(job['id'])
+    result=m.get(job['id'])
+    assert result['state']=='completed'
+    assert [r['status'] for r in result['rows']]==['attention','success']
+    assert len(calls)==2 and result['rows'][0]['detail']['reason']
 
 
 def test_api_rejects_unusable_fallback_account(tmp_path,monkeypatch):

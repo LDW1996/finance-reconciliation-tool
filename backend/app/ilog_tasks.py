@@ -256,8 +256,17 @@ class TaskManager:
                         'read_confirmation':'读取确认窗口','reserve_submission':'登记提交凭据',
                         'submit_and_wait_response':'提交并等待平台响应','parse_platform_response':'解析平台响应',
                         'verify_order_state':'复查锁状态','capture_result':'保存结果截图'}
+                    stage_names.update({'verify_open_page':'复查：重新打开平台页面',
+                        'verify_open_list':'复查：打开委托单列表','verify_wait_search':'复查：等待查询框就绪'})
+                    for prefix, label in [('query_', '查询'), ('verify_', '复查')]:
+                        for phase, name in {'wait_idle':'等待平台空闲','fill_bill':'输入提单号',
+                            'wait_query_response':'等待订单查询响应','read_query_response':'读取查询返回',
+                            'wait_store_update':'等待页面列表同步'}.items():
+                            stage_names[prefix + phase] = label + '：' + name
                     stage = stage_names.get(result['failed_stage'], result['failed_stage'])
                     notes[result.get('status')] = f"失败步骤：{stage}；" + result.get('failure_cause','具体原因尚未确认') + '；' + ('已进入提交阶段，结果待核实' if result.get('submitted') else '未进入解锁提交阶段') + '；' + result.get('next_action','请人工核实')
+                if result.get('verification_retries'):
+                    notes[result.get('status')] = notes.get(result.get('status'),'复查待核实') + f"；只读复查已重试 {result['verification_retries']} 次，未重复提交解锁"
                 with self.db() as db:
                     db.execute('BEGIN IMMEDIATE')
                     latest = json.loads(db.execute('SELECT data FROM tasks WHERE id=?',(task_id,)).fetchone()[0])
@@ -266,7 +275,6 @@ class TaskManager:
                         message=('历史已成功，当前再次有锁，本次重新解锁；' if result.get('relocked_resubmission') else '') + notes.get(result.get('status'),'执行异常，请人工核实') + ('；'+str(result['message']) if not ok and result.get('message') else ''),
                         time=datetime.now(timezone.utc).isoformat())
                     if not any(r['status']=='waiting' for r in latest['rows']): latest['state']='completed'
-                    elif not ok: latest['state']='paused'
                     self.save(db,latest)
 
 

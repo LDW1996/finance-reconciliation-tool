@@ -1,7 +1,51 @@
 import pytest
 import json
 
-from app.ilog_unlock import parse_reply, outcome, reserve_operation, record_step, compact_success
+from app.ilog_unlock import parse_reply, outcome, reserve_operation, record_step, compact_success, error_context, retry_verification
+
+
+def test_verification_recovers_on_third_retry(monkeypatch):
+    from playwright.sync_api import TimeoutError
+    delays = []
+    monkeypatch.setattr('app.ilog_unlock.time.sleep', delays.append)
+    calls = []
+    result = {'stage':'verify_wait_query_response'}
+    def query():
+        calls.append('read_only')
+        if len(calls) < 4:
+            raise TimeoutError('Page.expect_response: Timeout 20000ms exceeded.')
+        return 'U'
+    assert retry_verification(query, result) == 'U'
+    assert len(calls) == 4 and delays == [1, 2, 3]
+    assert len(result['verification_attempts']) == 4
+
+
+def test_verification_stops_after_three_retries(monkeypatch):
+    from playwright.sync_api import TimeoutError
+    monkeypatch.setattr('app.ilog_unlock.time.sleep', lambda _: None)
+    calls = []
+    def query():
+        calls.append(1)
+        raise TimeoutError('Page.goto: Timeout 20000ms exceeded.')
+    result = {'stage':'verify_open_page'}
+    with pytest.raises(TimeoutError):
+        retry_verification(query, result)
+    assert len(calls) == 4
+    assert result['verification_attempts'][-1]['stage'] == 'verify_open_page'
+
+
+def test_verification_never_retries_ambiguous_or_invalid_results(monkeypatch):
+    monkeypatch.setattr('app.ilog_unlock.time.sleep', lambda _: pytest.fail('Unexpected retry'))
+    def query():
+        raise RuntimeError('Verification record mismatch')
+    with pytest.raises(RuntimeError):
+        retry_verification(query, {})
+
+
+def test_error_context_extracts_operation_without_secrets():
+    error = RuntimeError('Page.goto: Timeout 20000ms exceeded.\nCall log: password=secret https://example.com/?token=secret')
+    assert error_context(error) == {'operation': 'Page.goto', 'timeout_ms': 20000}
+    assert error_context(RuntimeError('private-data')) == {}
 
 
 def test_execution_steps_have_order_and_timestamps(tmp_path):

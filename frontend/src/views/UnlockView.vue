@@ -51,6 +51,7 @@
           </section>
           <section class="unlock-results-panel">
             <div class="unlock-section-heading"><h2>执行结果</h2><el-select v-model="filter" aria-label="筛选结果" style="width:150px" size="small"><el-option label="全部结果" value="all"/><el-option label="核实通过" value="success"/><el-option label="待人工处理" value="attention"/><el-option label="等待处理" value="waiting"/><el-option label="已取消" value="cancelled"/></el-select></div>
+            <el-alert v-if="taskState === 'completed' && attentionCount" class="unlock-attention-summary" type="warning" :closable="false" :title="`本批已结束，${attentionCount} 项需人工核实，未自动重提解锁。`"><template #default><el-button link type="primary" @click="filter = 'attention'">只看待处理项</el-button></template></el-alert>
             <div v-if="!rows.length" class="unlock-empty"><el-icon><List /></el-icon><h3>逐笔结果将在这里显示</h3><p>平台响应、复查状态与异常原因都会保留。</p></div>
             <el-table v-else :data="filteredRows" height="420" empty-text="没有符合条件的结果" :row-class-name="rowClassName">
               <el-table-column type="index" label="#" width="44"/>
@@ -116,7 +117,7 @@
     </section>
     <el-dialog v-model="reviewOpen" class="bill-review-dialog" title="单号校验与二次确认" width="min(900px, 94vw)" top="4vh">
       <el-descriptions :column="1" border><el-descriptions-item label="业务账号">{{ selectedAccount?.name }}</el-descriptions-item><el-descriptions-item label="费用解锁（小锁）">{{ parsed.fee.length }} 条</el-descriptions-item><el-descriptions-item label="订单解锁（大锁）">{{ parsed.order.length }} 条</el-descriptions-item></el-descriptions>
-      <el-alert class="review-alert" type="info" :closable="false" :title="fallbackAccount && fallbackEnabled ? `主账号：${selectedAccount?.name}；兜底账号：${fallbackAccount.name}` : '仅使用主账号'" description="主账号查无订单才使用兜底账号；异常或多条匹配时暂停。"/>
+      <el-alert class="review-alert" type="info" :closable="false" :title="fallbackAccount && fallbackEnabled ? `主账号：${selectedAccount?.name}；兜底账号：${fallbackAccount.name}` : '仅使用主账号'" description="主账号查无订单才使用兜底账号；单笔异常记录后继续下一项，多条匹配不解锁。"/>
       <el-alert v-if="overlap.length" class="review-alert" :title="`${overlap.length} 个提单号同时出现在大小锁列表，将分别执行两种真实操作。`" type="warning" :closable="false"/>
       <el-alert class="review-alert" :type="invalidCount ? 'error' : 'info'" :closable="false" :title="`识别 ${reviewRows.length} 项 · 有效 ${total} 项 · 重复 ${reviewRows.filter(r => r.status === 'duplicate').length} 项 · 异常 ${invalidCount} 项`" description="格式校验不代表订单存在。重复项已排除，异常项需返回修改。"/>
       <el-tabs v-model="reviewKind" style="margin-top:16px">
@@ -131,7 +132,7 @@
       </el-table>
       <el-checkbox v-model="reviewAcknowledged" style="margin-top:16px;white-space:normal">我已核对主账号、兜底账号、单号及大小锁类型，并授权本次真实解锁</el-checkbox>
       <el-text v-if="total > 2000" type="danger">每批最多 2000 项，请返回拆分。</el-text>
-      <p class="demo-note">将实际修改 iLog 锁状态。暂停仅停止后续项，不中断当前单；异常不自动重试。</p>
+      <p class="demo-note">将实际修改 iLog 锁状态。单笔异常不阻断后续项，解锁提交不自动重试；只读复查最多重试三次。暂停仅停止后续项。</p>
       <template #footer><el-button :disabled="submitting" @click="reviewOpen = false">返回修改</el-button><el-button type="primary" :loading="submitting" :disabled="busy || !runtimeAvailable || !reviewAcknowledged || !!invalidCount || !total || total > 2000" @click="start">确认解锁 {{ total }} 项</el-button></template>
     </el-dialog>
     <el-dialog v-model="accountOpen" :title="editingId ? '编辑业务账号' : '添加业务账号'" width="460px" :close-on-click-modal="!savingAccount" :close-on-press-escape="!savingAccount" :show-close="!savingAccount" @closed="accountPassword = ''">
