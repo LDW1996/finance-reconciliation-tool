@@ -116,7 +116,7 @@ def compact_success(result):
                                 'verified_unlocked', 'verified_fee_unlocked'):
         for key in ('steps', 'stage', 'selected_ids', 'matched_count', 'confirmation_text',
                     'action', 'response_error_type', 'response_note', 'error_context', 'request_diagnostics',
-                    'verification_attempts'):
+                    'verification_attempts', 'query_attempts'):
             result.pop(key, None)
 
 
@@ -133,21 +133,21 @@ def error_context(error):
     return context
 
 
-def retry_verification(operation, result):
+def retry_verification(operation, result, *, phase='verification'):
     """Only the read-only post-submission query belongs inside operation."""
     from playwright.sync_api import Error as BrowserError
     for attempt in range(4):
         entry = {'attempt': attempt + 1, 'time': datetime.now(timezone.utc).isoformat()}
-        result.setdefault('verification_attempts', []).append(entry)
+        result.setdefault(phase + '_attempts', []).append(entry)
         try:
             value = operation()
             entry['status'] = 'completed'
-            result['verification_retries'] = attempt
+            result[phase + '_retries'] = attempt
             return value
         except Exception as error:
             entry.update(status='failed', stage=result.get('stage'),
                          error_type=type(error).__name__, **error_context(error))
-            result['verification_retries'] = attempt
+            result[phase + '_retries'] = attempt
             transient = isinstance(error, BrowserError) or (
                 isinstance(error, RuntimeError) and str(error) in ('Query failed', 'Lock state not yet updated'))
             if not transient or attempt == 3:
@@ -161,8 +161,14 @@ def search_bill(page, bill, trace=None):
         if trace:
             trace(phase)
     field = page.locator('input[name=search]')
-    mark('wait_idle')
-    page.wait_for_function('() => !Ext.Ajax.isLoading()')
+    mark('wait_initial_store')
+    # HttpProxy's initial request can outlive Ext.Ajax's global loading flag.
+    page.wait_for_function('''() => {
+      let c; Ext.ComponentMgr.all.each(x=>{if(typeof x.doCancelOrder==='function')c=x});
+      if(!c || !c.grid || !c.grid.store.reader.jsonData)return false;
+      const data=c.grid.store.reader.jsonData;
+      return Array.isArray(data.root) && !Ext.Ajax.isLoading();
+    }''')
     mark('fill_bill')
     field.fill(bill)
     def matches(response):
@@ -170,16 +176,18 @@ def search_bill(page, bill, trace=None):
         params = parse_qs(urlparse(request.url).query)
         params.update(parse_qs(request.post_data or ''))
         return ('actionOrder!executeAll' in urlparse(request.url).path
-                and any(bill == value for values in params.values() for value in values))
+                and params.get('condt.blno') == [bill])
     mark('wait_query_response')
     with page.expect_response(matches) as pending:
-        field.press('Enter')
+        field.locator('..').locator('.x-form-search-trigger').click()
     if not pending.value.ok:
         raise RuntimeError('Query failed')
     mark('read_query_response')
     payload = json5.loads(pending.value.text())
     if not isinstance(payload, dict) or not isinstance(payload.get('root'), list):
         raise RuntimeError('Unexpected query response')
+    if int(payload.get('totalProperty',len(payload['root']))) > len(payload['root']):
+        raise RuntimeError('Query results span multiple pages')
     expected_ids = [r['jobOrderId'] for r in payload['root']]
     mark('wait_store_update')
     page.wait_for_function('''ids=>{
@@ -192,7 +200,7 @@ def search_bill(page, bill, trace=None):
     return records(page)
 
 
-def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed=False):
+def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed=False, expected_record_ids=None):
     from playwright.sync_api import sync_playwright
 
     bill = validate_bill(bill).upper()
@@ -258,9 +266,28 @@ def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed
             page.on('response', response_received)
             step('query_order')
             page.locator('input[name=search]').wait_for()
-            found = search_bill(page, bill, trace=lambda phase: step('query_' + phase))
-            if len(found) != 1 or bill not in (found[0]['mbl'], found[0]['hbl']):
-                result['status'] = 'not_found' if not found else 'ambiguous'
+            found = retry_verification(
+                lambda: search_bill(page, bill, trace=lambda phase: step('query_' + phase)),
+                result, phase='query')
+            if expected_record_ids is not None and (len(found)!=len(expected_record_ids) or
+                    {str(r['id']) for r in found}!=set(expected_record_ids)):
+                raise RuntimeError('Verification record mismatch')
+            if len(found)>1:
+                from .ilog_batch import plan_batch, execute_batch
+                try:
+                    plan_batch(found,bill,kind)
+                except ValueError:
+                    result.update(status='ambiguous',matches=found,matched_count=len(found),
+                                  ambiguity_reason='匹配结果存在重复编号或未知锁状态，未提交')
+                    return result
+                result.update(matches=found,matched_count=len(found))
+                if execute:
+                    execute_batch(page,found,result,report_path,directory,step)
+                else:
+                    result['status']='inspected'
+                return result
+            if not found:
+                result.update(status='not_found',matched_count=0,matches=[])
                 return result
             record = found[0]
             result['before'] = record
@@ -378,6 +405,7 @@ def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed
                 'Unexpected confirmation': '平台确认窗口的内容与预期不同，未继续确认',
                 'Query failed': '订单查询接口返回异常，未能取得可靠查询结果',
                 'Unexpected query response': '订单查询返回的数据格式与预期不同',
+                'Query results span multiple pages': '查询结果跨多页，未取得完整记录，本次不解锁',
                 'Verification record mismatch': '复查记录数量或平台记录编号与原订单不一致，已停止且不重试',
                 'Lock state not yet updated': '平台返回解锁成功，但复查及重试后仍未达到目标锁状态',
             }
@@ -390,6 +418,7 @@ def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed
                     'verify_open_list': '解锁后未能在限定时间内找到或打开委托单列表',
                     'verify_wait_search': '委托单列表的查询输入框未在限定时间内就绪',
                     'wait_idle': '页面仍有未结束的查询请求，等待平台空闲超时',
+                    'wait_initial_store': '平台默认订单列表尚未完成首次加载，未触发提单查询',
                     'fill_bill': '单号查询输入框未能完成输入，控件可能尚未就绪',
                     'wait_query_response': '等待该单号对应的查询响应超时，未取得可核对的返回',
                     'read_query_response': '已收到查询响应，但读取返回内容超时',
@@ -403,7 +432,7 @@ def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed
         finally:
             if result['status'] not in ('inspected','already_unlocked','already_fee_unlocked','verified_unlocked','verified_fee_unlocked'):
                 result['request_diagnostics'] = {'failed': events[-20:], 'pending': list(requests.values())[-20:]}
-            if result['status'] in ('needs_verification', 'blocked_duplicate') and authenticated and page:
+            if result['status'] in ('needs_verification', 'blocked_duplicate', 'ambiguous') and authenticated and page:
                 try:
                     screenshot = directory / f'{report_path.stem}-failure.png'
                     page.screenshot(path=str(screenshot), full_page=True, timeout=5000)
@@ -427,6 +456,7 @@ def main():
     parser.add_argument('--kind', choices=['fee','order'], default='fee')
     parser.add_argument('--execute', action='store_true')
     parser.add_argument('--confirm-bill')
+    parser.add_argument('--confirm-record-ids', help='Optional exact comma-separated platform IDs for a scoped live test')
     parser.add_argument('--channel', choices=['chrome','msedge'], default='chrome')
     parser.add_argument('--show-browser', action='store_true')
     args = parser.parse_args()
@@ -434,7 +464,8 @@ def main():
         parser.error('--execute requires --confirm-bill matching --bill exactly')
     try:
         result = run(args.account, args.bill, args.kind, execute=args.execute,
-                     channel=args.channel, headed=args.show_browser)
+                     channel=args.channel, headed=args.show_browser,
+                     expected_record_ids=args.confirm_record_ids.split(',') if args.confirm_record_ids else None)
     except Exception:
         result = {'status':'failed','reason':'Check saved account, installed browser and network'}
     print(json.dumps(result, ensure_ascii=False))

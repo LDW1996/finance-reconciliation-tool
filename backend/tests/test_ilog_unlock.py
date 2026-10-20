@@ -42,6 +42,52 @@ def test_verification_never_retries_ambiguous_or_invalid_results(monkeypatch):
         retry_verification(query, {})
 
 
+def test_initial_query_retries_without_using_verification_diagnostics(monkeypatch):
+    from playwright.sync_api import TimeoutError
+    monkeypatch.setattr('app.ilog_unlock.time.sleep',lambda _:None)
+    calls=[]
+    result={'stage':'query_wait_store_update'}
+    def query():
+        calls.append(1)
+        if len(calls)==1: raise TimeoutError('Page.wait_for_function: Timeout 20000ms exceeded.')
+        return [{'id':'target'}]
+    assert retry_verification(query,result,phase='query') == [{'id':'target'}]
+    assert result['query_retries']==1 and len(result['query_attempts'])==2
+    assert 'verification_attempts' not in result
+
+
+def test_search_waits_for_initial_store_then_clicks_search_icon():
+    from app.ilog_unlock import search_bill
+    events=[]
+    class Response:
+        ok=True
+        def text(self): return '{"root":[{"jobOrderId":"record1"}]}'
+    class Pending:
+        value=Response()
+        def __enter__(self): return self
+        def __exit__(self,*args): pass
+    class Locator:
+        def fill(self,value): events.append(('fill',value))
+        def locator(self,selector): events.append(('locator',selector)); return self
+        def click(self): events.append(('click',))
+        def press(self,*args): pytest.fail('Search must use the visible magnifier')
+    class Page:
+        def locator(self,selector): return Locator()
+        def wait_for_function(self,script,**kwargs): events.append(('wait',script))
+        def expect_response(self,predicate):
+            from types import SimpleNamespace
+            req=SimpleNamespace(url='https://example.com/actionOrder!executeAll?query=All',post_data='condt.blno=BILL123456')
+            assert predicate(SimpleNamespace(url='https://example.com/actionOrder!executeAll?query=All',request=req))
+            assert not predicate(SimpleNamespace(url='https://example.com/actionOrder!executeAll?other=BILL123456',request=SimpleNamespace(url='https://example.com/actionOrder!executeAll?other=BILL123456',post_data='')))
+            return Pending()
+        def evaluate(self,script): return [{'id':'record1','mbl':'BILL123456'}]
+    assert search_bill(Page(),'BILL123456')[0]['id']=='record1'
+    assert 'reader.jsonData' in events[0][1]
+    assert next(i for i,e in enumerate(events) if e[0]=='fill') > 0
+    assert ('locator','.x-form-search-trigger') in events
+    assert ('click',) in events
+
+
 def test_error_context_extracts_operation_without_secrets():
     error = RuntimeError('Page.goto: Timeout 20000ms exceeded.\nCall log: password=secret https://example.com/?token=secret')
     assert error_context(error) == {'operation': 'Page.goto', 'timeout_ms': 20000}

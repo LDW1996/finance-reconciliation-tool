@@ -18,6 +18,7 @@ hiddenimports = [
     "app.ilog_retention",
     "app.ilog_unlock",
     "app.ilog_query",
+    "app.ilog_batch",
     "playwright.sync_api",
     "json5",
     "cryptography.fernet",

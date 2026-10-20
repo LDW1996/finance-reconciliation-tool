@@ -152,7 +152,7 @@ class TaskManager:
             for bill in bills:
                 if not isinstance(bill,str): raise ValueError('单号格式异常')
                 bill = bill.strip().upper()
-                if not re.fullmatch(r'(?=[A-Z0-9]{8,40}$)(?=.*[A-Z])(?=.*[0-9])[A-Z0-9]+',bill):
+                if not re.fullmatch(r'[A-Z0-9_/-]{1,80}',bill):
                     raise ValueError('存在格式异常的单号')
                 if bill not in seen:
                     inputs.append({'bill':bill,'kind':kind,'status':'waiting','message':'等待执行','time':''})
@@ -248,8 +248,12 @@ class TaskManager:
                     'needs_verification':'执行结果不确定，请人工核实，未自动重试',
                     'platform_confirmed':'平台确认成功，但目标状态尚未充分核实',
                     'not_found':'当前账号未找到单号，未提交',
-                    'ambiguous':'查询结果不唯一或单号不精确匹配，未提交',
+                    'ambiguous':'查询记录编号重复、缺失或锁状态无法识别，未提交',
                     'rejected':'平台拒绝解锁，请查看平台说明'}
+                if result.get('status') == 'ambiguous' and result.get('matches'):
+                    matches = result['matches']
+                    descriptions = [f"业务号 {r.get('booking','未知')}（船东提单 {r.get('mbl','未知')}；货代提单 {r.get('hbl','未知')}）" for r in matches[:5]]
+                    notes['ambiguous'] = result.get('ambiguity_reason', '查询结果不唯一，未提交') + f"；共 {result.get('matched_count',len(matches))} 条：" + '；'.join(descriptions) + '；请按业务号核实'
                 if result.get('failed_stage'):
                     stage_names = {'login':'登录平台','query_order':'查询订单','select_record':'选中订单',
                         'open_unlock_menu':'打开解锁菜单','choose_unlock_action':'选择解锁操作',
@@ -260,6 +264,7 @@ class TaskManager:
                         'verify_open_list':'复查：打开委托单列表','verify_wait_search':'复查：等待查询框就绪'})
                     for prefix, label in [('query_', '查询'), ('verify_', '复查')]:
                         for phase, name in {'wait_idle':'等待平台空闲','fill_bill':'输入提单号',
+                            'wait_initial_store':'等待默认订单列表加载',
                             'wait_query_response':'等待订单查询响应','read_query_response':'读取查询返回',
                             'wait_store_update':'等待页面列表同步'}.items():
                             stage_names[prefix + phase] = label + '：' + name
@@ -267,10 +272,31 @@ class TaskManager:
                     notes[result.get('status')] = f"失败步骤：{stage}；" + result.get('failure_cause','具体原因尚未确认') + '；' + ('已进入提交阶段，结果待核实' if result.get('submitted') else '未进入解锁提交阶段') + '；' + result.get('next_action','请人工核实')
                 if result.get('verification_retries'):
                     notes[result.get('status')] = notes.get(result.get('status'),'复查待核实') + f"；只读复查已重试 {result['verification_retries']} 次，未重复提交解锁"
+                if result.get('query_retries'):
+                    notes[result.get('status')] = notes.get(result.get('status'),'查询待核实') + f"；首次查询已重试 {result['query_retries']} 次"
                 with self.db() as db:
                     db.execute('BEGIN IMMEDIATE')
                     latest = json.loads(db.execute('SELECT data FROM tasks WHERE id=?',(task_id,)).fetchone()[0])
-                    latest['rows'][index].update(status='success' if ok else 'attention', detail=result,
+                    if result.get('records'):
+                        expanded=[]
+                        for detail in result['records']:
+                            child_ok=detail.get('status') in ('verified_unlocked','verified_fee_unlocked','already_unlocked','already_fee_unlocked')
+                            message=notes.get(detail.get('status'),'执行异常，请人工核实')
+                            if detail.get('failure_cause'):
+                                message=detail['failure_cause']+'；'+detail.get('next_action','请人工核实')
+                            if detail.get('relocked_resubmission'):
+                                message='历史已成功，当前再次有锁，本次重新解锁；'+message
+                            child_attempts=[]
+                            for attempt in attempts:
+                                matched=next((r for r in attempt.get('records',[]) if r.get('before',{}).get('id')==detail.get('before',{}).get('id')),None)
+                                child_attempts.append({k:v for k,v in {**{k:v for k,v in attempt.items() if k!='records'},**(matched or {})}.items() if k not in ('matches','steps','verification_attempts','query_attempts')})
+                            expanded.append({**latest['rows'][index], 'status':'success' if child_ok else 'attention',
+                                'businessNo':detail.get('before',{}).get('booking',''), 'detail':detail,
+                                'actualAccount':actual_account,'actualAccountName':actual_name,
+                                'attempts':child_attempts,'message':message,'time':datetime.now(timezone.utc).isoformat()})
+                        latest['rows'][index:index+1]=expanded
+                    else:
+                        latest['rows'][index].update(status='success' if ok else 'attention', detail=result,
                         actualAccount=actual_account,actualAccountName=actual_name,attempts=attempts,
                         message=('历史已成功，当前再次有锁，本次重新解锁；' if result.get('relocked_resubmission') else '') + notes.get(result.get('status'),'执行异常，请人工核实') + ('；'+str(result['message']) if not ok and result.get('message') else ''),
                         time=datetime.now(timezone.utc).isoformat())

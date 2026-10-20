@@ -56,6 +56,7 @@
             <el-table v-else :data="filteredRows" height="420" empty-text="没有符合条件的结果" :row-class-name="rowClassName">
               <el-table-column type="index" label="#" width="44"/>
               <el-table-column prop="bill" label="提单号" min-width="185"/>
+              <el-table-column prop="businessNo" label="业务号" min-width="160"><template #default="{row}">{{ row.businessNo || row.detail?.before?.booking || '—' }}</template></el-table-column>
               <el-table-column label="类型" min-width="100"><template #default="{ row }">{{ row.kind === 'fee' ? '费用解锁' : '订单解锁' }}</template></el-table-column>
               <el-table-column label="实际使用账号" min-width="180"><template #default="{ row }">{{ row.actualAccountName || '—' }}<el-tag v-if="(row.attempts?.length || 0) > 1" size="small" type="info">兜底</el-tag><div v-for="(attempt,i) in row.attempts || []" :key="i" style="font-size:12px;color:var(--ink-muted)">{{ attempt.accountName }}：{{ attemptText(attempt.status) }}</div></template></el-table-column>
               <el-table-column label="结果" min-width="125"><template #default="{ row }"><el-tag :type="statusStyle(row.status)" size="small" round>{{ statusText(row.status,row.detail) }}</el-tag></template></el-table-column>
@@ -96,6 +97,7 @@
       <p>{{ historyTask?.accountName }} · {{ formatDate(historyTask?.createdAt) }}</p>
       <el-table :data="historyTask?.rows || []" max-height="480" empty-text="暂无记录">
         <el-table-column prop="bill" label="单号" min-width="180"/>
+        <el-table-column label="业务号" min-width="160"><template #default="{row}">{{ row.businessNo || row.detail?.before?.booking || '—' }}</template></el-table-column>
         <el-table-column label="类型" width="100"><template #default="{ row }">{{ row.kind==='fee' ? '小锁' : '大锁' }}</template></el-table-column>
         <el-table-column prop="actualAccountName" label="实际账号" min-width="170"/>
         <el-table-column label="结果" min-width="130"><template #default="{ row }">{{ statusText(row.status,row.detail) }}</template></el-table-column>
@@ -117,7 +119,7 @@
     </section>
     <el-dialog v-model="reviewOpen" class="bill-review-dialog" title="单号校验与二次确认" width="min(900px, 94vw)" top="4vh">
       <el-descriptions :column="1" border><el-descriptions-item label="业务账号">{{ selectedAccount?.name }}</el-descriptions-item><el-descriptions-item label="费用解锁（小锁）">{{ parsed.fee.length }} 条</el-descriptions-item><el-descriptions-item label="订单解锁（大锁）">{{ parsed.order.length }} 条</el-descriptions-item></el-descriptions>
-      <el-alert class="review-alert" type="info" :closable="false" :title="fallbackAccount && fallbackEnabled ? `主账号：${selectedAccount?.name}；兜底账号：${fallbackAccount.name}` : '仅使用主账号'" description="主账号查无订单才使用兜底账号；单笔异常记录后继续下一项，多条匹配不解锁。"/>
+      <el-alert class="review-alert" type="info" :closable="false" :title="fallbackAccount && fallbackEnabled ? `主账号：${selectedAccount?.name}；兜底账号：${fallbackAccount.name}` : '仅使用主账号'" description="主账号查无订单才使用兜底账号；支持不完整号码查询，将自动处理查询返回的全部业务，并按业务号逐条核实。跨页结果暂不解锁。"/>
       <el-alert v-if="overlap.length" class="review-alert" :title="`${overlap.length} 个提单号同时出现在大小锁列表，将分别执行两种真实操作。`" type="warning" :closable="false"/>
       <el-alert class="review-alert" :type="invalidCount ? 'error' : 'info'" :closable="false" :title="`识别 ${reviewRows.length} 项 · 有效 ${total} 项 · 重复 ${reviewRows.filter(r => r.status === 'duplicate').length} 项 · 异常 ${invalidCount} 项`" description="格式校验不代表订单存在。重复项已排除，异常项需返回修改。"/>
       <el-tabs v-model="reviewKind" style="margin-top:16px">
@@ -156,9 +158,9 @@ import { downloadBlob } from '../services/api'
 import { inspectBills, duplicateBills } from '../services/billValidation.mjs'
 type Kind = 'fee' | 'order'
 type Status = 'waiting' | 'processing' | 'success' | 'attention' | 'cancelled'
-type Detail = { status?: string; platform_success?: boolean; before?: {lock?: string}; after?: {lock?: string}; screenshot?: string; screenshotExpired?: boolean }
+type Detail = { status?: string; platform_success?: boolean; before?: {lock?: string;booking?:string}; after?: {lock?: string}; screenshot?: string; screenshotExpired?: boolean }
 type Attempt = { account: string; accountName: string; status: string }
-type Row = { bill: string; kind: Kind; status: Status; message: string; time: string; detail?: Detail; evidenceIndex?: number; actualAccountName?: string; attempts?: Attempt[] }
+type Row = { bill: string; businessNo?:string; kind: Kind; status: Status; message: string; time: string; detail?: Detail; evidenceIndex?: number; actualAccountName?: string; attempts?: Attempt[] }
 type Task = { id: string; account: string; accountName: string; fallbackAccount?: string; fallbackAccountName?: string; state: 'running' | 'paused' | 'completed'; rows: Row[]; createdAt?: string; completedAt?: string }
 type HistoryItem = Omit<Task,'rows'> & {total:number;attention:number}
 const historyOpen=ref(false), historyDetailOpen=ref(false), historyLoading=ref(false)
@@ -372,7 +374,7 @@ const statusStyle = (s: Status) => ({ waiting: 'info', processing: 'primary', su
 const attemptText = (status: string) => ({ not_found:'未找到', ambiguous:'多条匹配', verified_unlocked:'成功并复查无锁', verified_fee_unlocked:'小锁已核实解开', already_unlocked:'原本已无锁', already_fee_unlocked:'小锁原本已解', rejected:'平台拒绝', blocked_duplicate:'已阻止重复提交', platform_confirmed:'平台成功，仍需核实', needs_verification:'待核实' }[status] || '待核实')
 function exportResults(task?:Task) {
   const cell = (v: string) => `"${(/^[=+@\-\t\r]/.test(v) ? "'" + v : v).replace(/"/g, '""')}"`
-  const content = [['主账号', '兜底账号', '实际使用账号', '查询路径', '提单号', '类型', '结果', '平台响应', '原锁状态', '复查锁状态', '说明', '时间'], ...(task?.rows || rows.value).map(r => [task?.accountName || taskAccountName.value, task ? task.fallbackAccountName || '' : taskFallbackName.value, r.actualAccountName || '', (r.attempts || []).map(a => `${a.accountName}: ${attemptText(a.status)}`).join(' → '), r.bill, r.kind === 'fee' ? '费用解锁' : '订单解锁', statusText(r.status,r.detail), r.detail?.platform_success === true ? '成功' : r.detail?.platform_success === false ? '拒绝' : '未确认', r.detail?.before?.lock || '', r.detail?.after?.lock || '', cleanMessage(r.message), r.time])].map(r => r.map(cell).join(',')).join('\r\n')
+  const content = [['主账号', '兜底账号', '实际使用账号', '查询路径', '提单号', '业务号', '类型', '结果', '平台响应', '原锁状态', '复查锁状态', '说明', '时间'], ...(task?.rows || rows.value).map(r => [task?.accountName || taskAccountName.value, task ? task.fallbackAccountName || '' : taskFallbackName.value, r.actualAccountName || '', (r.attempts || []).map(a => `${a.accountName}: ${attemptText(a.status)}`).join(' → '), r.bill, r.businessNo || r.detail?.before?.booking || '', r.kind === 'fee' ? '费用解锁' : '订单解锁', statusText(r.status,r.detail), r.detail?.platform_success === true ? '成功' : r.detail?.platform_success === false ? '拒绝' : '未确认', r.detail?.before?.lock || '', r.detail?.after?.lock || '', cleanMessage(r.message), r.time])].map(r => r.map(cell).join(',')).join('\r\n')
   downloadBlob(new Blob(['\uFEFF', content], { type: 'text/csv;charset=utf-8' }), 'iLog解锁-真实结果.csv')
 }
 const taskAccountName = ref('')

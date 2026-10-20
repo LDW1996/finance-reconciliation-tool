@@ -1,5 +1,5 @@
 // Syntax screening only; existence and permissions must be checked in iLog.
-const format = /^(?=[A-Z0-9]{8,40}$)(?=.*[A-Z])(?=.*[0-9])[A-Z0-9]+$/
+const format = /^[A-Z0-9_/-]{1,80}$/
 export function duplicateBills(rows) {
   const counts = new Map()
   for (const row of rows) {

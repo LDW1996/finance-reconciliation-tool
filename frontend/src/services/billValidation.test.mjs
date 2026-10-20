@@ -18,10 +18,15 @@ test('marks suspicious symbols without silently accepting them', () => {
   assert.equal(row.suggestion, 'TRBTSTOD2609N')
 })
 test('does not invent corrections for internal symbols or arbitrary text', () => {
-  for (const value of ['TRBT^STOD2609N', 'hello', '12345', '<script>']) {
+  for (const value of ['TRBT^STOD2609N', '<script>', 'A'.repeat(81)]) {
     assert.equal(inspectBills(value)[0].status, 'invalid')
   }
   assert.equal(inspectBills('TRBT^STOD2609N')[0].suggestion, '')
+})
+test('accepts partial and numeric platform queries without dropping leading zeroes', () => {
+  const rows = inspectBills('082600028858 TRBT 2609 A-1/2_3')
+  assert.deepEqual(rows.map(r => r.status), ['valid', 'valid', 'valid', 'valid'])
+  assert.equal(rows[0].bill, '082600028858')
 })
 test('accepts existing example format and ignores empty input', () => {
   assert.equal(inspectBills('SITGSHBAZA00451')[0].status, 'valid')

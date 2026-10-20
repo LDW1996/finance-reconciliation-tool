@@ -6,6 +6,12 @@ def manager(tmp_path, runner=None):
     return TaskManager(tmp_path, runner=runner, auto_start=False)
 
 
+def test_accepts_partial_numeric_and_letter_queries(tmp_path):
+    m=manager(tmp_path)
+    job=m.create('west','West',['082600028858','TRBT','2609','A-1/2_3'],[],'fuzzy',True)
+    assert [r['bill'] for r in job['rows']]==['082600028858','TRBT','2609','A-1/2_3']
+
+
 def test_confirmation_validation_and_dedup(tmp_path):
     m = manager(tmp_path)
     with pytest.raises(ValueError):
@@ -204,6 +210,36 @@ def test_runner_exception_keeps_failure_and_continues(tmp_path):
     assert result['state']=='completed'
     assert [r['status'] for r in result['rows']]==['attention','success']
     assert len(calls)==2 and result['rows'][0]['detail']['reason']
+
+
+def test_ambiguous_result_lists_business_numbers_for_review(tmp_path):
+    matches=[{'id':'a','booking':'BUSINESS1','mbl':'MBL123456','hbl':'DJSJKT260921011'},
+             {'id':'b','booking':'BUSINESS2','mbl':'DJSJKT260921011','hbl':'DJSJKT260921011'}]
+    m=manager(tmp_path,lambda *args,**kwargs:{'status':'ambiguous','submitted':False,'matches':matches,'matched_count':2})
+    job=m.create('east','East',[],['DJSJKT260921011'],'key',True)
+    m.drain(job['id'])
+    row=m.get(job['id'])['rows'][0]
+    assert row['status']=='attention'
+    assert 'BUSINESS1' in row['message'] and 'BUSINESS2' in row['message']
+    assert not row['detail']['submitted']
+
+
+def test_batch_results_expand_by_business_and_continue_next_bill(tmp_path):
+    calls=[]
+    def runner(account,bill,kind,**kwargs):
+        calls.append(bill)
+        if bill=='BILL123456':
+            return {'status':'batch_attention','records':[
+                {'status':'verified_unlocked','before':{'id':'a','booking':'JOB1'},'submitted':True},
+                {'status':'needs_verification','before':{'id':'b','booking':'JOB2'},'submitted':True}]}
+        return {'status':'verified_unlocked'}
+    m=manager(tmp_path,runner)
+    job=m.create('east','East',[],['BILL123456','BILL234567'],'key',True)
+    m.drain(job['id']);result=m.get(job['id'])
+    assert result['state']=='completed'
+    assert calls==['BILL123456','BILL234567']
+    assert [r['status'] for r in result['rows']]==['success','attention','success']
+    assert [r.get('businessNo') for r in result['rows'][:2]]==['JOB1','JOB2']
 
 
 def test_api_rejects_unusable_fallback_account(tmp_path,monkeypatch):
