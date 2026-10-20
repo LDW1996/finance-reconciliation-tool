@@ -63,7 +63,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="财务对账工具",
+    name="ilog解锁工具",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

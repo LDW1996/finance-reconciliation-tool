@@ -24,7 +24,7 @@ pyinstaller --clean --noconfirm packaging\finance-reconcile.spec || goto :error
 
 echo.
 echo Build complete:
-echo dist\财务对账工具.exe
+echo dist\ilog解锁工具.exe
 echo.
 pause
 exit /b 0

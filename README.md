@@ -41,11 +41,11 @@ Windows `.exe` 需要在 Windows 电脑上构建。Mac 不能可靠直接交叉�
 4. 选择 `Build Windows EXE`。
 5. 点击 `Run workflow`。
 6. 等构建完成后，进入本次运行记录。
-7. 在 `Artifacts` 下载 `财务对账工具-Windows`。
+7. 在 `Artifacts` 下载 `ilog解锁工具`（压缩包为 `ilog解锁工具.zip`）。
 8. 解压后会得到：
 
 ```text
-财务对账工具.exe
+ilog解锁工具.exe
 财务人员使用说明.txt
 ```
 
@@ -67,19 +67,19 @@ packaging\build_windows.bat
 生成文件：
 
 ```text
-dist\财务对账工具.exe
+dist\ilog解锁工具.exe
 ```
 
 交付给财务人员时，把以下两个文件放在同一个文件夹发给对方：
 
 ```text
-dist\财务对账工具.exe
+dist\ilog解锁工具.exe
 packaging\财务人员使用说明.txt
 ```
 
 财务人员使用方式：
 
-1. 双击 `财务对账工具.exe`
+1. 双击 `ilog解锁工具.exe`
 2. 浏览器会自动打开
 3. 上传往来 Excel
 4. 检查通过后点击 `开始分析`
