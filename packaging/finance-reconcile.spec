@@ -19,6 +19,19 @@ hiddenimports = [
     "app.ilog_unlock",
     "app.ilog_query",
     "app.ilog_batch",
+    "app.outlook_probe",
+    "app.mail_tasks",
+    "app.mail_matching",
+    "app.mail_insights",
+    "app.mail_workspace",
+    "app.mail_sync",
+    "app.mail_online",
+    "app.google_sheets",
+    "app.mail_attachments",
+    "pythoncom",
+    "pywintypes",
+    "win32com.client",
+    "win32timezone",
     "playwright.sync_api",
     "json5",
     "cryptography.fernet",
@@ -37,7 +50,7 @@ hiddenimports = [
     "xlrd",
 ]
 
-for package_name in ["numpy", "pandas", "playwright"]:
+for package_name in ["numpy", "pandas", "playwright", "extract_msg", "rapidocr_onnxruntime", "onnxruntime", "pypdfium2", "pypdfium2_raw"]:
     package_datas, package_binaries, package_hiddenimports = collect_all(package_name)
     datas += package_datas
     binaries += package_binaries

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+from email.message import EmailMessage
 import os
 import re
 import subprocess
@@ -12,6 +13,7 @@ from pathlib import Path
 import httpx
 import pandas as pd
 from openpyxl import load_workbook
+from PIL import Image, ImageDraw, ImageFont
 
 
 APP_URL = "http://127.0.0.1:8765"
@@ -119,6 +121,46 @@ def assert_ilog_local_services() -> None:
     response.raise_for_status()
 
 
+def assert_mail_local_services() -> None:
+    # Check bundling only; CI must not connect to Outlook or any real mailbox.
+    headers={'X-Finance-Local':'1'}
+    for endpoint in ('/api/mail/status','/api/mail/messages'):
+        response=httpx.get(APP_URL+endpoint,headers=headers,timeout=10)
+        response.raise_for_status()
+    if not isinstance(response.json(),list):
+        raise AssertionError('Mail record storage is not available')
+    for endpoint in ('/api/mail/online/config','/api/mail/online/history'):
+        response=httpx.get(APP_URL+endpoint,headers=headers,timeout=10)
+        response.raise_for_status()
+        if not isinstance(response.json(),dict):raise AssertionError('Online ledger local storage is not available')
+    image=Image.new('RGB',(1400,320),'white')
+    draw=ImageDraw.Draw(image)
+    font=ImageFont.load_default(size=40)
+    draw.text((30,30),'Amount: IDR 1,400,000.00',font=font,fill='black')
+    draw.text((30,110),'Value Date: 25-09-2026',font=font,fill='black')
+    png=BytesIO(); image.save(png,format='PNG')
+    pdf=BytesIO(); image.save(pdf,format='PDF')
+    mail=EmailMessage();mail['Subject']='Synthetic offline OCR smoke test';mail.set_content('Test only')
+    mail.add_attachment(png.getvalue(),maintype='image',subtype='png',filename='test.png')
+    mail.add_attachment(pdf.getvalue(),maintype='application',subtype='pdf',filename='test.pdf')
+    response=httpx.post(APP_URL+'/api/mail/import',headers=headers,files={'mail':('smoke.eml',mail.as_bytes())},timeout=30)
+    response.raise_for_status()
+    identity=response.json()['id']
+    deadline=time.monotonic()+90
+    while time.monotonic()<deadline:
+        detail=httpx.get(APP_URL+'/api/mail/messages/'+identity,headers=headers,timeout=10)
+        detail.raise_for_status()
+        assets=detail.json()['attachment_details']
+        if len(assets)==2 and all(a['status'] not in ('pending','running') for a in assets): break
+        time.sleep(.2)
+    else: raise AssertionError('Frozen attachment recognition timed out')
+    for asset in assets:
+        if asset['status']!='done': raise AssertionError(f"Frozen OCR/PDF engine failed: {asset.get('error')}")
+        amounts=asset['result']['fields']['amount']
+        if not any(f['value']=='1400000.00' for f in amounts):
+            raise AssertionError('Frozen OCR failed to read the synthetic amount')
+
+
 def main() -> int:
     exe_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("dist") / "ilog解锁工具.exe"
     if not exe_path.exists():
@@ -137,6 +179,7 @@ def main() -> int:
         wait_for_health()
         assert_frontend_served()
         assert_ilog_local_services()
+        assert_mail_local_services()
         with tempfile.TemporaryDirectory() as temp_dir:
             sample_path = Path(temp_dir) / "sample.xlsx"
             make_sample_workbook(sample_path)

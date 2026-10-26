@@ -73,6 +73,10 @@ def account_values(body: AccountUpdate):
     return name, username, body.password.get_secret_value() if body.password is not None else None
 
 
+from .mail_tasks import create_router as create_mail_router
+app.include_router(create_mail_router(require_local_account_write))
+
+
 @app.post("/api/ilog/accounts", status_code=201)
 def create_ilog_account(body: AccountUpdate, request: Request):
     require_local_account_write(request)

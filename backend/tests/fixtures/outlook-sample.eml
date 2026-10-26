@@ -1,0 +1,13 @@
+From: mail-demo@example.invalid
+To: finance-demo@example.invalid
+Subject: 样例：费用核对 TESTBL20261022
+Date: Thu, 22 Oct 2026 10:00:00 +0800
+Message-ID: <outlook-probe-demo-20261022@example.invalid>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+这是一封本地验证样例，不来自真实邮箱。
+提单号：TESTBL20261022
+参考号码：001234567890
+请核对正文和号码候选；本邮件不授权任何真实业务操作。

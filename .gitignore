@@ -17,6 +17,12 @@ build/
 dist/
 frontend/dist/
 
+# Local sample outputs and rendered user documents
+output/
+outputs/
+tmp/
+.superpowers/
+
 # Local editor files
 .idea/
 .vscode/
