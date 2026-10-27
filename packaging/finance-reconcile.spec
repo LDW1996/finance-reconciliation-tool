@@ -1,10 +1,13 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 from pathlib import Path
+import sys
 
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_data_files
 
 ROOT = Path(SPECPATH).parent
+sys.path.insert(0,str(ROOT / "packaging"))
+from bundle_assets import runtime_data, validate_runtime_assets, write_bundle_report
 
 datas = [
     (str(ROOT / "frontend" / "dist"), "frontend_dist"),
@@ -51,11 +54,9 @@ hiddenimports = [
     "xlrd",
 ]
 
-for package_name in ["numpy", "pandas", "playwright", "extract_msg", "rapidocr_onnxruntime", "onnxruntime", "pypdfium2", "pypdfium2_raw"]:
-    package_datas, package_binaries, package_hiddenimports = collect_all(package_name)
-    datas += package_datas
-    binaries += package_binaries
-    hiddenimports += package_hiddenimports
+# Rely on upstream hooks for native libraries and Playwright's Node driver.
+# collect_all previously forced tests, optional tools and source files into the EXE.
+datas += runtime_data(collect_data_files)
 
 
 a = Analysis(
@@ -67,9 +68,11 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=["pytest", "_pytest", "pandas.tests", "numpy.tests"],
     noarchive=False,
 )
+validate_runtime_assets([*a.binaries, *a.datas], windows=sys.platform == "win32")
+write_bundle_report([*a.binaries, *a.datas, *a.pure], ROOT / "build" / "bundle-size-report.json")
 pyz = PYZ(a.pure)
 
 exe = EXE(
@@ -92,3 +95,5 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
 )
+
+write_bundle_report([*a.binaries, *a.datas, *a.pure], ROOT / "build" / "bundle-size-report.json", exe.name)

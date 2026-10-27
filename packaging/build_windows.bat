@@ -10,8 +10,7 @@ if not exist .venv-win py -3 -m venv .venv-win
 call .venv-win\Scripts\activate.bat || goto :error
 
 echo [3/5] Installing Python dependencies...
-python -m pip install --upgrade pip || goto :error
-pip install -r backend\requirements.txt pyinstaller==6.11.1 || goto :error
+python -m pip install --disable-pip-version-check -r packaging\requirements-build.txt || goto :error
 
 echo [4/5] Checking frontend build...
 if not exist frontend\dist\index.html (

@@ -42,6 +42,9 @@ def show_port_error() -> None:
 
 
 def main() -> None:
+    if len(sys.argv)==3 and sys.argv[1]=='--verify-bundle':
+        from app.bundle_probe import write_report
+        raise SystemExit(0 if write_report(sys.argv[2]) else 1)
     if port_in_use():
         show_port_error()
         return

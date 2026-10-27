@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+import json
 from email.message import EmailMessage
 import os
 import re
@@ -172,6 +173,16 @@ def main() -> int:
         pass
     else:
         raise RuntimeError("Port 8765 is already serving an app; cannot verify the new EXE")
+
+    # Verify imports and the bundled Node bridge inside the EXE, rather than
+    # accidentally testing the CI runner's installed Python packages.
+    with tempfile.TemporaryDirectory(prefix='finance-bundle-probe-') as probe_dir:
+        report=Path(probe_dir)/'probe.json'
+        checked=subprocess.run([str(exe_path),'--verify-bundle',str(report)],timeout=90)
+        if not report.exists():raise AssertionError('Frozen runtime probe did not produce a report')
+        result=json.loads(report.read_text(encoding='utf-8'))
+        if checked.returncode or not result.get('ok'):
+            raise AssertionError(f'Frozen runtime components failed: {result}')
 
     sandbox = tempfile.TemporaryDirectory(prefix='finance-exe-smoke-')
     process = subprocess.Popen([str(exe_path)], env={**os.environ,'FINANCE_RECONCILE_DATA_DIR':sandbox.name})

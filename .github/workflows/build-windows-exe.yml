@@ -15,29 +15,32 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+            packaging/requirements-build.txt
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: "npm"
-
-      - name: Install root dependencies
-        run: npm ci
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend dependencies
         run: npm ci
         working-directory: frontend
 
       - name: Build frontend
-        run: npm run frontend:build
+        run: npm run build
+        working-directory: frontend
         env:
           VITE_BUILD_COMMIT: ${{ github.sha }}
 
       - name: Install Python dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r backend\requirements.txt pyinstaller==6.11.1
+          python -m pip install --disable-pip-version-check -r packaging\requirements-build.txt
 
       - name: Run tests
         run: python -m pytest backend\tests -q
@@ -57,6 +60,15 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ilog解锁工具
+          compression-level: 0
           path: |
             dist/ilog解锁工具.exe
             dist/财务人员使用说明.txt
+
+      - name: Upload bundle inventory
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-diagnostics
+          if-no-files-found: ignore
+          path: build/bundle-size-report.json
