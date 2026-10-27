@@ -11,19 +11,6 @@ def load_assets():
     return module
 
 
-def test_asset_plan_keeps_ocr_config_models_and_msg_data():
-    module=load_assets()
-    calls=[]
-    def collect(package,**options):
-        calls.append((package,options));return [(f'/installed/{package}/config',package)]
-    result=module.runtime_data(collect)
-    assert calls==[
-        ('rapidocr_onnxruntime',{'includes':['config.yaml','models/*.onnx']}),
-        ('extract_msg',{'includes':['data/**/*']}),
-    ]
-    assert len(result)==2
-
-
 def test_report_counts_actual_binary_bytes_and_keeps_source_paths_private(tmp_path):
     module=load_assets()
     first=tmp_path/'secret-workspace'/'model.onnx';first.parent.mkdir();first.write_bytes(b'x'*17)
@@ -64,3 +51,9 @@ def test_report_includes_final_exe_size_without_full_path(tmp_path):
     data=json.loads(report.read_text(encoding='utf-8'))
     assert data['exe_name']=='ilog解锁工具.exe' and data['exe_bytes']==23
     assert str(tmp_path) not in report.read_text(encoding='utf-8')
+
+
+def test_numpy_dynamic_runtime_module_is_explicitly_kept():
+    module=load_assets()
+    assert 'numpy._core._exceptions' in module.NUMPY_RUNTIME_IMPORTS
+    assert all(not name.startswith(('numpy.tests','numpy._core.tests')) for name in module.NUMPY_RUNTIME_IMPORTS)

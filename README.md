@@ -112,8 +112,8 @@ Windows 一键启动程序已预留 PyInstaller 打包层，入口为 `backend/l
 - 财务交付仍为单个 EXE 加使用说明，用户数据目录保持不变。
 - `backend/requirements.txt` 是运行依赖；本地开发/测试使用 `backend/requirements-dev.txt`；打包机使用 `packaging/requirements-build.txt`，固定 PyInstaller 和标准 hooks 版本。
 - Actions 缓存 pip 下载及前端 npm 下载；首次或依赖变更后缓存可能不命中，仍会正常安装。缓存不跳过测试，不缓存 EXE 或用户数据。
-- 使用 NumPy、pandas、Playwright、ONNX Runtime、PDFium 的标准打包规则，仅显式补充 OCR 配置、三个模型和 MSG 数据。不包含 pytest 与 NumPy/pandas 测试目录。
-- 打包阶段检查关键模型、Playwright Node 驱动与 PDFium DLL。成品冒烟测试另启 EXE 内部离线验证，加载 MSG、Windows COM 组件和浏览器驱动桥接，不连接真实 Outlook/iLog；继续验证图片 OCR、PDF、Excel 和本地服务。
-- `build-diagnostics` 是单独的开发诊断附件，提供 `bundle-size-report.json`，列出压缩前文件占用、依赖分组、最大文件及 EXE 大小；不含本机源文件路径或财务数据。不需要发给财务人员。
+- 恢复 NumPy、pandas、Playwright、MSG、OCR、ONNX Runtime、PDFium 的完整依赖收集方式，不再裁剪子模块；显式保留 NumPy C 扩展动态加载的 `numpy._core._exceptions`，并固定 NumPy 版本。当前优先保证兼容性，不承诺缩小包体。
+- 打包阶段检查关键模型、Playwright Node 驱动与 PDFium DLL。成品冒烟测试另启 EXE 内部离线验证，加载完整服务配置、MSG、Windows COM 组件和浏览器驱动桥接，不连接真实 Outlook/iLog；继续验证图片 OCR、PDF、Excel 和本地服务。
+- `build-diagnostics` 是单独的开发诊断附件，提供 `bundle-size-report.json`，列出压缩前文件占用、依赖分组、最大文件及 EXE 大小；体积清单不含本机源文件路径；另包含合成测试的启动日志、组件检查结果及构建警告，用于定位成品异常，不包含财务邮件或账号数据。不需要发给财务人员。
 - EXE 本身已压缩，上传交付附件时不再额外进行 ZIP 高强度压缩；文件名、解压及运行方式不变。
 - 本地打包保留 `--clean`，避免历史分析缓存造成漏文件。实际 Windows 包体和耗时需比较优化前后同环境 Actions 结果，不以 Mac 安装目录大小估算。

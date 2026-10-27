@@ -1,16 +1,12 @@
-"""Minimal explicit package data and a source-path-free build size inventory."""
+"""Runtime asset checks and a source-path-free build size inventory."""
 import json
 from collections import defaultdict
 from pathlib import Path
 
 
-def runtime_data(collect_data_files):
-    # NumPy, pandas, ONNX Runtime, PDFium and Playwright ship maintained hooks.
-    # Keep only data that has no upstream hook; Python modules are analyzed normally.
-    return [
-        *collect_data_files('rapidocr_onnxruntime',includes=['config.yaml','models/*.onnx']),
-        *collect_data_files('extract_msg',includes=['data/**/*']),
-    ]
+# Imported from NumPy's C extension rather than Python bytecode. PyInstaller
+# 6.11.1's hook misses this NumPy 2.4 runtime module (Windows startup regression).
+NUMPY_RUNTIME_IMPORTS = ['numpy._core._exceptions']
 
 
 def validate_runtime_assets(entries, windows=True):
