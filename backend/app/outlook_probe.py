@@ -134,6 +134,7 @@ class MailStore:
             db.execute('CREATE TABLE IF NOT EXISTS mail (id TEXT PRIMARY KEY, payload TEXT NOT NULL, seen TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS mail_attachment (id TEXT PRIMARY KEY, mail_id TEXT NOT NULL, position INTEGER NOT NULL, metadata TEXT NOT NULL, content BLOB NOT NULL)')
             db.execute('CREATE INDEX IF NOT EXISTS attachment_mail ON mail_attachment(mail_id)')
+            db.execute('CREATE TABLE IF NOT EXISTS mail_identity (fingerprint TEXT PRIMARY KEY, mail_id TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS mail_state (key TEXT PRIMARY KEY, payload TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS mail_payments (mail_id TEXT PRIMARY KEY, payload TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS mail_payment_summary (mail_id TEXT PRIMARY KEY, payload TEXT NOT NULL)')
@@ -151,10 +152,31 @@ class MailStore:
             for row in rows:
                 assets=row.get('_attachments', [])
                 row={key:value for key,value in row.items() if key not in ('_attachments','attachment_details')}
+                # Keep copies from distinct PST stores in one matching index. Never
+                # merge using amount/business IDs, or incomplete attachment data.
+                origin=dict(folder=row.get('folder',''),store=row.get('outlook_store',''))
+                fingerprint=None
+                if row.get('source')=='outlook' and row.get('internet_message_id') and not row.get('truncated') and not row.get('attachment_warning') and len(assets)==len(row.get('attachments',[])) and all(a.get('raw') for a in assets):
+                    facts=[row.get(k,'') for k in ('internet_message_id','sender','subject','body')]
+                    facts.append([(a['name'],hashlib.sha256(a['raw']).hexdigest()) for a in assets])
+                    fingerprint=hashlib.sha256(json.dumps(facts,ensure_ascii=False).encode()).hexdigest()
+                    match=db.execute('SELECT mail_id FROM mail_identity WHERE fingerprint=?',(fingerprint,)).fetchone()
+                    if match:
+                        canonical=db.execute('SELECT payload FROM mail WHERE id=?',(match[0],)).fetchone()
+                        if canonical:
+                            previous=self.decode(canonical[0])
+                            sources=previous.get('sources',[dict(folder=previous.get('folder',''),store=previous.get('outlook_store',''))])
+                            if origin not in sources: sources.append(origin)
+                            previous['sources']=sources
+                            db.execute('UPDATE mail SET payload=? WHERE id=?',(self.encode(previous),match[0]))
+                            continue
+                row.setdefault('sources',[origin])
                 existed=db.execute('SELECT 1 FROM mail WHERE id=?',(row['id'],)).fetchone()
                 new+=not bool(existed)
                 db.execute('INSERT INTO mail VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload, seen=excluded.seen',
                            (row['id'],self.cipher.encrypt(json.dumps(row,ensure_ascii=False).encode()).decode(),datetime.now(timezone.utc).isoformat()))
+                if fingerprint:
+                    db.execute('INSERT OR REPLACE INTO mail_identity VALUES(?,?)',(fingerprint,row['id']))
                 for position, asset in enumerate(assets):
                     raw=asset.get('raw', b'')
                     digest=hashlib.sha256(raw).hexdigest()
@@ -242,6 +264,7 @@ class MailStore:
             return list(dict.fromkeys(unindexed+pending))
     def clear(self):
         with self.db() as db:
+            db.execute('DELETE FROM mail_identity')
             db.execute('DELETE FROM mail_attachment')
             db.execute('DELETE FROM mail')
             db.execute('DELETE FROM mail_payments')
@@ -270,22 +293,9 @@ def outlook_session():
 
 
 def list_folders():
-    rows=[]; errors=[]
+    from .mail_scope import folder_tree
     with outlook_session() as session:
-        for index in range(1,session.Stores.Count+1):
-            try:
-                store=session.Stores.Item(index)
-                inbox=store.GetDefaultFolder(6)
-                def visit(folder, path, depth):
-                    if depth>4 or len(rows)>=200: return
-                    rows.append(dict(id=folder.EntryID,store=store.StoreID,label=path))
-                    for child in range(1,folder.Folders.Count+1):
-                        sub=folder.Folders.Item(child)
-                        visit(sub,path+' / '+str(sub.Name),depth+1)
-                visit(inbox,str(store.DisplayName)+' / '+str(inbox.Name),0)
-            except Exception:
-                errors.append(f'第 {index} 个邮箱的收件箱无法读取，可能未登录或没有权限。')
-    return {'folders':rows,'errors':errors,'note':'列出各邮箱收件箱及最多四层子文件夹，上限 200 个；不列出其他文件夹。'}
+        return folder_tree(session)
 
 
 def scan_folder(folder, store_id, cutoff, limit):
@@ -337,6 +347,9 @@ def scan_folder(folder, store_id, cutoff, limit):
                      attachments=[str(attachments.Item(i).FileName) for i in range(1,min(attachments.Count,100)+1)],
                      _attachments=assets, attachment_warning='仅保留前 20 个附件。' if attachments.Count>MAX_ATTACHMENTS else '',
                      candidates=candidates(subject+'\n'+body[:200000]), **mail_sections(body[:200000]))
+            try:
+                row['internet_message_id']=str(item.PropertyAccessor.GetProperty('http://schemas.microsoft.com/mapi/proptag/0x1035001F') or '')
+            except Exception: row['internet_message_id']=''
             rows.append(row)
         except Exception as error:
             errors.append(f'第 {index} 项读取失败（{type(error).__name__}）。请在 Outlook 检查该项及权限提示；其余邮件继续读取。')

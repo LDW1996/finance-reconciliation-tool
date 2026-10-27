@@ -25,6 +25,7 @@ hiddenimports = [
     "app.mail_insights",
     "app.mail_workspace",
     "app.mail_sync",
+    "app.mail_scope",
     "app.mail_online",
     "app.google_sheets",
     "app.mail_attachments",

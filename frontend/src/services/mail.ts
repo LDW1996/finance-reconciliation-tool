@@ -15,6 +15,7 @@ export interface MailRelatedReceipts {
 
 export interface MailRow {
   id: string; subject: string; sender: string; received: string; source: string; folder: string
+  sources?: {folder:string;store:string}[]
   payment_summary?: MailPaymentSummary; payment_candidates?: MailPayment[]
   candidates: string[]; attachments: string[]; body?: string; truncated?: boolean
   latest_body?: string; quoted_body?: string; signature?: string
@@ -37,12 +38,14 @@ export interface MailStatus {
   busy: boolean; enabled: boolean; seconds: number; last_run: string | null; next_run: string | null
   error: string; errors: string[]; partial: boolean; new: number; read: number; outlook_supported: boolean
   store?: string; folder?: string; days?: number; limit?: number; folder_label?: string
+  folders?: {store:string;folder:string;label?:string}[]; include_children?:boolean; start_date?:string; end_date?:string
+  folders_total?:number; folders_done?:number
   analysis_busy?: boolean
   analysis_error?: string
   resume_on_start?: boolean; sync_phase?: 'history' | 'incremental'; sync_complete?: boolean
   sync_scanned?: number; sync_start?: string; sync_end?: string
 }
-export interface MailFolder { id: string; store: string; label: string }
+export interface MailFolder { id: string; store: string; label: string; name?:string; parent?:string|null; store_label?:string; selectable?:boolean }
 const client = axios.create({ baseURL: '/api/mail', headers: { 'X-Finance-Local': '1' }, timeout: 30000 })
 export const mailApi = {
   status: async () => (await client.get<MailStatus>('/status')).data,

@@ -1,6 +1,7 @@
 <template>
   <article class="payment-detail">
     <header class="source-header"><h2>{{ mail.subject || '（无主题）' }}</h2><p>{{ mail.sender || '发件人未提供' }} · {{ mail.received || '时间未提供' }}</p></header>
+    <details v-if="mail.source === 'outlook'"><summary>邮件存档来源<template v-if="mail.sources && mail.sources.length > 1"> · {{ mail.sources.length }} 处副本已合并</template></summary><p v-for="(source,index) in (mail.sources?.length ? mail.sources : [{folder:mail.folder,store:''}])" :key="index" class="muted">{{ source.folder || '目录未提供' }}</p></details>
     <section aria-label="付款信息">
       <div class="section-title"><h3>付款信息</h3><span class="status">{{ statusLabel }}</span></div>
       <label v-if="payments.length > 1" class="payment-picker">选择付款记录

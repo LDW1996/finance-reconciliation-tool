@@ -1,13 +1,15 @@
 """Local, opt-in mail polling. No dependency on iLog task execution."""
 
 from copy import deepcopy
+import json
+from datetime import date
 import sys
 from datetime import datetime, timedelta, timezone
 from threading import Lock, Thread, Timer
 from collections import deque
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from starlette.concurrency import run_in_threadpool
 
 from .outlook_probe import MailStore, data_path, list_folders, parse_eml, parse_msg, read_outlook, read_outlook_page
@@ -18,12 +20,35 @@ from .mail_online import OnlineLedger
 from .mail_insights import mail_summary, related_receipts
 
 
-class MailSelection(BaseModel):
+class FolderSelection(BaseModel):
     store: str = Field(min_length=1,max_length=4096)
     folder: str = Field(min_length=1,max_length=4096)
+    label: str = Field(default='',max_length=8192)
+
+
+class MailSelection(BaseModel):
+    store: str = Field(default='',max_length=4096)
+    folder: str = Field(default='',max_length=4096)
+    folders: list[FolderSelection] = Field(default_factory=list,max_length=200)
+    include_children: bool = False
+    start_date: date | None = None
+    end_date: date | None = None
     days: int = Field(default=90,ge=1,le=3650)
     limit: int = Field(default=100,ge=1,le=500)
     reset: bool = False
+
+    @model_validator(mode='after')
+    def valid_scope(self):
+        if not self.folders and not (self.store and self.folder):
+            raise ValueError('请至少选择一个邮箱或存档文件夹。')
+        if bool(self.start_date)!=bool(self.end_date) or (self.start_date and self.start_date>self.end_date):
+            raise ValueError('请选择完整且先后顺序正确的日期范围。')
+        return self
+
+    def options(self):
+        return dict(folders=[f.model_dump() for f in self.folders],include_children=self.include_children,
+                    start_date=self.start_date.isoformat() if self.start_date else None,
+                    end_date=self.end_date.isoformat() if self.end_date else None)
 
 
 class PollSettings(MailSelection):
@@ -57,16 +82,18 @@ class MailManager:
         self.sync=MailSync(store);self.workspace=MailWorkspace(store);self.online=OnlineLedger(self.workspace)
         self.paged_reader=paged_reader or (read_outlook_page if reader is read_outlook else None)
         saved=self.store.get_state('poll_settings',{})
-        self.state.update({k:v for k,v in saved.items() if k in ('seconds','store','folder','days','limit','resume_on_start')})
+        self.state.update({k:v for k,v in saved.items() if k in ('seconds','store','folder','days','limit','resume_on_start','folders','include_children','start_date','end_date')})
         for identity in self.store.recoverable_mail_ids(): self.analyze(identity)
         if saved.get('enabled') and saved.get('resume_on_start') and sys.platform=='win32':
-            self.configure(True,saved['store'],saved['folder'],saved['days'],saved['limit'],saved['seconds'],True)
+            self.configure(True,saved['store'],saved['folder'],saved['days'],saved['limit'],saved['seconds'],True,**{k:saved.get(k) for k in ('folders','include_children','start_date','end_date')})
 
     def status(self):
         with self.lock:
             progress=self.store.get_state('sync_progress',{})
             return {**deepcopy(self.state),'outlook_supported':sys.platform=='win32','analysis_busy':self.analysis_busy,
+                    'errors':self.state['errors'] or progress.get('errors',[]),
                     'sync_phase':progress.get('phase'),'sync_complete':progress.get('complete',False),
+                    'folders_total':progress.get('folders_total'),'folders_done':progress.get('folders_done'),
                     'sync_scanned':progress.get('scanned',0),'sync_start':progress.get('start'),'sync_end':progress.get('end')}
 
     def import_row(self, row):
@@ -119,7 +146,7 @@ class MailManager:
             payments=build_payments(updated)
             self.store.set_payments(identity,payments,mail_summary(updated,payments,indexed=True))
 
-    def start(self, store, folder, days, limit, generation=None):
+    def start(self, store, folder, days, limit, generation=None, **options):
         with self.lock:
             if generation is not None and (generation!=self.generation or not self.state['enabled']): return
             if self.state['busy']: raise ValueError('邮件正在读取，请等待完成后再操作。')
@@ -127,17 +154,30 @@ class MailManager:
                 self.generation+=1
                 if self.timer: self.timer.cancel()
             self.state.update(busy=True,error='',next_run=None)
-            self.state.update(store=store,folder=folder,days=days,limit=limit)
-        Thread(target=self._run,args=(store,folder,days,limit),daemon=True).start()
+            self.state.update(store=store,folder=folder,days=days,limit=limit,**options)
+            saved=self.store.get_state('poll_settings',{})
+            self.store.set_state('poll_settings',{**saved,'store':store,'folder':folder,'days':days,'limit':limit,**options})
+        Thread(target=self._run,args=(store,folder,days,limit,options),daemon=True).start()
 
-    def _run(self, store, folder, days, limit):
+    def _run(self, store, folder, days, limit, options=None):
+        options=options or {}
         try:
+            targets=options.get('folders')
             if self.paged_reader:
-                plan=self.sync.plan(store,folder,days)
-                result=self.paged_reader(store,folder,datetime.fromisoformat(plan['start']),datetime.fromisoformat(plan['end']),limit,plan['cursor'])
+                scope=json.dumps([sorted((f['store'],f['folder']) for f in targets),bool(options.get('include_children'))]) if targets else folder
+                plan=self.sync.plan(store,scope,days,start_date=options.get('start_date'),end_date=options.get('end_date'))
+                if plan['complete'] and options.get('start_date'):
+                    result=dict(rows=[],errors=plan.get('errors',[]),partial=False,cursor=None,read=0,
+                                folders_total=plan.get('folders_total'),folders_done=plan.get('folders_done'))
+                elif targets:
+                    from .mail_scope import read_scope_page
+                    result=read_scope_page(targets,bool(options.get('include_children')),datetime.fromisoformat(plan['start']),datetime.fromisoformat(plan['end']),limit,plan['cursor'])
+                else:
+                    result=self.paged_reader(store,folder,datetime.fromisoformat(plan['start']),datetime.fromisoformat(plan['end']),limit,plan['cursor'])
             else: result=self.reader(store,folder,datetime.now(timezone.utc)-timedelta(days=days),limit)
             new=self.store.save(result['rows'])
-            for row in result['rows']: self.analyze(row['id'])
+            for row in result['rows']:
+                if self.store.has_mail(row['id']): self.analyze(row['id'])
             if self.paged_reader: self.sync.commit(plan,result)
             update=dict(error='',errors=result['errors'],partial=result['partial'],new=new,read=len(result['rows']))
             if result['rows']: update['folder_label']=result['rows'][0].get('folder','Outlook 收件箱')
@@ -146,22 +186,26 @@ class MailManager:
                         f'读取失败（{type(error).__name__}），请检查 Outlook 登录、权限提示和本机数据目录。',new=0,read=0,errors=[],partial=False)
         with self.lock:
             self.state.update(**update,busy=False,last_run=datetime.now(timezone.utc).isoformat())
+            if options.get('start_date') and not update['partial'] and not update['error']:
+                self.state['enabled']=False
+                saved=self.store.get_state('poll_settings',{})
+                self.store.set_state('poll_settings',{**saved,'enabled':False})
             if self.state['enabled']:
                 generation=self.generation
                 delay=2 if self.paged_reader and self.state['partial'] and not self.state['error'] else self.state['seconds']
                 self.state['next_run']=(datetime.now(timezone.utc)+timedelta(seconds=delay)).isoformat()
-                self.timer=self.timer_factory(delay,lambda:self.start(*self.selection,generation=generation))
+                self.timer=self.timer_factory(delay,lambda:self.start(*self.selection,generation=generation,**self.selection_options))
                 self.timer.daemon=True; self.timer.start()
 
-    def configure(self, enabled, store, folder, days, limit, seconds, resume_on_start=False):
+    def configure(self, enabled, store, folder, days, limit, seconds, resume_on_start=False, **options):
         with self.lock:
             if enabled and self.state['busy']: raise ValueError('请等待当前读取完成后再开启定时读取。')
             self.generation+=1
             if self.timer: self.timer.cancel()
-            self.timer=None; self.selection=(store,folder,days,limit)
-            self.state.update(enabled=enabled,seconds=seconds,next_run=None,resume_on_start=resume_on_start,store=store,folder=folder,days=days,limit=limit)
-            self.store.set_state('poll_settings',dict(enabled=enabled,store=store,folder=folder,days=days,limit=limit,seconds=seconds,resume_on_start=resume_on_start))
-        if enabled: self.start(store,folder,days,limit)
+            self.timer=None; self.selection=(store,folder,days,limit); self.selection_options=options
+            self.state.update(enabled=enabled,seconds=seconds,next_run=None,resume_on_start=resume_on_start,store=store,folder=folder,days=days,limit=limit,**options)
+            self.store.set_state('poll_settings',dict(enabled=enabled,store=store,folder=folder,days=days,limit=limit,seconds=seconds,resume_on_start=resume_on_start,**options))
+        if enabled: self.start(store,folder,days,limit,**options)
         return self.status()
 
     def clear(self):
@@ -201,13 +245,13 @@ def create_router(require_local):
             if body.reset:
                 if manager().status()['busy'] or manager().status()['enabled']: raise ValueError('请先停止定时读取并等待本批完成，再重新补扫。')
                 manager().sync.reset()
-            manager().start(body.store,body.folder,body.days,body.limit)
+            manager().start(body.store,body.folder,body.days,body.limit,**body.options())
         except ValueError as error: raise HTTPException(409,str(error)) from None
         return manager().status()
 
     @router.put('/poll')
     def poll(body: PollSettings):
-        try: return manager().configure(body.enabled,body.store,body.folder,body.days,body.limit,body.seconds,body.resume_on_start)
+        try: return manager().configure(body.enabled,body.store,body.folder,body.days,body.limit,body.seconds,body.resume_on_start,**body.options())
         except ValueError as error: raise HTTPException(409,str(error)) from None
 
     @router.get('/messages')
