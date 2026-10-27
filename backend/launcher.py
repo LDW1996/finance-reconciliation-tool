@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import os
+from contextlib import redirect_stdout, redirect_stderr
+from pathlib import Path
+import traceback
 import socket
 import threading
 import time
@@ -62,5 +66,21 @@ def main() -> None:
     server.run()
 
 
+def run_with_diagnostics() -> int:
+    # CI opts in explicitly. Normal desktop launches keep their existing behavior.
+    target=os.environ.get('FINANCE_RECONCILE_STARTUP_LOG')
+    if not target:
+        main()
+        return 0
+    path=Path(target);path.parent.mkdir(parents=True,exist_ok=True)
+    with path.open('a',encoding='utf-8',buffering=1) as log, redirect_stdout(log), redirect_stderr(log):
+        try:main()
+        except SystemExit as error:return error.code if isinstance(error.code,int) else (0 if error.code is None else 1)
+        except Exception:
+            traceback.print_exc()
+            return 1
+    return 0
+
+
 if __name__ == "__main__":
-    main()
+    raise SystemExit(run_with_diagnostics())

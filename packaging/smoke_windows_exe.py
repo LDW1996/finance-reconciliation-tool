@@ -20,10 +20,13 @@ from PIL import Image, ImageDraw, ImageFont
 APP_URL = "http://127.0.0.1:8765"
 
 
-def wait_for_health(timeout_seconds: int = 45) -> None:
+def wait_for_health(timeout_seconds: int = 45, process=None, startup_log=None) -> None:
     deadline = time.time() + timeout_seconds
     last_error: Exception | None = None
     while time.time() < deadline:
+        if process is not None and process.poll() is not None:
+            detail=Path(startup_log).read_text(encoding='utf-8',errors='replace')[-24000:] if startup_log and Path(startup_log).exists() else 'No startup log was produced.'
+            raise RuntimeError(f'EXE exited before health check, code={process.poll()}:\n{detail}')
         try:
             response = httpx.get(f"{APP_URL}/api/health", timeout=2)
             if response.status_code == 200 and response.json().get("status") == "ok":
@@ -31,7 +34,8 @@ def wait_for_health(timeout_seconds: int = 45) -> None:
         except Exception as exc:
             last_error = exc
         time.sleep(1)
-    raise RuntimeError(f"EXE did not expose /api/health in time: {last_error}")
+    detail=Path(startup_log).read_text(encoding='utf-8',errors='replace')[-24000:] if startup_log and Path(startup_log).exists() else 'No startup log was produced.'
+    raise RuntimeError(f"EXE did not expose /api/health in time: {last_error}\n{detail}")
 
 
 def make_sample_workbook(path: Path) -> None:
@@ -176,18 +180,24 @@ def main() -> int:
 
     # Verify imports and the bundled Node bridge inside the EXE, rather than
     # accidentally testing the CI runner's installed Python packages.
+    diagnostics=Path('build')/'smoke-diagnostics'
+    diagnostics.mkdir(parents=True,exist_ok=True)
+    startup_log=(diagnostics/'startup.log').resolve()
+    startup_log.write_text('',encoding='utf-8')
+    process_env={**os.environ,'FINANCE_RECONCILE_STARTUP_LOG':str(startup_log)}
     with tempfile.TemporaryDirectory(prefix='finance-bundle-probe-') as probe_dir:
         report=Path(probe_dir)/'probe.json'
-        checked=subprocess.run([str(exe_path),'--verify-bundle',str(report)],timeout=90)
+        checked=subprocess.run([str(exe_path),'--verify-bundle',str(report)],timeout=90,env=process_env)
         if not report.exists():raise AssertionError('Frozen runtime probe did not produce a report')
         result=json.loads(report.read_text(encoding='utf-8'))
+        (diagnostics/'probe.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
         if checked.returncode or not result.get('ok'):
-            raise AssertionError(f'Frozen runtime components failed: {result}')
+            raise AssertionError(f'Frozen runtime components failed: {result}\n{startup_log.read_text(encoding="utf-8",errors="replace")[-24000:]}')
 
     sandbox = tempfile.TemporaryDirectory(prefix='finance-exe-smoke-')
-    process = subprocess.Popen([str(exe_path)], env={**os.environ,'FINANCE_RECONCILE_DATA_DIR':sandbox.name})
+    process = subprocess.Popen([str(exe_path)], env={**process_env,'FINANCE_RECONCILE_DATA_DIR':sandbox.name})
     try:
-        wait_for_health()
+        wait_for_health(process=process,startup_log=startup_log)
         assert_frontend_served()
         assert_ilog_local_services()
         assert_mail_local_services()

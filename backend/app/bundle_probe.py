@@ -4,6 +4,15 @@ import sys
 from pathlib import Path
 
 
+def check_server_configuration():
+    import uvicorn
+    # Loads FastAPI and the selected HTTP/WebSocket/lifespan implementations,
+    # without binding a port or opening a browser or reading user data.
+    config=uvicorn.Config('app.main:app',log_config=None)
+    config.load()
+    config.setup_event_loop()
+
+
 def check_browser_driver():
     from playwright.sync_api import sync_playwright
     # Starts the bundled Node bridge, not a browser, and never visits a website.
@@ -26,6 +35,7 @@ def check_outlook_components():
 
 def write_report(path, checks=None):
     checks=checks if checks is not None else {
+        'server_configuration':check_server_configuration,
         'playwright_driver':check_browser_driver,
         'msg_parser':check_msg_parser,
         'outlook_components':check_outlook_components,
@@ -33,7 +43,7 @@ def write_report(path, checks=None):
     results={}
     for name,check in checks.items():
         try:check();results[name]={'ok':True}
-        except Exception as error:results[name]={'ok':False,'error':f'{type(error).__name__}: {error}'}
+        except (Exception,SystemExit) as error:results[name]={'ok':False,'error':f'{type(error).__name__}: {error}'}
     ok=all(row['ok'] for row in results.values())
     Path(path).write_text(json.dumps(dict(ok=ok,checks=results),ensure_ascii=False,indent=2),encoding='utf-8')
     return ok

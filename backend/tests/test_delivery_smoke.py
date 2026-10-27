@@ -52,3 +52,16 @@ def test_packaged_mail_checks_do_not_connect_to_outlook(tmp_path,monkeypatch):
     assert all(url.startswith(module.APP_URL+'/api/mail/') for url in urls)
     assert not any('/folders' in url or '/scan' in url for url in urls)
     assert any(url.endswith('/import') for url in urls)
+
+
+def test_health_wait_reports_early_exit_with_startup_trace(tmp_path,monkeypatch):
+    import pytest
+    import httpx
+    path=Path(__file__).resolve().parents[2]/'packaging'/'smoke_windows_exe.py'
+    spec=importlib.util.spec_from_file_location('startup_smoke',path)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    log=tmp_path/'startup.log';log.write_text('ModuleNotFoundError: synthetic_runtime_dependency',encoding='utf-8')
+    process=type('Process',(),{'poll':lambda self:1})()
+    monkeypatch.setattr(module.httpx,'get',lambda *a,**kw: (_ for _ in ()).throw(httpx.ConnectError('not listening')))
+    with pytest.raises(RuntimeError,match='synthetic_runtime_dependency'):
+        module.wait_for_health(process=process,startup_log=log)
