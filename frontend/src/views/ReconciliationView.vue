@@ -25,6 +25,7 @@
           <el-menu-item index="marked" :disabled="isAnalyzing"><el-icon><Brush /></el-icon>{{ t('markedMode') }}</el-menu-item>
         </el-menu>
       </nav>
+      <p class="mode-description" aria-live="polite">{{ t(outputMode === 'marked' ? 'markedModeHelp' : 'detailedModeHelp') }}</p>
 
       <div class="layout-grid">
         <div class="work-column">
@@ -359,3 +360,7 @@ function downloadResult() {
   downloadBlob(result.value.blob, result.value.filename)
 }
 </script>
+
+<style scoped>
+.mode-description { margin: -8px 0 24px; color: var(--el-text-color-secondary); font-size: 14px; line-height: 1.6; }
+</style>

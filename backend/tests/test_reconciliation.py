@@ -222,3 +222,19 @@ def test_inspect_combined_workbook_rejects_missing_columns_and_wrong_extension()
 
     assert report["valid"] is False
     assert report["errors"] == ["文件格式错误，请选择 .xlsx 或 .xls 文件"]
+
+
+@pytest.mark.parametrize('tolerance,expected_yellow', [(100, True), (1, True), (0, False)])
+def test_one_rupiah_difference_colors_every_row_and_export_summary(tolerance, expected_yellow):
+    rows=[{'公司代码or伙伴公司':company,'分配':key,'原币金额':amount}
+          for company,key,amount in [('1703','ONE',10000),('2615','ONE',-9999),
+                                     ('1703','MULTI',6000),('1703','MULTI',4000),('2615','MULTI',-9999)]]
+    raw=workbook_bytes(rows).getvalue()
+    marked=reconcile_combined_workbook(BytesIO(raw),'one.xlsx',tolerance=tolerance,output_mode='marked')
+    sheet=load_workbook(BytesIO(marked.excel_bytes)).active
+    assert marked.summary['容差匹配']['分配数量']==(2 if expected_yellow else 0)
+    for row in sheet.iter_rows(min_row=2):
+        for cell in row:
+            assert (cell.fill.fgColor.rgb=='FFFFF2CC') is expected_yellow
+    detailed=reconcile_combined_workbook(BytesIO(raw),'one.xlsx',tolerance=tolerance,output_mode='detailed')
+    assert detailed.summary['容差匹配']==marked.summary['容差匹配']
