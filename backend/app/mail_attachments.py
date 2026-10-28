@@ -38,13 +38,13 @@ def capture_attachment(name, raw=None, size=None):
 
 def run_ocr(image):
     global _engine
-    # PDFium and inference are serialized by the caller's single worker.
+    # Each worker owns its engine; retain a lock for direct in-process calls.
     with _inference_lock:
         if _engine is None:
             import onnxruntime
             onnxruntime.disable_telemetry_events()
             from rapidocr_onnxruntime import RapidOCR
-            _engine = RapidOCR(intra_op_num_threads=2, inter_op_num_threads=1,
+            _engine = RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1,
                               det_use_cuda=False, cls_use_cuda=False, rec_use_cuda=False)
         import numpy as np
         rows, _ = _engine(np.array(image.convert('RGB')))

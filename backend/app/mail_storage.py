@@ -77,3 +77,7 @@ class AnalysisQueue:
 
     def done(self,identity):
         with self.store.db() as db:db.execute('DELETE FROM mail_analysis_queue WHERE mail_id=?',(identity,))
+
+    def release(self, identity):
+        with self.store.db() as db:
+            db.execute('UPDATE mail_analysis_queue SET claimed=0 WHERE mail_id=?',(identity,))

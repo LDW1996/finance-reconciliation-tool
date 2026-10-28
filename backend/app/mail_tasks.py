@@ -1,5 +1,8 @@
 """Local, opt-in mail polling. No dependency on iLog task execution."""
 
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+from concurrent.futures.process import BrokenProcessPool
+from contextlib import ExitStack
 from copy import deepcopy
 import json
 from datetime import date
@@ -7,6 +10,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from threading import Lock, Thread, Timer
 from .mail_storage import MailStorage, AnalysisQueue
+from .mail_workers import analysis_pool, configured_workers
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel, Field, model_validator
@@ -74,11 +78,12 @@ class OnlineWriteback(BaseModel):
 
 
 class MailManager:
-    def __init__(self, store, reader=read_outlook, timer_factory=Timer, analyzer=analyze_attachment, paged_reader=None):
+    def __init__(self, store, reader=read_outlook, timer_factory=Timer, analyzer=analyze_attachment, paged_reader=None, analysis_workers=None):
         self.store=store; self.reader=reader; self.timer_factory=timer_factory
         self.lock=Lock(); self.timer=None; self.generation=0; self.selection=None
         self.storage=MailStorage(store)
-        self.analyzer=analyzer; self.analysis_queue=AnalysisQueue(store); self.analysis_busy=False; self.analysis_current=None
+        self.analyzer=analyzer; self.analysis_queue=AnalysisQueue(store); self.analysis_busy=False; self.analysis_current=set()
+        self.analysis_workers=configured_workers(analysis_workers)
         self.state=dict(busy=False,enabled=False,seconds=300,last_run=None,next_run=None,error='',errors=[],partial=False,new=0,read=0)
         self.sync=MailSync(store);self.workspace=MailWorkspace(store);self.online=OnlineLedger(self.workspace)
         self.paged_reader=paged_reader or (read_outlook_page if reader is read_outlook else None)
@@ -98,7 +103,8 @@ class MailManager:
                     'errors':self.state['errors'] or progress.get('errors',[]),
                     'sync_phase':progress.get('phase'),'sync_complete':progress.get('complete',False),
                     'folders_total':progress.get('folders_total'),'folders_done':progress.get('folders_done'),
-                    'saved_total':self.store.mail_count(),'analysis_pending':len(self.analysis_queue)+int(self.analysis_current is not None),
+                    'saved_total':self.store.mail_count(),'analysis_pending':len(self.analysis_queue)+len(self.analysis_current),
+                    'analysis_active':len(self.analysis_current),'analysis_workers':self.analysis_workers,
                     'sync_scanned':progress.get('scanned',0),'sync_start':progress.get('start'),'sync_end':progress.get('end')}
 
     def import_row(self, row):
@@ -114,31 +120,70 @@ class MailManager:
             if row is None: raise ValueError('邮件记录不存在，请刷新列表。')
             summary=mail_summary(row,self.store.payment_index([identity]).get(identity,[]),indexed=False)
             self.store.set_payment_summary(identity,summary)
-            if identity!=self.analysis_current: self.analysis_queue.append((identity,retry))
+            if identity not in self.analysis_current: self.analysis_queue.append((identity,retry))
             if not self.analysis_busy:
+                self.state['analysis_error']=''
                 self.analysis_busy=True
                 Thread(target=self._analyze_queue,daemon=True).start()
 
     def _analyze_queue(self):
-        while True:
+        # Only this coordinator claims/acknowledges durable queue entries.
+        # At most N mails (and N attachment payloads) can be in flight.
+        pending = {}
+        stopping = False
+        try:
+            with ExitStack() as stack:
+                pool = None
+                if self.analyzer is analyze_attachment:
+                    pool = stack.enter_context(analysis_pool(self.analysis_workers))
+                controllers = stack.enter_context(ThreadPoolExecutor(max_workers=self.analysis_workers))
+                def analyze(raw, name):
+                    return pool.submit(analyze_attachment, raw, name).result() if pool else self.analyzer(raw, name)
+                while True:
+                    with self.lock:
+                        reason = self.storage.block_reason(reserve_bytes=32*1024**2)
+                        if reason:
+                            self.state['analysis_error'] = reason
+                            stopping = True
+                        while not stopping and self.analysis_queue and len(pending) < self.analysis_workers:
+                            identity, retry = self.analysis_queue.popleft()
+                            self.analysis_current.add(identity)
+                            future = controllers.submit(self._analyze_mail, identity, retry, analyze)
+                            pending[future] = identity
+                        if not pending:
+                            break
+                    completed, _ = wait(pending, timeout=.1, return_when=FIRST_COMPLETED)
+                    for future in completed:
+                        identity = pending.pop(future)
+                        try:
+                            future.result()
+                            with self.lock:
+                                self.analysis_queue.done(identity)
+                        except Exception:
+                            stopping = True
+                            with self.lock:
+                                self.analysis_queue.release(identity)
+                                self.state['analysis_error'] = '识别进程或结果保存异常，已暂停队列；请检查资源后重试或重启。'
+                        finally:
+                            with self.lock:
+                                self.analysis_current.discard(identity)
+        except Exception:
+            stopping = True
             with self.lock:
-                reason=self.storage.block_reason(reserve_bytes=32*1024**2)
-                if reason:self.state['analysis_error']=reason
-                if not self.analysis_queue or reason:
-                    self.analysis_busy=False
-                    return
-                identity,retry=self.analysis_queue.popleft();self.analysis_current=identity
-            try: self._analyze_mail(identity,retry)
-            except Exception:
-                with self.lock: self.state['analysis_error']='附件结果保存失败，请检查本机数据目录并重新识别。'
-                summary=mail_summary({},self.store.payment_index([identity]).get(identity,[]),indexed=True)
-                summary['status']='failed';self.store.set_payment_summary(identity,summary)
-            finally:
-                with self.lock:
-                    self.analysis_queue.done(identity)
-                    self.analysis_current=None
+                for identity in self.analysis_current:
+                    self.analysis_queue.release(identity)
+                self.analysis_current.clear()
+                self.state['analysis_error'] = '识别任务启动或保存失败，请检查本机资源并重试。'
+        finally:
+            # Keep busy until both pools have exited. New arrivals during
+            # shutdown stay queued, then start a fresh coordinator atomically.
+            with self.lock:
+                self.analysis_busy = False
+                if not stopping and self.analysis_queue:
+                    self.analysis_busy = True
+                    Thread(target=self._analyze_queue, daemon=True).start()
 
-    def _analyze_mail(self, identity, retry):
+    def _analyze_mail(self, identity, retry, analyzer=None):
         row=self.store.get(identity)
         for metadata in (row or {}).get('attachment_details',[]):
             allowed=('pending','running','failed') if retry else ('pending','running')
@@ -147,11 +192,14 @@ class MailManager:
             if not asset or not asset['raw']: continue
             self.store.update_attachment(identity,asset['id'],status='running',error='')
             try:
-                result=self.analyzer(asset['raw'],asset['name'])
-                self.store.update_attachment(identity,asset['id'],status='done',result=result,error='')
+                result=(analyzer or self.analyzer)(asset['raw'],asset['name'])
+            except (BrokenProcessPool, MemoryError):
+                raise
             except Exception as error:
                 message=str(error) if isinstance(error,ValueError) else f'识别失败（{type(error).__name__}），请检查文件或完整安装包。'
                 self.store.update_attachment(identity,asset['id'],status='failed',error=message)
+            else:
+                self.store.update_attachment(identity,asset['id'],status='done',result=result,error='')
         from .mail_matching import build_payments
         updated=self.store.get(identity)
         if updated:
