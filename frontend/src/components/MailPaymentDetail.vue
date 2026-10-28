@@ -41,7 +41,7 @@
       </template>
     </section>
     <section class="optional"><h3>业务编号 <small>可选补充</small></h3><p>{{ businessIds.length ? businessIds.join('、') : '未提及业务编号，可用邮件信息备注' }}</p><p v-if="businessIds.length" class="muted">邮件中的号码仅作关联线索，需核对与本笔付款的关系。</p><span class="muted">建议备注</span><p class="remark">{{ suggestedRemark }}</p></section>
-    <details><summary>付款原件与识别依据</summary><MailAttachments :key="mail.id" :assets="readableAssets" :legacy-names="mail.attachments || []" :busy="!!analysisBusy" :warning="readableWarning(mail.attachment_warning || '')" @analyze="$emit('analyze')" /></details>
+    <details><summary>付款原件与识别依据</summary><MailAttachments :mail-id="mail.id" :key="mail.id" :assets="readableAssets" :legacy-names="mail.attachments || []" :busy="!!analysisBusy" :warning="readableWarning(mail.attachment_warning || '')" @analyze="$emit('analyze')" /></details>
     <details><summary>邮件正文与历史引用</summary>
       <p v-if="mail.truncated" class="warning">正文过长，仅保留前 20 万字符</p>
       <el-tabs :key="mail.id" model-value="latest">

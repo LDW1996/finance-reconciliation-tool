@@ -2,7 +2,7 @@
 import shutil
 
 GIB=1024**3
-DEFAULTS=dict(max_gb=10,min_free_gb=5,queue_limit=500)
+DEFAULTS=dict(max_gb=10,min_free_gb=5,queue_limit=500,preview_cache_mb=256)
 
 
 class MailStorage:
@@ -15,17 +15,23 @@ class MailStorage:
 
     def configure(self,values):
         settings={**self.settings(),**values}
-        for key,low,high in [('max_gb',1,1000),('min_free_gb',1,100),('queue_limit',100,5000)]:
+        for key,low,high in [('max_gb',1,1000),('min_free_gb',1,100),('queue_limit',100,5000),('preview_cache_mb',32,2048)]:
             value=settings[key]
             if isinstance(value,bool) or not isinstance(value,int) or not low<=value<=high:
                 raise ValueError('保存容量、剩余空间或队列上限超出允许范围。')
         self.store.set_state('mail_storage_settings',settings)
+        from .mail_assets import PreviewCache
+        PreviewCache(self.store).prune()
         return settings
 
     def disk_free(self):
         return shutil.disk_usage(self.store.path.parent).free
 
     def used_bytes(self):
+        from .mail_assets import PreviewCache
+        return self.database_bytes()+PreviewCache(self.store).used_bytes()
+
+    def database_bytes(self):
         return sum(p.stat().st_size for p in self.store.path.parent.glob(self.store.path.name+'*') if p.is_file())
 
     def block_reason(self,reserve_bytes=0):
@@ -41,9 +47,13 @@ class MailStorage:
         with self.store.db() as db:
             count=db.execute('SELECT COUNT(*) FROM mail').fetchone()[0]
             attachment_count,raw,metadata=db.execute('SELECT COUNT(*),COALESCE(SUM(LENGTH(content)),0),COALESCE(SUM(LENGTH(metadata)),0) FROM mail_attachment').fetchone()
+            raw+=db.execute('SELECT COALESCE(SUM(LENGTH(content)),0) FROM mail_blob').fetchone()[0]
+            unique=db.execute('SELECT COUNT(*) FROM mail_blob').fetchone()[0]
             reusable=db.execute('PRAGMA freelist_count').fetchone()[0]*db.execute('PRAGMA page_size').fetchone()[0]
         settings=self.settings();used=self.used_bytes()
-        return dict(settings=settings,mail_count=count,attachment_count=attachment_count,used_bytes=used,
+        from .mail_assets import PreviewCache
+        cache=PreviewCache(self.store)
+        return dict(database_bytes=self.database_bytes(),preview_cache_bytes=cache.used_bytes(),unique_attachments=unique,settings=settings,mail_count=count,attachment_count=attachment_count,used_bytes=used,
                     attachment_bytes=raw,recognition_bytes=metadata,reusable_bytes=reusable,
                     free_bytes=self.disk_free(),data_directory=str(self.store.path.parent),
                     warning=used>=settings['max_gb']*GIB*.8,blocked_reason=self.block_reason())

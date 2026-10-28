@@ -205,7 +205,7 @@ def _page_result(image, number, native_text=''):
     else:
         lines, method = run_ocr(image), 'ocr'
     return dict(number=number, method=method, width=image.width, height=image.height,
-                preview=_preview(image), lines=lines, text='\n'.join(l['text'] for l in lines),
+                preview='', lines=lines, text='\n'.join(l['text'] for l in lines),
                 fields=extract_fields(lines, number))
 
 
