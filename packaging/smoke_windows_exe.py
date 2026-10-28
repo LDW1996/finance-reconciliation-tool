@@ -14,7 +14,6 @@ from pathlib import Path
 import httpx
 import pandas as pd
 from openpyxl import load_workbook
-from PIL import Image, ImageDraw, ImageFont
 
 
 APP_URL = "http://127.0.0.1:8765"
@@ -127,6 +126,7 @@ def assert_ilog_local_services() -> None:
 
 
 def assert_mail_local_services() -> None:
+    from PIL import Image, ImageDraw, ImageFont
     # Check bundling only; CI must not connect to Outlook or any real mailbox.
     headers={'X-Finance-Local':'1'}
     for endpoint in ('/api/mail/status','/api/mail/messages'):
@@ -166,7 +166,15 @@ def assert_mail_local_services() -> None:
             raise AssertionError('Frozen OCR failed to read the synthetic amount')
 
 
+def assert_excel_isolation() -> None:
+    for path in ('/api/ilog/accounts','/api/ilog/tasks','/api/mail/status','/api/mail/messages'):
+        for method in ('GET','POST'):
+            response=httpx.request(method,APP_URL+path,json={} if method=='POST' else None,timeout=10)
+            if response.status_code!=404:raise AssertionError('Excel edition exposes forbidden API: '+path)
+
+
 def main() -> int:
+    excel_only='--excel-only' in sys.argv
     exe_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("dist") / "ilog解锁工具.exe"
     if not exe_path.exists():
         raise FileNotFoundError(exe_path)
@@ -199,8 +207,11 @@ def main() -> int:
     try:
         wait_for_health(process=process,startup_log=startup_log)
         assert_frontend_served()
-        assert_ilog_local_services()
-        assert_mail_local_services()
+        if excel_only:
+            assert_excel_isolation()
+        else:
+            assert_ilog_local_services()
+            assert_mail_local_services()
         with tempfile.TemporaryDirectory() as temp_dir:
             sample_path = Path(temp_dir) / "sample.xlsx"
             make_sample_workbook(sample_path)

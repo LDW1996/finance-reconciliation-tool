@@ -2,11 +2,27 @@ name: Build Windows EXE
 
 on:
   workflow_dispatch:
+    inputs:
+      edition:
+        description: "打包版本：full 完整版 / excel 仅对账 / all 两种都打"
+        required: true
+        default: full
+        type: choice
+        options:
+          - full
+          - excel
+          - all
 
 jobs:
   build:
+    name: Build ${{ matrix.edition }}
     runs-on: windows-latest
-
+    strategy:
+      fail-fast: false
+      matrix:
+        edition: ${{ fromJSON(inputs.edition == 'all' && '["full","excel"]' || inputs.edition == 'excel' && '["excel"]' || '["full"]') }}
+    env:
+      EXE_NAME: ${{ matrix.edition == 'excel' && 'Excel对账工具' || 'ilog解锁工具' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -20,12 +36,13 @@ jobs:
             backend/requirements.txt
             backend/requirements-dev.txt
             packaging/requirements-build.txt
+            packaging/requirements-excel-build.txt
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: "npm"
+          cache: npm
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend dependencies
@@ -37,41 +54,73 @@ jobs:
         working-directory: frontend
         env:
           VITE_BUILD_COMMIT: ${{ github.sha }}
+          VITE_EDITION: ${{ matrix.edition }}
 
       - name: Install Python dependencies
+        shell: pwsh
         run: |
-          python -m pip install --disable-pip-version-check -r packaging\requirements-build.txt
+          if ('${{ matrix.edition }}' -eq 'excel') {
+            python -m pip install --disable-pip-version-check -r packaging\requirements-excel-build.txt
+          } else {
+            python -m pip install --disable-pip-version-check -r packaging\requirements-build.txt
+          }
 
       - name: Run tests
-        run: python -m pytest backend\tests -q
+        shell: pwsh
+        run: |
+          if ('${{ matrix.edition }}' -eq 'excel') {
+            python -m pytest backend\tests\test_excel_edition.py backend\tests\test_reconciliation.py backend\tests\test_launcher.py -q
+          } else {
+            python -m pytest backend\tests -q
+          }
         env:
           PYTHONPATH: backend
 
       - name: Build EXE
-        run: pyinstaller --clean --noconfirm packaging\finance-reconcile.spec
+        shell: pwsh
+        run: |
+          if ('${{ matrix.edition }}' -eq 'excel') {
+            pyinstaller --clean --noconfirm packaging\excel-reconcile.spec
+          } else {
+            pyinstaller --clean --noconfirm packaging\finance-reconcile.spec
+          }
 
       - name: Smoke test EXE
-        run: python packaging\smoke_windows_exe.py "dist\ilog解锁工具.exe"
+        shell: pwsh
+        run: |
+          if ('${{ matrix.edition }}' -eq 'excel') {
+            python packaging\smoke_windows_exe.py "dist\$env:EXE_NAME.exe" --excel-only
+          } else {
+            python packaging\smoke_windows_exe.py "dist\$env:EXE_NAME.exe"
+          }
 
       - name: Copy user guide
-        run: copy packaging\财务人员使用说明.txt dist\财务人员使用说明.txt
+        shell: pwsh
+        run: |
+          if ('${{ matrix.edition }}' -eq 'excel') {
+            Copy-Item "packaging\Excel对账使用说明.txt" "dist\使用说明.txt"
+          } else {
+            Copy-Item "packaging\财务人员使用说明.txt" "dist\使用说明.txt"
+          }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ilog解锁工具
+          name: ${{ env.EXE_NAME }}
           compression-level: 0
+          if-no-files-found: error
           path: |
-            dist/ilog解锁工具.exe
-            dist/财务人员使用说明.txt
+            dist/${{ env.EXE_NAME }}.exe
+            dist/使用说明.txt
 
       - name: Upload bundle inventory
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: build-diagnostics
+          name: build-diagnostics-${{ matrix.edition }}
           if-no-files-found: ignore
           path: |
             build/bundle-size-report.json
             build/smoke-diagnostics/
             build/finance-reconcile/warn-finance-reconcile.txt
+            build/excel-reconcile/warn-excel-reconcile.txt

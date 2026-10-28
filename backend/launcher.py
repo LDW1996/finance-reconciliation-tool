@@ -45,15 +45,17 @@ def show_port_error() -> None:
         print(message, file=sys.stderr)
 
 
-def main() -> None:
+def main(app_target="app.main:app", bundle_report=None) -> None:
     if len(sys.argv)==3 and sys.argv[1]=='--verify-bundle':
-        from app.bundle_probe import write_report
-        raise SystemExit(0 if write_report(sys.argv[2]) else 1)
+        if bundle_report is None:
+            from app.bundle_probe import write_report
+            bundle_report=write_report
+        raise SystemExit(0 if bundle_report(sys.argv[2]) else 1)
     if port_in_use():
         show_port_error()
         return
     config = uvicorn.Config(
-        "app.main:app",
+        app_target,
         host=HOST,
         port=PORT,
         log_level="warning",
@@ -66,15 +68,15 @@ def main() -> None:
     server.run()
 
 
-def run_with_diagnostics() -> int:
+def run_with_diagnostics(app_target="app.main:app", bundle_report=None) -> int:
     # CI opts in explicitly. Normal desktop launches keep their existing behavior.
     target=os.environ.get('FINANCE_RECONCILE_STARTUP_LOG')
     if not target:
-        main()
+        main(app_target, bundle_report)
         return 0
     path=Path(target);path.parent.mkdir(parents=True,exist_ok=True)
     with path.open('a',encoding='utf-8',buffering=1) as log, redirect_stdout(log), redirect_stderr(log):
-        try:main()
+        try:main(app_target, bundle_report)
         except SystemExit as error:return error.code if isinstance(error.code,int) else (0 if error.code is None else 1)
         except Exception:
             traceback.print_exc()
