@@ -5,7 +5,7 @@ scoreable fields cleared; evidence remains available for human inspection.
 """
 
 import csv
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from difflib import SequenceMatcher
 from hashlib import sha256
@@ -226,6 +226,29 @@ def _business_ids(text):
     return list(dict.fromkeys(v for v in re.findall(pattern, text) if any(c.isdigit() for c in v)))
 
 
+def effective_payment_date(payment: dict) -> dict:
+    """Apply the date rule at read time too, so old OCR indexes remain usable."""
+    if payment.get('ambiguous') or _date(payment.get('date')):
+        return payment
+    day = _date(payment.get('received'))
+    if not day:
+        return payment
+    result = dict(payment, date=day, date_source='mail_received')
+    evidence = dict(payment.get('evidence') or {})
+    evidence['date'] = [dict(value=day, source='mail_received', quote=_text(payment.get('received')),
+                             note='未识别到明确付款日期，使用邮件时间匹配，并非凭证付款日期。')]
+    result['evidence'] = evidence
+    note = '未识别到明确付款日期，使用邮件时间匹配。'
+    result['warnings'] = list(dict.fromkeys([w for w in payment.get('warnings', []) if w not in ('Missing date', 'Missing date: date similarity receives 0 points')] + [note]))
+    remark = _text(payment.get('remark')).replace('日期未识别', day + '（邮件时间代用）')
+    if '邮件时间代用' not in remark:
+        remark += ('\n' if remark else '') + '匹配日期：' + day + '（邮件时间代用）'
+    result['remark'] = remark
+    fingerprint = '|'.join((_name(result.get('payer')), day, result.get('amount') or '', result.get('currency') or ''))
+    result['duplicate_key'] = sha256(fingerprint.encode()).hexdigest()
+    return result
+
+
 def build_payments(mail: dict) -> list[dict]:
     """One payment per attachment page; never combine parts across pages/mail.
 
@@ -296,7 +319,7 @@ def build_payments(mail: dict) -> list[dict]:
             business_ids=ids, remark='\n'.join(remarks), search_info=search, evidence=evidence, warnings=warnings,
             duplicate_key=sha256(fingerprint.encode()).hexdigest(), attachment_sha256=asset.get('sha256') or '',
             ambiguous=ambiguous))
-    return result
+    return [effective_payment_date(payment) for payment in result]
 
 
 def _payer_score(left, right):
@@ -345,32 +368,52 @@ def _group_payments(payments):
 
 
 def rank_receipts(receipts: list, payments: list, day_window=3, limit=3) -> list:
-    """Exact amount is mandatory; known currency/date conflicts exclude a match.
+    """Date window is mandatory; amount/currency differences lower similarity.
 
     candidate_count is the deduplicated count before limit. Related search info
     is a list of {mail_id, search_info}; no scores are added for repeated mail.
     """
     if day_window < 0 or limit < 0:
         raise ValueError('day_window and limit must be nonnegative')
-    groups = _group_payments(payments)
-    by_amount={}
+    groups = _group_payments([effective_payment_date(payment) for payment in payments])
+    by_date={}
     for group in groups:
-        if not group[0].get('ambiguous'):
-            by_amount.setdefault(_amount(group[0].get('amount')),[]).append(group)
+        day=_date(group[0].get('date'))
+        if day and not group[0].get('ambiguous'):
+            by_date.setdefault(day,[]).append(group)
     results = []
     for receipt in receipts:
         candidates = []
         amount = _amount(receipt.get('amount'))
-        for group in by_amount.get(amount,[]) if amount is not None else []:
+        receipt_day=_date(receipt.get('date'))
+        nearby=[]
+        if receipt_day:
+            day=date.fromisoformat(receipt_day)
+            for offset in range(-day_window,day_window+1):
+                nearby.extend(by_date.get((day+timedelta(days=offset)).isoformat(),[]))
+        for group in nearby if amount is not None else []:
             payment = group[0]
-            if payment.get('ambiguous') or amount is None or _amount(payment.get('amount')) != amount:
+            other_amount=_amount(payment.get('amount'))
+            if payment.get('ambiguous') or other_amount is None:
+                continue
+            payer_score, warning = _payer_score(receipt.get('payer'), payment.get('payer'))
+            if other_amount!=amount and payer_score<18:
                 continue
             rc, pc = _currency(receipt.get('currency')), _currency(payment.get('currency'))
-            if rc and pc and rc != pc:
-                continue
             warnings = list(payment.get('warnings') or [])
-            amount_score = 50 if rc and pc else 0
-            if not rc or not pc:
+            if other_amount==amount:
+                amount_score=50
+            else:
+                delta=abs(Decimal(amount)-Decimal(other_amount))
+                base=max(abs(Decimal(amount)),abs(Decimal(other_amount)))
+                relative=delta/base if base else Decimal(0)
+                amount_score=35 if relative<=Decimal('.01') else 25 if relative<=Decimal('.05') else 15 if relative<=Decimal('.10') else 0
+                warnings.append(f'金额不一致：流水 {amount}，邮件 {other_amount}；请核对差额或拆分付款。')
+            if rc and pc and rc!=pc:
+                amount_score=0
+                warnings.append(f'币种不一致：流水 {rc}，邮件 {pc}；金额项计 0 分，未进行汇率换算，请核对原始凭证。')
+            elif not rc or not pc:
+                amount_score=0
                 warnings.append('Unknown currency: amount similarity receives 0 points; no currency inferred')
             rd, pd = _date(receipt.get('date')), _date(payment.get('date'))
             date_score = 0
@@ -380,8 +423,8 @@ def rank_receipts(receipts: list, payments: list, day_window=3, limit=3) -> list
                     continue
                 date_score = max(0, 20 - gap * 5)
             else:
-                warnings.append('Missing date: date similarity receives 0 points')
-            payer_score, warning = _payer_score(receipt.get('payer'), payment.get('payer'))
+                # An undated candidate must never bypass the configured window.
+                continue
             if warning:
                 warnings.append(warning.lower())
             breakdown = dict(amount=amount_score, payer=payer_score, date=date_score)

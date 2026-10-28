@@ -265,13 +265,14 @@ class MailStore:
             if summary is not None:db.execute('INSERT INTO mail_payment_summary VALUES(?,?) ON CONFLICT(mail_id) DO UPDATE SET payload=excluded.payload',(identity,self.encode(summary)))
             else:db.execute('DELETE FROM mail_payment_summary WHERE mail_id=?',(identity,))
     def payment_index(self, identities=None):
+        from .mail_matching import effective_payment_date
         with self.db() as db:
             if identities is not None:
                 if not identities:return {}
                 query='SELECT mail_id,payload FROM mail_payments WHERE mail_id IN ('+','.join('?' for _ in identities)+')'
                 rows=db.execute(query,identities)
             else:rows=db.execute('SELECT mail_id,payload FROM mail_payments')
-            return {key:self.decode(payload) for key,payload in rows}
+            return {key:[effective_payment_date(p) for p in self.decode(payload)] for key,payload in rows}
     def payment_summaries(self,identities=None):
         with self.db() as db:
             if identities is not None:
@@ -282,8 +283,9 @@ class MailStore:
     def set_payment_summary(self,identity,summary):
         with self.db() as db:db.execute('INSERT INTO mail_payment_summary VALUES(?,?) ON CONFLICT(mail_id) DO UPDATE SET payload=excluded.payload',(identity,self.encode(summary)))
     def payment_rows(self):
+        from .mail_matching import effective_payment_date
         with self.db() as db:
-            return [payment for payload, in db.execute('SELECT payload FROM mail_payments') for payment in self.decode(payload)]
+            return [effective_payment_date(payment) for payload, in db.execute('SELECT payload FROM mail_payments') for payment in self.decode(payload)]
     def recoverable_mail_ids(self):
         with self.db() as db:
             unindexed=[key for key, in db.execute('SELECT id FROM mail WHERE id NOT IN (SELECT mail_id FROM mail_payments)')]

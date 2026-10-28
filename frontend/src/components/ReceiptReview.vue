@@ -41,7 +41,7 @@ function explanation(field: typeof fields[number]) {
   if (absent.length) return `${absent.join('、')}未提供`
   if (field.key === 'amount') {
     if (!knownCurrency(props.row.receipt.currency) || !knownCurrency(candidate.currency)) return '币种未知，需核实'
-    if (props.row.receipt.currency.trim().toUpperCase() !== candidate.currency.trim().toUpperCase()) return '币种不同，不匹配'
+    if (props.row.receipt.currency.trim().toUpperCase() !== candidate.currency.trim().toUpperCase()) return '币种不同，金额项 0 分，需核实'
     return points >= field.max ? '金额一致' : '金额不一致'
   }
   if (field.key === 'date') {

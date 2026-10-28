@@ -63,7 +63,9 @@ def test_reverse_selected_payment_never_uses_other_page(tmp_path):
     store=MailStore(tmp_path/'mail.sqlite3');workspace=MailWorkspace(store)
     workspace.import_ledger(ledger_bytes(),'bank.xlsx')
     store.set_payments('mail',[payment(),{**payment(),'id':'different-payment','page':2,'amount':'999.00'}])
-    assert related_receipts(workspace,'mail',payment_id='different-payment')['total_rows']==0
+    selected=related_receipts(workspace,'mail',payment_id='different-payment')
+    assert selected['total_rows']==2
+    assert all(c['payment_id']=='different-payment' and c['amount']=='999.00' and c['score']<100 for row in selected['rows'] for c in row['candidates'])
     assert related_receipts(workspace,'mail',payment_id='payment')['total_rows']==2
     with pytest.raises(ValueError):related_receipts(workspace,'mail',payment_id='not-owned')
 

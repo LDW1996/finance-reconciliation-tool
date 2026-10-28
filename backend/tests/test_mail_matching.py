@@ -89,11 +89,11 @@ def test_ambiguous_page_not_scoreable_and_pages_not_combined():
     assert rank_receipts([receipt()], payments)[0]['candidates'] == []
 
 
-def test_latest_body_only_and_no_sender_or_received_fallback():
+def test_latest_body_only_no_sender_fallback_but_received_date_fallback():
     source = mail(attachment_details=[], latest_body='Amount: IDR 1,234.00',
                   body='Payer Name: Old Company\nAmount: IDR 9,000.00', quoted_body='20 Sept 2026')
     payment = build_payments(source)[0]
-    assert payment['payer'] is None and payment['date'] is None
+    assert payment['payer'] is None and payment['date'] == '2026-09-21'
     assert payment['amount'] == '1234.00'
     assert build_payments(mail(attachment_details=[], latest_body='', body='Amount: IDR 100')) == []
 
@@ -109,10 +109,10 @@ def test_scores_dates_and_ocr_spacing(gap, points):
 
 def test_currency_amount_date_filters_and_missing_fields():
     payment = build_payments(mail())[0]
-    for changes in [dict(amount='1235'), dict(currency='USD'), dict(date='2026-10-01')]:
+    for changes in [dict(date='2026-10-01')]:
         assert not rank_receipts([receipt()], [{**payment, **changes}])[0]['candidates']
     candidate = rank_receipts([receipt()], [{**payment, 'currency': '', 'payer': None, 'date': None}])[0]['candidates'][0]
-    assert candidate['score'] == 0
+    assert candidate['score'] == 15
     assert any('currency' in w for w in candidate['warnings'])
     wrong = rank_receipts([receipt()], [{**payment, 'payer': 'Completely Different'}])[0]['candidates'][0]
     assert wrong['breakdown']['payer'] == 0
@@ -163,7 +163,7 @@ def test_pages_never_supply_each_others_fields_or_dates():
     payments = build_payments(source)
     assert len(payments) == 2
     assert payments[0]['payer'] is None
-    assert payments[1]['amount'] is None and payments[1]['date'] is None
+    assert payments[1]['amount'] is None and payments[1]['date'] == '2026-09-21'
     candidate = rank_receipts([receipt()], payments)[0]['candidates'][0]
     assert candidate['score'] == 70
 
@@ -222,3 +222,53 @@ def test_searchable_metadata_and_remark_include_mail_clues_or_subject():
 def test_beneficiary_name_is_not_a_business_id():
     payment=build_payments(mail(subject='SITCLOGISTIKINDONESIA'))[0]
     assert payment['business_ids']==[]
+
+
+def test_missing_payment_date_uses_mail_date_and_excludes_other_year():
+    source=mail(received='2026-09-21T09:00:00+07:00')
+    source['attachment_details'][0]['result']['pages'][0]['fields'].pop('date')
+    payment=build_payments(source)[0]
+    assert payment['date']=='2026-09-21'
+    assert payment['date_source']=='mail_received'
+    assert payment['evidence']['date'][0]['source']=='mail_received'
+    assert '邮件时间' in payment['remark']
+    assert not rank_receipts([receipt(date='2025-09-21')],[payment],day_window=3)[0]['candidates']
+    assert rank_receipts([receipt(date='2026-09-24')],[payment],day_window=3)[0]['candidates']
+    assert not rank_receipts([receipt(date='2026-09-25')],[payment],day_window=3)[0]['candidates']
+
+
+def test_old_index_missing_date_uses_received_without_reprocessing_ocr():
+    payment=dict(id='old',mail_id='m',amount='1234.00',currency='IDR',payer='EXAMPLETRADING',date=None,received='2026-09-21T01:00:00Z')
+    assert not rank_receipts([receipt(date='2025-09-21')],[payment])[0]['candidates']
+    candidate=rank_receipts([receipt(date='2026-09-21')],[payment],day_window=0)[0]['candidates'][0]
+    assert candidate['date']=='2026-09-21'
+    assert candidate['date_source']=='mail_received'
+    assert payment['date'] is None
+
+
+def test_no_payment_or_mail_date_cannot_match_by_amount_alone():
+    payment=dict(id='old',mail_id='m',amount='1234.00',currency='IDR',date=None,received='not a date')
+    assert not rank_receipts([receipt()],[payment])[0]['candidates']
+
+
+def test_explicit_payment_date_takes_priority_over_mail_date():
+    payment=build_payments(mail(received='2025-01-01T00:00:00Z'))[0]
+    assert payment['date']=='2026-09-20'
+    assert rank_receipts([receipt()],[payment],day_window=0)[0]['candidates']
+
+
+def test_amount_difference_retains_payer_date_match_at_lower_score():
+    payment=build_payments(mail())[0]
+    exact=rank_receipts([receipt()],[payment])[0]['candidates'][0]
+    changed=rank_receipts([receipt()],[{**payment,'amount':'1240.00'}])[0]['candidates'][0]
+    assert 0<changed['score']<exact['score']
+    assert any('金额' in w for w in changed['warnings'])
+    assert not rank_receipts([receipt()],[{**payment,'amount':'1240.00','payer':'Unrelated Company'}])[0]['candidates']
+
+
+def test_currency_conflict_keeps_candidate_but_lowers_score():
+    payment=build_payments(mail())[0]
+    candidate=rank_receipts([receipt()],[{**payment,'currency':'USD'}])[0]['candidates'][0]
+    assert candidate['score']<100
+    assert any('币种' in w for w in candidate['warnings'])
+    assert not rank_receipts([receipt(date='2025-09-20')],[{**payment,'currency':'USD'}])[0]['candidates']
