@@ -35,6 +35,7 @@ export interface MailAttachment {
   }
 }
 export interface MailStatus {
+  saved_total?:number; analysis_pending?:number
   busy: boolean; enabled: boolean; seconds: number; last_run: string | null; next_run: string | null
   error: string; errors: string[]; partial: boolean; new: number; read: number; outlook_supported: boolean
   store?: string; folder?: string; days?: number; limit?: number; folder_label?: string
@@ -49,6 +50,7 @@ export interface MailFolder { id: string; store: string; label: string; name?:st
 const client = axios.create({ baseURL: '/api/mail', headers: { 'X-Finance-Local': '1' }, timeout: 30000 })
 export const mailApi = {
   status: async () => (await client.get<MailStatus>('/status')).data,
+  messagePage: async (params:{page:number;page_size:number;keyword:string;payment_filter:string}) => (await client.get<{rows:MailRow[];total:number;total_saved:number;page:number;page_size:number}>('/messages/page',{params})).data,
   messages: async () => (await client.get<MailRow[]>('/messages')).data,
   message: async (id: string) => (await client.get<MailRow>(`/messages/${encodeURIComponent(id)}`)).data,
   receipts: async (id: string, limit = 5, dayWindow = 3, paymentId?:string) =>

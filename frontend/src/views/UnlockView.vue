@@ -107,7 +107,8 @@
       <template #footer><el-button :icon="Download" :disabled="!historyTask" @click="exportResults(historyTask || undefined)">导出本任务</el-button><el-button @click="historyDetailOpen=false">关闭</el-button></template>
     </el-dialog>
     <section v-if="view === 'retention'" class="management-section retention-settings">
-      <h2>记录保存</h2>
+      <MailStorageSettings />
+      <h2>解锁记录保存</h2>
       <el-form label-position="top" :disabled="retentionSaving" class="retention-fields">
         <el-form-item label="截图保留天数"><el-input-number v-model="retentionForm.screenshot_days" :min="1" :max="36500" controls-position="right"/></el-form-item>
         <el-form-item label="任务结果保留天数"><el-input-number v-model="retentionForm.record_days" :min="1" :max="36500" controls-position="right"/></el-form-item>
@@ -152,6 +153,7 @@
 <script setup lang="ts">
 import { computed, ref, onBeforeUnmount, onMounted, watch } from 'vue'
 import axios from 'axios'
+import MailStorageSettings from '../components/MailStorageSettings.vue'
 import { User, Unlock, VideoPlay, VideoPause, Download, RefreshRight, InfoFilled, List, Plus, ArrowLeft, Clock, Setting } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { downloadBlob } from '../services/api'

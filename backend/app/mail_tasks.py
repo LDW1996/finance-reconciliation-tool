@@ -6,7 +6,7 @@ from datetime import date
 import sys
 from datetime import datetime, timedelta, timezone
 from threading import Lock, Thread, Timer
-from collections import deque
+from .mail_storage import MailStorage, AnalysisQueue
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel, Field, model_validator
@@ -77,13 +77,17 @@ class MailManager:
     def __init__(self, store, reader=read_outlook, timer_factory=Timer, analyzer=analyze_attachment, paged_reader=None):
         self.store=store; self.reader=reader; self.timer_factory=timer_factory
         self.lock=Lock(); self.timer=None; self.generation=0; self.selection=None
-        self.analyzer=analyzer; self.analysis_queue=deque(); self.analysis_busy=False
+        self.storage=MailStorage(store)
+        self.analyzer=analyzer; self.analysis_queue=AnalysisQueue(store); self.analysis_busy=False; self.analysis_current=None
         self.state=dict(busy=False,enabled=False,seconds=300,last_run=None,next_run=None,error='',errors=[],partial=False,new=0,read=0)
         self.sync=MailSync(store);self.workspace=MailWorkspace(store);self.online=OnlineLedger(self.workspace)
         self.paged_reader=paged_reader or (read_outlook_page if reader is read_outlook else None)
         saved=self.store.get_state('poll_settings',{})
         self.state.update({k:v for k,v in saved.items() if k in ('seconds','store','folder','days','limit','resume_on_start','folders','include_children','start_date','end_date')})
-        for identity in self.store.recoverable_mail_ids(): self.analyze(identity)
+        self.analysis_queue.extend((identity,False) for identity in self.store.recoverable_mail_ids())
+        if self.analysis_queue:
+            self.analysis_busy=True
+            Thread(target=self._analyze_queue,daemon=True).start()
         if saved.get('enabled') and saved.get('resume_on_start') and sys.platform=='win32':
             self.configure(True,saved['store'],saved['folder'],saved['days'],saved['limit'],saved['seconds'],True,**{k:saved.get(k) for k in ('folders','include_children','start_date','end_date')})
 
@@ -94,9 +98,12 @@ class MailManager:
                     'errors':self.state['errors'] or progress.get('errors',[]),
                     'sync_phase':progress.get('phase'),'sync_complete':progress.get('complete',False),
                     'folders_total':progress.get('folders_total'),'folders_done':progress.get('folders_done'),
+                    'saved_total':self.store.mail_count(),'analysis_pending':len(self.analysis_queue)+int(self.analysis_current is not None),
                     'sync_scanned':progress.get('scanned',0),'sync_start':progress.get('start'),'sync_end':progress.get('end')}
 
     def import_row(self, row):
+        reason=self.storage.block_reason(reserve_bytes=32*1024**2+sum(len(a.get('raw') or b'')*3 for a in row.get('_attachments',[])))
+        if reason:raise ValueError(reason)
         with self.lock: new=self.store.save([row])
         self.analyze(row['id'])
         return {'new':new,'id':row['id']}
@@ -107,8 +114,7 @@ class MailManager:
             if row is None: raise ValueError('邮件记录不存在，请刷新列表。')
             summary=mail_summary(row,self.store.payment_index([identity]).get(identity,[]),indexed=False)
             self.store.set_payment_summary(identity,summary)
-            if not any(item[0]==identity for item in self.analysis_queue):
-                self.analysis_queue.append((identity,retry))
+            if identity!=self.analysis_current: self.analysis_queue.append((identity,retry))
             if not self.analysis_busy:
                 self.analysis_busy=True
                 Thread(target=self._analyze_queue,daemon=True).start()
@@ -116,15 +122,21 @@ class MailManager:
     def _analyze_queue(self):
         while True:
             with self.lock:
-                if not self.analysis_queue:
+                reason=self.storage.block_reason(reserve_bytes=32*1024**2)
+                if reason:self.state['analysis_error']=reason
+                if not self.analysis_queue or reason:
                     self.analysis_busy=False
                     return
-                identity,retry=self.analysis_queue.popleft()
+                identity,retry=self.analysis_queue.popleft();self.analysis_current=identity
             try: self._analyze_mail(identity,retry)
             except Exception:
                 with self.lock: self.state['analysis_error']='附件结果保存失败，请检查本机数据目录并重新识别。'
                 summary=mail_summary({},self.store.payment_index([identity]).get(identity,[]),indexed=True)
                 summary['status']='failed';self.store.set_payment_summary(identity,summary)
+            finally:
+                with self.lock:
+                    self.analysis_queue.done(identity)
+                    self.analysis_current=None
 
     def _analyze_mail(self, identity, retry):
         row=self.store.get(identity)
@@ -153,6 +165,10 @@ class MailManager:
             if generation is None:
                 self.generation+=1
                 if self.timer: self.timer.cancel()
+            if self.analysis_queue and not self.analysis_busy:
+                self.analysis_busy=True
+                self.state['analysis_error']=''
+                Thread(target=self._analyze_queue,daemon=True).start()
             self.state.update(busy=True,error='',next_run=None)
             self.state.update(store=store,folder=folder,days=days,limit=limit,**options)
             saved=self.store.get_state('poll_settings',{})
@@ -162,6 +178,10 @@ class MailManager:
     def _run(self, store, folder, days, limit, options=None):
         options=options or {}
         try:
+            reason=self.storage.block_reason(reserve_bytes=32*1024**2)
+            if reason: raise ValueError(reason)
+            if len(self.analysis_queue)>=self.storage.settings()['queue_limit']:
+                raise ValueError('等待识别的邮件较多，正在消化队列；自动读取将在后续检查时继续。')
             targets=options.get('folders')
             if self.paged_reader:
                 scope=json.dumps([sorted((f['store'],f['folder']) for f in targets),bool(options.get('include_children'))]) if targets else folder
@@ -175,6 +195,9 @@ class MailManager:
                 else:
                     result=self.paged_reader(store,folder,datetime.fromisoformat(plan['start']),datetime.fromisoformat(plan['end']),limit,plan['cursor'])
             else: result=self.reader(store,folder,datetime.now(timezone.utc)-timedelta(days=days),limit)
+            reserve=32*1024**2+sum(len(a.get('raw') or b'')*3 for row in result['rows'] for a in row.get('_attachments',[]))
+            reason=self.storage.block_reason(reserve_bytes=reserve)
+            if reason:raise ValueError(reason)
             new=self.store.save(result['rows'])
             for row in result['rows']:
                 if self.store.has_mail(row['id']): self.analyze(row['id'])
@@ -212,6 +235,7 @@ class MailManager:
         with self.lock:
             if self.state['busy'] or self.state['enabled'] or self.analysis_busy: raise ValueError('请先停止定时读取并等待邮件及附件识别完成。')
             self.store.clear()
+            with self.store.db() as db:db.execute('DELETE FROM mail_analysis_queue')
 
 
 _manager=None
@@ -231,6 +255,17 @@ def create_router(require_local):
 
     @router.get('/status')
     def status(): return manager().status()
+
+    @router.get('/storage')
+    def storage():return manager().storage.snapshot()
+
+    @router.put('/storage')
+    def configure_storage(values: dict):
+        try:
+            if set(values)-{'max_gb','min_free_gb','queue_limit'}:raise ValueError('包含未知的保存设置。')
+            manager().storage.configure(values)
+            return manager().storage.snapshot()
+        except ValueError as error:raise HTTPException(400,str(error)) from None
 
     @router.post('/folders')
     def folders():
@@ -261,6 +296,15 @@ def create_router(require_local):
         index=store.payment_index(identities);summaries=store.payment_summaries(identities)
         for row in rows:row['payment_summary']=summaries.get(row['id']) or mail_summary(row,index.get(row['id'],[]),indexed=row['id'] in index)
         return rows
+
+    @router.get('/messages/page')
+    def message_page(page: int=Query(1,ge=1),page_size: int=Query(50,ge=1,le=100),keyword: str=Query('',max_length=200),payment_filter: str=Query('all',pattern='^(all|payment|partial|pending)$')):
+        store=manager().store
+        result=store.message_page(page,page_size,keyword,payment_filter)
+        identities=[row['id'] for row in result['rows']]
+        summaries=store.payment_summaries(identities);index=store.payment_index(identities)
+        for row in result['rows']:row['payment_summary']=summaries.get(row['id']) or mail_summary(row,index.get(row['id'],[]),indexed=row['id'] in index)
+        return result
 
     @router.get('/messages/{identity}')
     def message(identity: str):

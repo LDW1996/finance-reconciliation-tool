@@ -5,7 +5,7 @@
       <div class="mail-actions">
         <input ref="fileInput" type="file" accept=".eml,.msg" class="mail-file-input" @change="importSample" />
         <el-button v-if="section === 'mail'" :icon="Upload" :loading="working === 'import'" :disabled="!!working" @click="fileInput?.click()">导入验证邮件</el-button>
-        <el-button v-if="section === 'mail'" :icon="Download" :disabled="!rows.length" @click="exportRows">导出邮件列表</el-button>
+        <el-button v-if="section === 'mail'" :icon="Download" :disabled="!rows.length" @click="exportRows">导出本页邮件</el-button>
       </div>
     </header>
 
@@ -35,7 +35,7 @@
         </section>
       </div>
       <footer class="mail-setup-footer">
-        <div class="mail-sync-status" role="status"><span class="mail-status-lead"><el-icon><Clock /></el-icon>{{ status?.busy ? '正在读取…' : status?.last_run ? `上次读取 ${formatDate(status.last_run)} · ${status.read} 封 · 新增 ${status.new} 封` : '尚未读取' }}</span><span v-if="status?.next_run">下次 {{ formatDate(status.next_run) }}</span><span v-if="status?.sync_phase">{{ status.sync_phase === 'history' ? '历史补扫' : '增量同步' }} · 累计 {{ status.sync_scanned || 0 }} 封{{ status.sync_complete ? (status.errors.length ? ' · 本轮结束，有异常待补扫' : ' · 本轮完成') : '' }}</span><span v-if="status?.folders_total != null">目录进度 {{ status.folders_done || 0 }} / {{ status.folders_total }}</span><span v-if="status?.sync_start">收件范围 {{ formatDate(status.sync_start) }} — {{ formatDate(status.sync_end || '') }}（结束时间不含）</span></div>
+        <div class="mail-sync-status" role="status"><span class="mail-status-lead"><el-icon><Clock /></el-icon>{{ status?.busy ? '正在读取…' : status?.last_run ? `上次读取 ${formatDate(status.last_run)} · ${status.read} 封 · 新增 ${status.new} 封` : '尚未读取' }}</span><span v-if="status?.next_run">下次 {{ formatDate(status.next_run) }}</span><span v-if="status?.sync_phase">{{ status.sync_phase === 'history' ? '历史补扫' : '增量同步' }} · 已扫描 {{ status.sync_scanned || 0 }} 封{{ status.sync_complete ? (status.errors.length ? ' · 本轮结束，有异常待补扫' : ' · 本轮完成') : '' }}</span><span>本地已保存 {{ savedTotal }} 封<template v-if="status?.analysis_pending"> · 待识别 {{ status.analysis_pending }} 封</template></span><span v-if="status?.folders_total != null">目录进度 {{ status.folders_done || 0 }} / {{ status.folders_total }}</span><span v-if="status?.sync_start">收件范围 {{ formatDate(status.sync_start) }} — {{ formatDate(status.sync_end || '') }}（结束时间不含）</span></div>
         <div class="mail-setup-actions"><el-button :icon="Refresh" :disabled="!status?.outlook_supported || !!working || !!status?.enabled || !!status?.busy || !selectedFolders.length || !rangeValid" @click="scan(true)">重新补扫</el-button><el-button type="primary" :icon="VideoPlay" :loading="status?.busy" :disabled="!status?.outlook_supported || !selectedFolders.length || !rangeValid || !!working || status?.enabled || status?.busy" @click="scan()">读取一批</el-button></div>
       </footer>
       <details class="mail-reading-note"><summary>读取说明</summary><p>仅读取 Outlook 中已打开且有权限访问的目录。标识与内容一致的邮件副本合并并保留来源；没有匹配邮件不代表其他目录也没有。</p></details>
@@ -47,7 +47,7 @@
 
     <div class="mail-workspace">
       <section class="mail-list" aria-label="已读取邮件">
-        <div class="mail-section-heading"><h2>本地邮件 <span>{{ filteredRows.length }}</span></h2><el-input v-model="filter" clearable :prefix-icon="Search" placeholder="搜索付款人、金额、日期或邮件" aria-label="筛选本地邮件" /></div>
+        <div class="mail-section-heading"><h2>本地邮件 <span>{{ savedTotal }}</span></h2><el-input v-model="filter" clearable :prefix-icon="Search" placeholder="搜索付款人、金额、日期或邮件" aria-label="筛选本地邮件" /></div>
         <div class="mail-filters" aria-label="付款信息筛选"><button v-for="chip in filterChips" :key="chip.value" :aria-pressed="paymentFilter === chip.value" @click="paymentFilter = chip.value">{{ chip.label }}</button></div>
         <div class="mail-cards" aria-label="邮件列表">
           <button v-for="row in filteredRows" :key="row.id" class="mail-card" :class="{selected: selected?.id === row.id}" :aria-pressed="selected?.id === row.id" @click="selectMessage(row)">
@@ -58,9 +58,10 @@
             <span class="mail-card-meta">{{ row.sender || '发件人未提供' }} · {{ formatDate(row.received) }}</span>
             <span class="mail-card-status">{{ summaryStatus(row) }}</span>
           </button>
-          <p v-if="!filteredRows.length" class="mail-muted">{{ rows.length ? '没有符合筛选条件的邮件' : '暂无邮件，可导入 MSG / EML 邮件' }}</p>
+          <p v-if="!filteredRows.length" class="mail-muted">{{ savedTotal ? '没有符合筛选条件的邮件' : '暂无邮件，可导入 MSG / EML 邮件' }}</p>
         </div>
-        <footer class="mail-list-footer"><span>最多显示最近读取的 500 封本地记录</span><el-button link type="danger" :icon="Delete" :disabled="locked || !!working || !rows.length" @click="clearLocal">清空本地记录</el-button></footer>
+        <div class="mail-list-pagination"><span>筛选 {{ mailTotal }} 封 · 每页 50 封</span><el-pagination v-model:current-page="mailPage" :page-size="50" :total="mailTotal" :pager-count="5" layout="prev, pager, next" small /></div>
+        <footer class="mail-list-footer"><span>已保存 {{ savedTotal }} 封 · 支持翻页及全库搜索</span><el-button link type="danger" :icon="Delete" :disabled="locked || !!working || !savedTotal" @click="clearLocal">清空本地记录</el-button></footer>
       </section>
       <section class="mail-detail" aria-label="邮件详情" v-loading="detailLoading">
         <MailPaymentDetail v-if="selected" :key="selected.id" :mail="selected" :related="related" :related-loading="relatedLoading" :related-error="relatedError" :analysis-busy="!!status?.analysis_busy || working === 'analyze'" @analyze="analyzeAttachments" @open-receipt="openRelatedReceipt" @more-receipts="loadRelated(20)" @select-payment="selectPayment" />
@@ -73,7 +74,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Connection, Refresh, Upload, Download, Delete, Search, Clock, VideoPlay } from '@element-plus/icons-vue'
 import { mailApi, type MailFolder, type MailRow, type MailStatus, type MailRelatedReceipts } from '../services/mail'
@@ -82,6 +83,7 @@ import MailPaymentDetail from '../components/MailPaymentDetail.vue'
 import MailFolderTree from '../components/MailFolderTree.vue'
 import ReceiptMatching from '../components/ReceiptMatching.vue'
 
+const mailPage=ref(1), mailTotal=ref(0), savedTotal=ref(0)
 const rows=ref<MailRow[]>([]), folders=ref<MailFolder[]>([]), selected=ref<MailRow|null>(null), status=ref<MailStatus|null>(null)
 const folderKeys=ref<string[]>([]), includeChildren=ref(false), rangeMode=ref('recent'), dateRange=ref<[string,string]|null>(null), days=ref(90), limit=ref(100), seconds=ref(300), filter=ref(''), working=ref(''), connectionError=ref(''), section=ref('receipts'), resumeOnStart=ref(false)
 const folderWarnings=ref<string[]>([]), detailLoading=ref(false), fileInput=ref<HTMLInputElement>()
@@ -109,12 +111,20 @@ const summaryAmount = (row: MailRow) => {
   const amounts = row.payment_summary?.amounts || []
   return amounts.length > 1 ? `${amounts.length} 笔金额 · ${row.payment_summary?.count || amounts.length} 条付款信息` : amounts.length ? `${amounts[0]!.currency || '币种待补充'} ${Number.isFinite(Number(amounts[0]!.amount))?Number(amounts[0]!.amount).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2}):amounts[0]!.amount}` : '付款金额待补充'
 }
-const filteredRows = computed(() => rows.value.filter(row => {
-  const summary = row.payment_summary
-  const matches = paymentFilter.value === 'all' || (paymentFilter.value === 'payment' ? (summary?.count || 0) > 0 : paymentFilter.value === 'partial' ? summary?.status === 'partial' : summary?.status === 'pending')
-  const search = [row.subject,row.sender,...(row.candidates || []),...(summary?.payers || []),...(summary?.dates || []),...(summary?.business_ids || []),...(summary?.amounts || []).map(a => `${a.currency} ${a.amount}`)].join(' ').toLowerCase()
-  return matches && search.includes(filter.value.trim().toLowerCase())
-}))
+const filteredRows = computed(() => rows.value)
+let messageRequest=0, searchTimer:ReturnType<typeof setTimeout>|undefined
+async function loadMessages(){
+  const request=++messageRequest
+  const query={page:mailPage.value,page_size:50,keyword:filter.value,payment_filter:paymentFilter.value}
+  const data=await mailApi.messagePage(query)
+  if(disposed || request!==messageRequest || query.page!==mailPage.value || query.keyword!==filter.value || query.payment_filter!==paymentFilter.value)return
+  rows.value=data.rows;mailTotal.value=data.total;savedTotal.value=data.total_saved
+  const last=Math.max(1,Math.ceil(data.total/50));if(mailPage.value>last)mailPage.value=last
+}
+function scheduleMessages(){clearTimeout(searchTimer);searchTimer=setTimeout(()=>{void loadMessages().catch(error=>{connectionError.value=errorText(error)})},250)}
+watch([filter,paymentFilter],()=>{mailPage.value=1;scheduleMessages()})
+watch(mailPage,scheduleMessages)
+
 let timer: ReturnType<typeof setTimeout> | undefined, disposed=false, detailRequest=0, relatedRequest=0, initialized=false
 const errorText=(error: any)=>{const detail=error.response?.data?.detail;return typeof detail === 'string' ? detail : detail ? '输入参数无效，请检查天数、封数和文件夹。' : '无法连接本机邮件服务，请检查程序是否正在运行。'}
 const formatDate=(value: string)=>{ const date=new Date(value);return !value || Number.isNaN(date.getTime()) ? value || '—' : date.toLocaleString() }
@@ -130,7 +140,7 @@ async function refresh() {
       else if(status.value.store && status.value.folder){folders.value=[{store:status.value.store,id:status.value.folder,label:status.value.folder_label || '上次选择的 Outlook 文件夹'}];folderKeys.value=folders.value.map(folderValue)}
       initialized=true
     }
-    rows.value=await mailApi.messages(); connectionError.value=''
+    await loadMessages(); connectionError.value=''
     if(selected.value && (status.value.analysis_busy || selected.value.payment_summary?.status === 'pending' || rows.value.find(row => row.id === selected.value?.id)?.payment_summary?.status !== selected.value.payment_summary?.status || selected.value.attachment_details?.some(a=>a.status==='pending' || a.status==='running'))) {
       const identity=selected.value.id, request=detailRequest
       const detail=await mailApi.message(identity)
@@ -198,7 +208,7 @@ async function analyzeAttachments() {
 }
 async function clearLocal() {
   try {await ElMessageBox.confirm('仅清除本机保存的邮件正文和解析结果，不删除 Outlook 邮件。','清空本地记录',{type:'warning',confirmButtonText:'清空',cancelButtonText:'取消'})} catch{return}
-  await action('clear',async()=>{await mailApi.clear();detailRequest++;relatedRequest++;related.value=null;relatedLoading.value=false;relatedError.value='';selected.value=null;rows.value=[]})
+  await action('clear',async()=>{await mailApi.clear();detailRequest++;relatedRequest++;related.value=null;relatedLoading.value=false;relatedError.value='';selected.value=null;rows.value=[];savedTotal.value=0;mailTotal.value=0;mailPage.value=1;messageRequest++})
 }
 function exportRows() {
   const cell=(value: string)=>'"'+(/^[\s]*[=+@-]/.test(value) ? "'"+value : value).replace(/"/g,'""')+'"'
@@ -206,7 +216,7 @@ function exportRows() {
   downloadBlob(new Blob(['\uFEFF'+lines.map(r=>r.map(cell).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'}),'邮件读取结果.csv')
 }
 onMounted(refresh)
-onBeforeUnmount(()=>{disposed=true;detailRequest++;relatedRequest++;clearTimeout(timer)})
+onBeforeUnmount(()=>{disposed=true;detailRequest++;relatedRequest++;clearTimeout(timer);clearTimeout(searchTimer);messageRequest++})
 </script>
 
 <style scoped>
@@ -225,4 +235,5 @@ onBeforeUnmount(()=>{disposed=true;detailRequest++;relatedRequest++;clearTimeout
 
 .mail-settings>summary{padding:20px 24px 12px}.mail-settings>summary strong{font-size:18px}.mail-connection-line{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:0 24px 20px;border-bottom:1px solid var(--border)}.mail-connection-line p{margin:0;color:var(--ink-muted);font-size:13px;line-height:1.7}.mail-connection-line .el-button{flex-shrink:0}.mail-setup-grid{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr)}.mail-source-pane,.mail-options-pane{padding:24px;min-width:0}.mail-source-pane{border-right:1px solid var(--border)}.mail-setup-grid h2{font-size:17px;margin:0 0 8px;font-weight:600}.setup-caption{font-size:13px;line-height:1.6;color:var(--ink-muted);margin:0 0 16px}.mail-directory-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px}.mail-directory-footer>span{font-size:12px;color:var(--ink-muted)}.mail-range-tabs{display:flex;width:100%;margin-bottom:18px;--el-radio-button-checked-bg-color:var(--el-color-primary-light-9);--el-radio-button-checked-text-color:var(--el-color-primary);--el-radio-button-checked-border-color:var(--el-color-primary-light-5)}.mail-range-tabs :deep(.el-radio-button){flex:1}.mail-range-tabs :deep(.el-radio-button.is-active .el-radio-button__inner){background:var(--el-color-primary-light-9);color:var(--el-color-primary);border-color:var(--el-color-primary-light-5);box-shadow:none}.mail-range-tabs :deep(.el-radio-button__inner){width:100%;box-sizing:border-box}.mail-setting-row{display:flex;align-items:center;gap:12px;margin-bottom:14px;font-size:14px}.mail-setting-row label{width:76px;flex-shrink:0}.mail-setting-row .el-input-number{width:144px}.mail-setting-row>span{color:var(--ink-muted)}.mail-auto-options{border-top:1px solid var(--border);padding-top:20px;margin-top:22px}.mail-auto-options .setup-caption{margin-bottom:12px}.mail-auto-row{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-top:12px;font-size:13px}.mail-auto-row .el-select{width:116px}.mail-auto-row label{white-space:nowrap}.mail-auto-row .el-checkbox{margin-right:0}.mail-fixed-dates{display:flex;flex-direction:column;gap:8px;margin-bottom:14px;font-size:14px}.mail-fixed-dates :deep(.el-date-editor){width:100%;max-width:100%;box-sizing:border-box}.mail-fixed-dates .setup-caption{margin:0}.mail-setup-footer{display:flex;align-items:center;justify-content:space-between;gap:24px;border-top:1px solid var(--border);padding:16px 24px}.mail-setup-footer .mail-sync-status{gap:8px 16px;flex:1}.mail-status-lead{display:flex;align-items:center;gap:8px;color:var(--ink);font-size:13px}.mail-setup-actions{display:flex;gap:10px;flex-shrink:0}.mail-setup-actions .el-button+.el-button{margin:0}.mail-reading-note{border-top:1px solid var(--border);padding:12px 24px;font-size:12px;color:var(--ink-muted)}.mail-reading-note summary{cursor:pointer}.mail-reading-note p{line-height:1.7;margin:10px 0 0;max-width:900px}
 @media(max-width:1000px){.mail-setup-grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.mail-auto-row .el-checkbox{width:100%}.mail-setup-footer{align-items:flex-start;flex-wrap:wrap}}@media(max-width:720px){.mail-setup-grid{grid-template-columns:minmax(0,1fr)}.mail-source-pane{border-right:0;border-bottom:1px solid var(--border)}.mail-source-pane,.mail-options-pane{padding:20px}.mail-settings>summary{padding:16px 20px 12px}.mail-connection-line{padding:0 20px 16px;align-items:flex-start}.mail-setup-footer{padding:16px 20px;gap:16px}.mail-setup-actions{width:100%;justify-content:flex-end}.mail-auto-row .el-checkbox{width:auto}.mail-reading-note{padding:12px 20px}}@media(max-width:380px){.mail-connection-line{flex-direction:column;gap:8px}.mail-directory-footer{align-items:flex-start;flex-direction:column}.mail-setting-row{gap:8px}.mail-setting-row label{width:64px}.mail-setting-row .el-input-number{width:130px}}
+.mail-list-pagination{display:flex;flex-direction:column;gap:10px;align-items:flex-start;border-top:1px solid var(--border);padding-top:12px;margin-top:12px;font-size:12px;color:var(--ink-muted)}.mail-list-pagination :deep(.el-pagination){max-width:100%;flex-wrap:wrap}
 </style>

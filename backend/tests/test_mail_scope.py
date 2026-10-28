@@ -160,3 +160,14 @@ def test_non_mail_folders_are_not_scanned_but_children_can_be(monkeypatch):
     now=datetime.now(timezone.utc)
     read_scope_page([dict(store='pst',folder='r')],True,now,now,100)
     assert calls==['mail']
+
+
+def test_directory_value_error_keeps_real_reason(monkeypatch):
+    from app.mail_scope import read_scope_page
+    session_for(monkeypatch,[('pst','archive',folder('a','Inbox'))])
+    def fail(*args):raise ValueError('分页进度未推进：时间边界异常')
+    monkeypatch.setattr(probe,'scan_folder_page',fail)
+    now=datetime.now(timezone.utc)
+    result=read_scope_page([dict(store='pst',folder='a')],False,now,now,100)
+    assert '时间边界异常' in result['errors'][0]
+    assert '权限' not in result['errors'][0]

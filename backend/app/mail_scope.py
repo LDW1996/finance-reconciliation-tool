@@ -82,7 +82,8 @@ def read_scope_page(selections, include_children, start, end, limit, cursor=None
                     page_cursor=result['cursor']; break
                 completed.append(target['label'])
             except Exception as error:
-                errors.append(f"{target['label']}：读取失败（{type(error).__name__}），请在 Outlook 检查目录及权限后重新补扫。")
+                detail=str(error).replace('\n',' ')[:500] if isinstance(error,ValueError) else type(error).__name__
+                errors.append(f"{target['label']}：读取失败（{type(error).__name__}：{detail}）。该目录已跳过，其余目录继续；处理原因后重新补扫。")
             position+=1; page_cursor=None
         partial=position<len(targets)
         checkpoint=dict(targets=targets,position=position,page=page_cursor,completed=completed,errors=errors) if partial else None

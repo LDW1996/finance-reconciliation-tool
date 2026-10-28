@@ -206,6 +206,33 @@ class MailStore:
                     for field in ('body', 'latest_body', 'signature', 'quoted_body'): row.pop(field,None)
                 result.append(row)
             return result
+    def mail_count(self):
+        with self.db() as db:return db.execute('SELECT COUNT(*) FROM mail').fetchone()[0]
+    def message_page(self,page=1,page_size=50,keyword='',payment_filter='all'):
+        keyword=keyword.strip().casefold()
+        offset=(page-1)*page_size
+        with self.db() as db:
+            total_saved=db.execute('SELECT COUNT(*) FROM mail').fetchone()[0]
+            if not keyword and payment_filter=='all':
+                items=db.execute('SELECT payload FROM mail ORDER BY seen DESC,id LIMIT ? OFFSET ?',(page_size,offset)).fetchall()
+                rows=[self.decode(payload) for payload, in items];total=total_saved
+            else:
+                rows=[];total=0
+                items=db.execute('SELECT m.payload,s.payload FROM mail m LEFT JOIN mail_payment_summary s ON m.id=s.mail_id ORDER BY m.seen DESC,m.id')
+                for payload,summary_payload in items:
+                    summary=self.decode(summary_payload) if summary_payload else {}
+                    status=summary.get('status','pending')
+                    matches=(payment_filter=='all' or (payment_filter=='payment' and summary.get('count',0)>0) or payment_filter==status)
+                    if not matches:continue
+                    row=self.decode(payload)
+                    fields=[row.get('subject',''),row.get('sender',''),*row.get('candidates',[]),*summary.get('payers',[]),*summary.get('dates',[]),*summary.get('business_ids',[])]
+                    fields.extend(str(a.get('currency',''))+' '+str(a.get('amount','')) for a in summary.get('amounts',[]))
+                    if keyword and keyword not in ' '.join(fields).casefold():continue
+                    if offset<=total<offset+page_size:rows.append(row)
+                    total+=1
+            for row in rows:
+                for field in ('body','latest_body','signature','quoted_body'):row.pop(field,None)
+            return dict(rows=rows,total=total,total_saved=total_saved,page=page,page_size=page_size)
     def get(self, identity):
         with self.db() as db:
             row=db.execute('SELECT payload FROM mail WHERE id=?',(identity,)).fetchone()
@@ -379,9 +406,36 @@ def outlook_sender(item):
     return address
 
 
+def _scan_selected_messages(selected, store_id, start, limit):
+    class Subset:
+        Count=len(selected)
+        def Sort(self,*args):pass
+        def Item(self,index):return selected[index-1]
+    return scan_folder(type('Page',(),{'Items':Subset()})(),store_id,start,limit)
+
+
+def _item_resolver(folder,store_id):
+    try:
+        session=folder.Session
+        return lambda identity:session.GetItemFromID(identity,store_id)
+    except AttributeError:return None
+
+
 def scan_folder_page(folder, store_id, start, end, limit, cursor=None):
-    """Page a fixed UTC window by time and EntryID, never by a shifting offset."""
+    """Page fixed time bounds; freeze equal-time IDs so ties do not rescan prefixes."""
     start,end=start.astimezone(timezone.utc),end.astimezone(timezone.utc)
+    resolver=_item_resolver(folder,store_id)
+    if cursor and cursor.get('pending_ids'):
+        if resolver is None:raise ValueError('无法按邮件标识续读，请确认 Outlook 存档仍已打开。')
+        selected=[];errors=[]
+        for identity in cursor['pending_ids'][:limit]:
+            try:selected.append(resolver(identity))
+            except Exception as error:errors.append(f'同时间邮件续读失败（{type(error).__name__}），该项已跳过，请检查邮件是否移动或删除并重新补扫。')
+        remaining=cursor['pending_ids'][limit:]
+        next_cursor={**cursor,'pending_ids':remaining} if remaining else ({'before':cursor['before'],'skip_boundary':True,'seen':[]} if cursor.get('has_older') else None)
+        result=_scan_selected_messages(selected,store_id,start,limit)
+        result.update(cursor=next_cursor,partial=next_cursor is not None,errors=errors+result['errors'],read=len(result['rows']))
+        return result
     boundary=datetime.fromisoformat(cursor['before']).astimezone(timezone.utc) if cursor else end
     seen=set(cursor.get('seen',[])) if cursor else set()
     prop='"http://schemas.microsoft.com/mapi/proptag/0x0E060040"'
@@ -390,15 +444,30 @@ def scan_folder_page(folder, store_id, start, end, limit, cursor=None):
     items=folder.Items.Restrict(query)
     items.Sort('[ReceivedTime]',True)
     selected=[]; consumed=[]; errors=[]; more=False
-    budget=min(items.Count,limit*3+len(seen)+1)
-    for index in range(1,budget+1):
+    # DASL timestamp comparisons are widened to seconds. In dense imported
+    # archives thousands of newer rows can fall in that overlap. Seek past
+    # them before spending the per-page budget, otherwise no cursor advances.
+    first=1; low=1; high=items.Count+1
+    try:
+        while low<high:
+            middle=(low+high)//2
+            received=items.Item(middle).ReceivedTime
+            if received.tzinfo is None:received=received.astimezone()
+            received=received.astimezone(timezone.utc)
+            if received>boundary or received>=end or (cursor and cursor.get('skip_boundary') and received==boundary):low=middle+1
+            else:high=middle
+        first=low
+    except Exception:
+        first=1  # Retain per-item error reporting for malformed metadata.
+    stop=min(items.Count,first+limit*3+len(seen))
+    for index in range(first,stop+1):
         try:
             item=items.Item(index)
             received=item.ReceivedTime
             if received.tzinfo is None: received=received.astimezone()
             received=received.astimezone(timezone.utc)
             identity=str(item.EntryID)
-            if received>=end or received>boundary or (received==boundary and identity in seen): continue
+            if received>=end or received>boundary or (received==boundary and (identity in seen or (cursor and cursor.get('skip_boundary')))): continue
             if received<start: break
             if len(selected)>=limit:
                 more=True;break
@@ -406,13 +475,8 @@ def scan_folder_page(folder, store_id, start, end, limit, cursor=None):
             if item.Class==43: selected.append(item)
         except Exception as error:
             errors.append(f'第 {index} 项元数据读取失败（{type(error).__name__}），请检查 Outlook；可重新补扫。')
-    else: more=items.Count>budget
-    class Subset:
-        Count=len(selected)
-        def Sort(self,*args): pass
-        def Item(self,index): return selected[index-1]
-    subset=type('Page',(),{'Items':Subset()})()
-    result=scan_folder(subset,store_id,start,limit)
+    else: more=items.Count>stop
+    result=_scan_selected_messages(selected,store_id,start,limit)
     next_cursor=None
     if more:
         if not consumed: raise ValueError('本批读取进度未推进，请检查 Outlook 或重新补扫。')
@@ -420,6 +484,30 @@ def scan_folder_page(folder, store_id, start, end, limit, cursor=None):
         ids=[identity for when,identity in consumed if when==before]
         if before==boundary: ids=list(seen.union(ids))
         next_cursor={'before':before.isoformat(),'seen':ids}
+        if resolver is not None:
+            # Snapshot the unread IDs in this timestamp bucket once. Subsequent
+            # batches resolve IDs directly, surviving tie reordering and restarts.
+            try:
+                lower=first;upper=items.Count+1
+                while lower<upper:
+                    middle=(lower+upper)//2
+                    stamp=items.Item(middle).ReceivedTime
+                    if stamp.tzinfo is None:stamp=stamp.astimezone()
+                    if stamp.astimezone(timezone.utc)>=before:lower=middle+1
+                    else:upper=middle
+                bucket_end=lower-1
+                pending=[];known=set(ids)
+                # Only freeze when this batch stopped inside an equal-time bucket.
+                for snapshot_index in range(index,bucket_end+1):
+                    try:
+                        entry=str(items.Item(snapshot_index).EntryID)
+                        if entry not in known:pending.append(entry);known.add(entry)
+                    except Exception as error:
+                        result['errors'].append(f'同时间邮件标识读取失败（{type(error).__name__}），请重新补扫该目录。')
+                if pending:
+                    next_cursor={'before':before.isoformat(),'pending_ids':pending,'has_older':bucket_end<items.Count,'skip_boundary':True}
+            except Exception as error:
+                result['errors'].append(f'同时间邮件清单创建失败（{type(error).__name__}），已保留时间游标，后续批次继续读取。')
     result.update(cursor=next_cursor,partial=more,errors=errors+result['errors'],read=len(result['rows']))
     return result
 
