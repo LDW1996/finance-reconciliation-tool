@@ -7,6 +7,7 @@ import re
 import sqlite3
 import sys
 import tempfile
+from time import perf_counter
 from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from email import policy
@@ -168,6 +169,11 @@ class MailStore:
                             sources=previous.get('sources',[dict(folder=previous.get('folder',''),store=previous.get('outlook_store',''))])
                             if origin not in sources: sources.append(origin)
                             previous['sources']=sources
+                            if match[0]==row['id']:
+                                # Same content after a metadata-only revision: keep
+                                # evidence, but advance this origin's read marker.
+                                for key in ('outlook_read_version','outlook_change_key','read_complete'):
+                                    if key in row:previous[key]=row[key]
                             db.execute('UPDATE mail SET payload=? WHERE id=?',(self.encode(previous),match[0]))
                             continue
                 row.setdefault('sources',[origin])
@@ -242,6 +248,17 @@ class MailStore:
             return result
     def has_mail(self,identity):
         with self.db() as db:return db.execute('SELECT 1 FROM mail WHERE id=?',(identity,)).fetchone() is not None
+    def mail_unchanged(self, identity, revision):
+        if not revision:
+            return False
+        with self.db() as db:
+            row = db.execute('SELECT payload FROM mail WHERE id=?', (identity,)).fetchone()
+        if not row:
+            return False
+        previous = self.decode(row[0])
+        return (previous.get('outlook_read_version') == 1 and previous.get('read_complete') is True
+                and previous.get('outlook_change_key') == revision)
+
     def attachment(self, mail_id, identity):
         with self.db() as db:
             row=db.execute('SELECT metadata,content FROM mail_attachment WHERE mail_id=? AND id=?',(mail_id,identity)).fetchone()
@@ -294,6 +311,8 @@ class MailStore:
     def clear(self):
         with self.db() as db:
             db.execute('DELETE FROM mail_identity')
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='mail_recognition_lookup'").fetchone():
+                db.execute('DELETE FROM mail_recognition_lookup')
             db.execute('DELETE FROM mail_attachment')
             db.execute('DELETE FROM mail')
             db.execute('DELETE FROM mail_payments')
@@ -327,8 +346,22 @@ def list_folders():
         return folder_tree(session)
 
 
-def scan_folder(folder, store_id, cutoff, limit):
+def outlook_change_key(item):
+    # PidTagChangeKey identifies the last object change. Do not substitute a
+    # timestamp when the provider cannot supply this binary revision marker.
+    try:
+        value = item.PropertyAccessor.GetProperty('http://schemas.microsoft.com/mapi/proptag/0x65E20102')
+        if not isinstance(value, (bytes, bytearray, memoryview, list, tuple)):
+            return None
+        raw = bytes(value)
+        return hashlib.sha256(raw).hexdigest() if raw and len(raw) <= 4096 else None
+    except Exception:
+        return None
+
+
+def scan_folder(folder, store_id, cutoff, limit, known_unchanged=None):
     rows=[]; errors=[]; partial=False; scan_bytes=0
+    scanned=unchanged=0; attachment_seconds=0.0
     items=folder.Items
     items.Sort('[ReceivedTime]',True)
     # Restrict scanning work even when a folder contains non-mail items or failures.
@@ -340,9 +373,15 @@ def scan_folder(folder, store_id, cutoff, limit):
             received=item.ReceivedTime
             if received.tzinfo is None: received=received.astimezone()
             if received<cutoff: break
-            if len(rows)>=limit:
+            if scanned>=limit:
                 partial=True; break
+            scanned += 1
             identity=str(item.EntryID)
+            mail_id=hashlib.sha256((store_id+'|'+identity).encode()).hexdigest()
+            revision=outlook_change_key(item)
+            if known_unchanged and revision and known_unchanged(mail_id, revision):
+                unchanged += 1
+                continue
             subject=str(item.Subject or '')
             body=str(item.Body or '')
             attachments=item.Attachments
@@ -355,6 +394,7 @@ def scan_folder(folder, store_id, cutoff, limit):
                 if asset['status']=='failed' and scan_bytes+size>100*1024*1024:
                     asset.update(status='skipped',error='本次附件读取达到 100 MB，请缩小邮件读取范围后重试。')
                 elif asset['status']=='failed' and size<=MAX_ATTACHMENT_BYTES and total_bytes+size<=MAX_MAIL_BYTES:
+                    download_started=perf_counter()
                     try:
                         # COM exposes attachment contents via SaveAsFile. The generated path
                         # never uses the supplied filename, and is removed immediately.
@@ -367,10 +407,11 @@ def scan_folder(folder, store_id, cutoff, limit):
                                 scan_bytes+=len(content)
                                 asset=capture_attachment(name, content)
                     except Exception: pass
+                    finally: attachment_seconds += perf_counter()-download_started
                 elif asset['status']=='failed' and total_bytes+size>MAX_MAIL_BYTES:
                     asset.update(status='skipped',error='本封邮件附件累计超过 25 MB。')
                 assets.append(asset)
-            row=dict(id=hashlib.sha256((store_id+'|'+identity).encode()).hexdigest(),source='outlook',
+            row=dict(id=mail_id,source='outlook',
                      subject=subject,sender=outlook_sender(item),received=received.isoformat(),
                      body=body[:200000],truncated=len(body)>200000,
                      attachments=[str(attachments.Item(i).FileName) for i in range(1,min(attachments.Count,100)+1)],
@@ -379,12 +420,17 @@ def scan_folder(folder, store_id, cutoff, limit):
             try:
                 row['internet_message_id']=str(item.PropertyAccessor.GetProperty('http://schemas.microsoft.com/mapi/proptag/0x1035001F') or '')
             except Exception: row['internet_message_id']=''
+            final_revision=outlook_change_key(item)
+            row.update(outlook_read_version=1,
+                       outlook_change_key=revision if revision==final_revision else None,
+                       read_complete=not row['truncated'] and not row['attachment_warning']
+                           and all(a['status'] not in ('failed','skipped') for a in assets))
             rows.append(row)
         except Exception as error:
             errors.append(f'第 {index} 项读取失败（{type(error).__name__}）。请在 Outlook 检查该项及权限提示；其余邮件继续读取。')
     else:
         partial=items.Count>budget
-    return dict(rows=rows,errors=errors,partial=partial)
+    return dict(rows=rows,errors=errors,partial=partial,read=scanned,unchanged=unchanged,attachment_seconds=attachment_seconds)
 
 
 def read_outlook(store_id, folder_id, cutoff, limit):
@@ -408,12 +454,12 @@ def outlook_sender(item):
     return address
 
 
-def _scan_selected_messages(selected, store_id, start, limit):
+def _scan_selected_messages(selected, store_id, start, limit, known_unchanged=None):
     class Subset:
         Count=len(selected)
         def Sort(self,*args):pass
         def Item(self,index):return selected[index-1]
-    return scan_folder(type('Page',(),{'Items':Subset()})(),store_id,start,limit)
+    return scan_folder(type('Page',(),{'Items':Subset()})(),store_id,start,limit,known_unchanged=known_unchanged)
 
 
 def _item_resolver(folder,store_id):
@@ -423,7 +469,7 @@ def _item_resolver(folder,store_id):
     except AttributeError:return None
 
 
-def scan_folder_page(folder, store_id, start, end, limit, cursor=None):
+def scan_folder_page(folder, store_id, start, end, limit, cursor=None, known_unchanged=None):
     """Page fixed time bounds; freeze equal-time IDs so ties do not rescan prefixes."""
     start,end=start.astimezone(timezone.utc),end.astimezone(timezone.utc)
     resolver=_item_resolver(folder,store_id)
@@ -435,8 +481,8 @@ def scan_folder_page(folder, store_id, start, end, limit, cursor=None):
             except Exception as error:errors.append(f'同时间邮件续读失败（{type(error).__name__}），该项已跳过，请检查邮件是否移动或删除并重新补扫。')
         remaining=cursor['pending_ids'][limit:]
         next_cursor={**cursor,'pending_ids':remaining} if remaining else ({'before':cursor['before'],'skip_boundary':True,'seen':[]} if cursor.get('has_older') else None)
-        result=_scan_selected_messages(selected,store_id,start,limit)
-        result.update(cursor=next_cursor,partial=next_cursor is not None,errors=errors+result['errors'],read=len(result['rows']))
+        result=_scan_selected_messages(selected,store_id,start,limit,known_unchanged)
+        result.update(cursor=next_cursor,partial=next_cursor is not None,errors=errors+result['errors'])
         return result
     boundary=datetime.fromisoformat(cursor['before']).astimezone(timezone.utc) if cursor else end
     seen=set(cursor.get('seen',[])) if cursor else set()
@@ -478,7 +524,7 @@ def scan_folder_page(folder, store_id, start, end, limit, cursor=None):
         except Exception as error:
             errors.append(f'第 {index} 项元数据读取失败（{type(error).__name__}），请检查 Outlook；可重新补扫。')
     else: more=items.Count>stop
-    result=_scan_selected_messages(selected,store_id,start,limit)
+    result=_scan_selected_messages(selected,store_id,start,limit,known_unchanged)
     next_cursor=None
     if more:
         if not consumed: raise ValueError('本批读取进度未推进，请检查 Outlook 或重新补扫。')
@@ -510,15 +556,15 @@ def scan_folder_page(folder, store_id, start, end, limit, cursor=None):
                     next_cursor={'before':before.isoformat(),'pending_ids':pending,'has_older':bucket_end<items.Count,'skip_boundary':True}
             except Exception as error:
                 result['errors'].append(f'同时间邮件清单创建失败（{type(error).__name__}），已保留时间游标，后续批次继续读取。')
-    result.update(cursor=next_cursor,partial=more,errors=errors+result['errors'],read=len(result['rows']))
+    result.update(cursor=next_cursor,partial=more,errors=errors+result['errors'])
     return result
 
 
-def read_outlook_page(store_id, folder_id, start, end, limit, cursor=None):
+def read_outlook_page(store_id, folder_id, start, end, limit, cursor=None, known_unchanged=None):
     with outlook_session() as session:
         try:
             folder=session.GetFolderFromID(folder_id,store_id)
-            result=scan_folder_page(folder,store_id,start,end,limit,cursor)
+            result=scan_folder_page(folder,store_id,start,end,limit,cursor,**({'known_unchanged':known_unchanged} if known_unchanged else {}))
             for row in result['rows']: row['folder']=str(folder.FolderPath)
             return result
         except ValueError: raise

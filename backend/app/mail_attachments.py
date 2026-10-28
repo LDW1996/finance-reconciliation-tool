@@ -1,6 +1,8 @@
 """Offline attachment text recognition and evidence-backed payment suggestions."""
 
 import base64
+from collections import OrderedDict
+from hashlib import sha256
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from io import BytesIO
@@ -18,6 +20,8 @@ MAX_PIXELS = 12_000_000
 IMAGE_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tif', '.tiff')
 _engine = None
 _inference_lock = Lock()
+_image_text_cache = OrderedDict()
+_image_text_cache_lock = Lock()
 
 
 def capture_attachment(name, raw=None, size=None):
@@ -205,6 +209,74 @@ def _page_result(image, number, native_text=''):
                 fields=extract_fields(lines, number))
 
 
+def _native_pdf_text(page, native, number):
+    """Plan text extraction; image regions still need a text audit before use."""
+    text = native.strip()
+    if len(text) < 20 or '\ufffd' in text or any(ord(c) < 32 and c not in '\n\r\t' for c in text):
+        return '', []
+    try:
+        images = list(page.get_objects(filter=[3]))
+        if not images:
+            return text, []
+        fields = extract_fields([dict(text=t.strip(), confidence=None, box=None)
+                                 for t in text.splitlines() if t.strip()], number)
+        if not all(fields.get(k) for k in ('payer', 'amount', 'date')):
+            return '', []
+        width, height = page.get_size()
+        # The crop mapping below is deliberately limited to unrotated pages
+        # whose visible PDF coordinate origin is (0,0).
+        if page.get_rotation() or tuple(page.get_bbox()) != (0, 0, width, height):
+            return '', []
+        regions, total_area = [], 0
+        for image in images:
+            left, bottom, right, top = image.get_pos()
+            iw, ih = right-left, top-bottom
+            if not all(math.isfinite(v) for v in (left, bottom, right, top, iw, ih)):
+                return '', []
+            if (iw <= 0 or ih <= 0 or left < 0 or bottom < 0 or right > width or top > height
+                    or iw > width*.25 or ih > height*.25 or iw*ih > width*height*.02):
+                return '', []
+            total_area += iw*ih
+            regions.append((left, bottom, right, top))
+        return (text, regions) if total_area <= width*height*.03 else ('', [])
+    except MemoryError:
+        raise
+    except Exception:
+        return '', []
+
+
+def _pdf_images_are_textless(image, regions, width, height):
+    """Tiny images can contain corrections. Check crops; any text keeps full OCR."""
+    sx, sy = image.width/width, image.height/height
+    for left, bottom, right, top in regions:
+        bounds = (max(0, math.floor(left*sx)-2), max(0, math.floor((height-top)*sy)-2),
+                  min(image.width, math.ceil(right*sx)+2), min(image.height, math.ceil((height-bottom)*sy)+2))
+        crop = image.crop(bounds)
+        try:
+            key = (crop.size, sha256(crop.tobytes()).digest())
+            with _image_text_cache_lock:
+                contains_text = _image_text_cache.get(key)
+                if contains_text is not None:
+                    _image_text_cache.move_to_end(key)
+            if contains_text is None:
+                try:
+                    contains_text = any(line.get('text', '').strip() for line in run_ocr(crop))
+                except MemoryError:
+                    raise
+                except Exception:
+                    return False
+                with _image_text_cache_lock:
+                    _image_text_cache[key] = contains_text
+                    _image_text_cache.move_to_end(key)
+                    if len(_image_text_cache) > 128:
+                        _image_text_cache.popitem(last=False)
+            if contains_text:
+                return False
+        finally:
+            crop.close()
+    return True
+
+
 def analyze_attachment(raw, name):
     if len(raw) > MAX_ATTACHMENT_BYTES: raise ValueError('附件超过 10 MB，请拆分后导入。')
     pages, warnings = [], []
@@ -220,15 +292,23 @@ def analyze_attachment(raw, name):
                 try:
                     width, height = page.get_size()
                     if width <= 0 or height <= 0: raise ValueError('页面尺寸无效')
-                    scale = min(2.0, math.sqrt(MAX_PIXELS/(width*height)))
+                    try:
+                        textpage = page.get_textpage()
+                        native, regions = _native_pdf_text(page, textpage.get_text_bounded(), number+1)
+                    except MemoryError:
+                        raise
+                    except Exception:
+                        native, regions = '', []
+                    scale = min(2.0, 1200/width, 1600/height) if native and not regions else min(2.0, math.sqrt(MAX_PIXELS/(width*height)))
                     bitmap = page.render(scale=scale)
                     image = bitmap.to_pil().convert('RGB')
                     try:
-                        textpage = page.get_textpage()
-                        native = textpage.get_text_bounded()
-                        has_image = any(True for _ in page.get_objects(filter=[3]))
-                        pages.append(_page_result(image, number+1, native if len(native.strip()) >= 20 and not has_image else ''))
+                        if native and regions and not _pdf_images_are_textless(image, regions, width, height):
+                            native = ''
+                        pages.append(_page_result(image, number+1, native))
                     finally: image.close()
+                except MemoryError:
+                    raise
                 except Exception as error:
                     warnings.append(f'第 {number+1} 页识别失败（{type(error).__name__}），请核对原 PDF。')
                 finally:

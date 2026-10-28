@@ -125,7 +125,7 @@ def assert_ilog_local_services() -> None:
     response.raise_for_status()
 
 
-def assert_mail_local_services() -> None:
+def assert_mail_local_services() -> dict:
     from PIL import Image, ImageDraw, ImageFont
     # Check bundling only; CI must not connect to Outlook or any real mailbox.
     headers={'X-Finance-Local':'1'}
@@ -165,6 +165,63 @@ def assert_mail_local_services() -> None:
         if not any(f['value']=='1400000.00' for f in amounts):
             raise AssertionError('Frozen OCR failed to read the synthetic amount')
 
+    before=wait_for_mail_analysis()
+    duplicate=EmailMessage();duplicate['Subject']='Forwarded synthetic evidence';duplicate.set_content('Independent mail, same attachments')
+    duplicate.add_attachment(png.getvalue(),maintype='image',subtype='png',filename='forwarded.png')
+    duplicate.add_attachment(pdf.getvalue(),maintype='application',subtype='pdf',filename='forwarded.pdf')
+    response=httpx.post(APP_URL+'/api/mail/import',headers=headers,files={'mail':('copy.eml',duplicate.as_bytes())},timeout=30)
+    response.raise_for_status()
+    after=wait_for_mail_analysis()
+    previous=before['performance']['counters'];current=after['performance']['counters']
+    if current['cache_hits']-previous['cache_hits']!=2 or current['analysis_runs']!=previous['analysis_runs']:
+        raise AssertionError('Frozen duplicate attachments were not reused without new analysis')
+    if current['ocr_pages']<2 or after['performance']['seconds']['analysis_seconds']<=0:
+        raise AssertionError('Frozen performance recorder missed real OCR work')
+    original=httpx.get(APP_URL+'/api/mail/messages/'+identity,headers=headers,timeout=10)
+    original.raise_for_status()
+    return dict(mail=original.json(),performance=after['performance'])
+
+
+def wait_for_mail_analysis():
+    deadline=time.monotonic()+90
+    while time.monotonic()<deadline:
+        response=httpx.get(APP_URL+'/api/mail/status',headers={'X-Finance-Local':'1'},timeout=10)
+        response.raise_for_status()
+        status=response.json()
+        if status.get('analysis_error'):
+            raise AssertionError('Frozen analysis failed: '+status['analysis_error'])
+        if not status['analysis_busy']:
+            if not status.get('performance'):
+                raise AssertionError('Frozen performance recorder is unavailable')
+            return status
+        time.sleep(.2)
+    raise AssertionError('Frozen mail queue did not drain')
+
+
+def assert_mail_restart_preserved(expected):
+    status=wait_for_mail_analysis()
+    response=httpx.get(APP_URL+'/api/mail/messages/'+expected['id'],headers={'X-Finance-Local':'1'},timeout=10)
+    response.raise_for_status()
+    if response.json()!=expected:
+        raise AssertionError('Restart changed stored mail, recognition results or payment evidence')
+    if status['performance']['counters']['analysis_runs'] or status['analysis_pending']:
+        raise AssertionError('Restart unnecessarily analyzed already completed attachments')
+
+
+def stop_process_tree(process):
+    if process.poll() is not None:return
+    if sys.platform=='win32':
+        # PyInstaller one-file builds have a bootloader child; terminate the
+        # complete test process tree before starting the same EXE again.
+        result=subprocess.run(['taskkill','/PID',str(process.pid),'/T','/F'],capture_output=True,timeout=20)
+        if result.returncode and process.poll() is None:
+            raise AssertionError('Could not stop the frozen test process tree')
+    else:
+        process.terminate()
+    try:process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        process.kill();process.wait(timeout=10)
+
 
 def assert_excel_isolation() -> None:
     for path in ('/api/ilog/accounts','/api/ilog/tasks','/api/mail/status','/api/mail/messages'):
@@ -203,7 +260,8 @@ def main() -> int:
             raise AssertionError(f'Frozen runtime components failed: {result}\n{startup_log.read_text(encoding="utf-8",errors="replace")[-24000:]}')
 
     sandbox = tempfile.TemporaryDirectory(prefix='finance-exe-smoke-')
-    process = subprocess.Popen([str(exe_path)], env={**process_env,'FINANCE_RECONCILE_DATA_DIR':sandbox.name})
+    app_env={**process_env,'FINANCE_RECONCILE_DATA_DIR':sandbox.name}
+    process = subprocess.Popen([str(exe_path)], env=app_env)
     try:
         wait_for_health(process=process,startup_log=startup_log)
         assert_frontend_served()
@@ -211,18 +269,23 @@ def main() -> int:
             assert_excel_isolation()
         else:
             assert_ilog_local_services()
-            assert_mail_local_services()
+            sample=assert_mail_local_services()
+            (diagnostics/'mail-performance.json').write_text(json.dumps(sample['performance'],indent=2),encoding='utf-8')
+            key=Path(sandbox.name)/'mail'/'mail.key'
+            key_before=key.read_bytes()
+            stop_process_tree(process)
+            process=subprocess.Popen([str(exe_path)],env=app_env)
+            wait_for_health(process=process,startup_log=startup_log)
+            assert_mail_restart_preserved(sample['mail'])
+            if key.read_bytes()!=key_before:
+                raise AssertionError('Restart replaced the original mail encryption key')
+            (diagnostics/'mail-restart.json').write_text(json.dumps(dict(ok=True,completed_results_preserved=True,key_preserved=True)),encoding='utf-8')
         with tempfile.TemporaryDirectory() as temp_dir:
             sample_path = Path(temp_dir) / "sample.xlsx"
             make_sample_workbook(sample_path)
             assert_excel_flow(sample_path)
     finally:
-        process.terminate()
-        try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=10)
+        stop_process_tree(process)
         sandbox.cleanup()
     return 0
 

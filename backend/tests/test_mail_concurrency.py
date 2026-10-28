@@ -43,7 +43,7 @@ def test_four_tasks_overlap_without_duplicates_and_fifth_waits(tmp_path, monkeyp
     try:
         for i in range(5):
             store.save([dict(id=str(i), body='', _attachments=[dict(
-                name=f'{i}.png', raw=b'image', status='pending')])])
+                name=f'{i}.png', raw=f'image-{i}'.encode(), status='pending')])])
             manager.analyze(str(i))
         assert full.wait(5)
         manager.analyze('0')

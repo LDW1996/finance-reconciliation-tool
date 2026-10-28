@@ -48,7 +48,10 @@ def test_packaged_mail_checks_do_not_connect_to_outlook(tmp_path,monkeypatch):
         return client.post(url.replace(module.APP_URL,''),**kwargs)
     monkeypatch.setattr(module.httpx,'get',local_get)
     monkeypatch.setattr(module.httpx,'post',local_post)
-    module.assert_mail_local_services()
+    sample=module.assert_mail_local_services()
+    monkeypatch.setattr(mail_tasks,'_manager',mail_tasks.MailManager(MailStore(tmp_path/'mail.sqlite3')))
+    module.assert_mail_restart_preserved(sample['mail'])
+    assert sample['performance']['counters']['cache_hits']>=2
     assert all(url.startswith(module.APP_URL+'/api/mail/') for url in urls)
     assert not any('/folders' in url or '/scan' in url for url in urls)
     assert any(url.endswith('/import') for url in urls)

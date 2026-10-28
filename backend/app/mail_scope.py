@@ -37,7 +37,7 @@ def folder_tree(session):
     return dict(folders=rows, errors=errors, note='列出 Outlook 已打开的邮箱和 PST 存档。未打开的存档不在列表中。')
 
 
-def read_scope_page(selections, include_children, start, end, limit, cursor=None):
+def read_scope_page(selections, include_children, start, end, limit, cursor=None, known_unchanged=None):
     with outlook.outlook_session() as session:
         if cursor:
             targets=cursor['targets']; position=cursor['position']; page_cursor=cursor.get('page')
@@ -64,14 +64,17 @@ def read_scope_page(selections, include_children, start, end, limit, cursor=None
                             pending.extend(reversed(children))
                     except Exception as error:
                         errors.append(f"{target.get('label', '所选目录')}：无法打开（{type(error).__name__}），请确认存档已挂载，可重新补扫。")
-        rows=[]
+        rows=[]; scanned=unchanged=0; attachment_seconds=0.0
         # At most 50 folders per batch, including empty ones, to bound COM work.
         visited=0
-        while position<len(targets) and len(rows)<limit and visited<50:
+        while position<len(targets) and scanned<limit and visited<50:
             target=targets[position]; visited+=1
             try:
                 folder=session.GetFolderFromID(target['folder'],target['store'])
-                result=outlook.scan_folder_page(folder,target['store'],start,end,limit-len(rows),page_cursor)
+                result=outlook.scan_folder_page(folder,target['store'],start,end,limit-scanned,page_cursor,**({'known_unchanged':known_unchanged} if known_unchanged else {}))
+                scanned += result.get('read',len(result['rows']))
+                unchanged += result.get('unchanged',0)
+                attachment_seconds += result.get('attachment_seconds',0)
                 for row in result['rows']:
                     row['folder']=target['label']; row['outlook_store']=target['store']
                 rows.extend(result['rows'])
@@ -87,5 +90,5 @@ def read_scope_page(selections, include_children, start, end, limit, cursor=None
             position+=1; page_cursor=None
         partial=position<len(targets)
         checkpoint=dict(targets=targets,position=position,page=page_cursor,completed=completed,errors=errors) if partial else None
-        return dict(rows=rows,errors=errors,partial=partial,cursor=checkpoint,read=len(rows),
+        return dict(rows=rows,errors=errors,partial=partial,cursor=checkpoint,read=scanned,unchanged=unchanged,attachment_seconds=attachment_seconds,
                     folders_total=len(targets),folders_done=position,completed_folders=completed)

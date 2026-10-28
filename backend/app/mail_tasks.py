@@ -9,8 +9,11 @@ from datetime import date
 import sys
 from datetime import datetime, timedelta, timezone
 from threading import Lock, Thread, Timer
+from time import perf_counter
 from .mail_storage import MailStorage, AnalysisQueue
 from .mail_workers import analysis_pool, configured_workers
+from .mail_recognition import RecognitionCache, VERSION as RECOGNITION_VERSION
+from .mail_performance import MailPerformance
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel, Field, model_validator
@@ -77,14 +80,19 @@ class OnlineWriteback(BaseModel):
     confirmation_token: str = Field(min_length=64,max_length=64)
 
 
+
+
 class MailManager:
     def __init__(self, store, reader=read_outlook, timer_factory=Timer, analyzer=analyze_attachment, paged_reader=None, analysis_workers=None):
         self.store=store; self.reader=reader; self.timer_factory=timer_factory
         self.lock=Lock(); self.timer=None; self.generation=0; self.selection=None
+        self.queue_resume_scheduled=False
         self.storage=MailStorage(store)
         self.analyzer=analyzer; self.analysis_queue=AnalysisQueue(store); self.analysis_busy=False; self.analysis_current=set()
         self.analysis_workers=configured_workers(analysis_workers)
-        self.state=dict(busy=False,enabled=False,seconds=300,last_run=None,next_run=None,error='',errors=[],partial=False,new=0,read=0)
+        self.recognition_cache=RecognitionCache(store)
+        self.performance=MailPerformance()
+        self.state=dict(busy=False,enabled=False,queue_paused=False,seconds=300,last_run=None,next_run=None,error='',errors=[],partial=False,new=0,read=0)
         self.sync=MailSync(store);self.workspace=MailWorkspace(store);self.online=OnlineLedger(self.workspace)
         self.paged_reader=paged_reader or (read_outlook_page if reader is read_outlook else None)
         saved=self.store.get_state('poll_settings',{})
@@ -105,13 +113,16 @@ class MailManager:
                     'folders_total':progress.get('folders_total'),'folders_done':progress.get('folders_done'),
                     'saved_total':self.store.mail_count(),'analysis_pending':len(self.analysis_queue)+len(self.analysis_current),
                     'analysis_active':len(self.analysis_current),'analysis_workers':self.analysis_workers,
+                    'performance':self.performance.snapshot(),
                     'sync_scanned':progress.get('scanned',0),'sync_start':progress.get('start'),'sync_end':progress.get('end')}
 
     def import_row(self, row):
         reason=self.storage.block_reason(reserve_bytes=32*1024**2+sum(len(a.get('raw') or b'')*3 for a in row.get('_attachments',[])))
         if reason:raise ValueError(reason)
+        save_started=perf_counter()
         with self.lock: new=self.store.save([row])
         self.analyze(row['id'])
+        self.performance.add_save(perf_counter()-save_started)
         return {'new':new,'id':row['id']}
 
     def analyze(self, identity, retry=False):
@@ -132,6 +143,7 @@ class MailManager:
         pending = {}
         stopping = False
         try:
+            self.recognition_cache.prepare()
             with ExitStack() as stack:
                 pool = None
                 if self.analyzer is analyze_attachment:
@@ -167,6 +179,7 @@ class MailManager:
                         finally:
                             with self.lock:
                                 self.analysis_current.discard(identity)
+                    self._resume_after_backpressure()
         except Exception:
             stopping = True
             with self.lock:
@@ -182,6 +195,27 @@ class MailManager:
                 if not stopping and self.analysis_queue:
                     self.analysis_busy = True
                     Thread(target=self._analyze_queue, daemon=True).start()
+            self._resume_after_backpressure()
+
+    def _resume_after_backpressure(self):
+        with self.lock:
+            if (not self.state['enabled'] or self.state['busy'] or not self.state['queue_paused']
+                    or self.queue_resume_scheduled or not self.selection or self.state.get('analysis_error')):
+                return
+            low_water=max(1,self.storage.settings()['queue_limit']//2)
+            if len(self.analysis_queue)+len(self.analysis_current)>low_water:
+                return
+            if self.storage.block_reason(reserve_bytes=32*1024**2):
+                return
+            if self.timer:
+                self.timer.cancel()
+            self.generation+=1
+            generation=self.generation
+            self.queue_resume_scheduled=True
+            self.state['next_run']=(datetime.now(timezone.utc)+timedelta(seconds=1)).isoformat()
+            self.timer=self.timer_factory(1,lambda:self.start(*self.selection,generation=generation,**self.selection_options))
+            self.timer.daemon=True
+            self.timer.start()
 
     def _analyze_mail(self, identity, retry, analyzer=None):
         row=self.store.get(identity)
@@ -190,21 +224,47 @@ class MailManager:
             if metadata['status'] not in allowed: continue
             asset=self.store.attachment(identity,metadata['id'])
             if not asset or not asset['raw']: continue
+            save_started=perf_counter()
             self.store.update_attachment(identity,asset['id'],status='running',error='')
-            try:
-                result=(analyzer or self.analyzer)(asset['raw'],asset['name'])
-            except (BrokenProcessPool, MemoryError):
-                raise
-            except Exception as error:
-                message=str(error) if isinstance(error,ValueError) else f'识别失败（{type(error).__name__}），请检查文件或完整安装包。'
-                self.store.update_attachment(identity,asset['id'],status='failed',error=message)
-            else:
-                self.store.update_attachment(identity,asset['id'],status='done',result=result,error='')
+            save_seconds=perf_counter()-save_started
+            key = self.recognition_cache.key(asset['raw'], asset['name'])
+            wait_started=perf_counter()
+            with self.recognition_cache.lock(key):
+                wait_seconds=perf_counter()-wait_started
+                result = self.recognition_cache.get(key)
+                reused=result is not None
+                analysis_seconds=0.0
+                if result is None:
+                    analysis_started=perf_counter()
+                    try:
+                        with self.performance.analyzing():
+                            result=(analyzer or self.analyzer)(asset['raw'],asset['name'])
+                    except (BrokenProcessPool, MemoryError):
+                        self.performance.record_attachment(failed=True,analysis_seconds=perf_counter()-analysis_started,
+                                                           save_seconds=save_seconds,wait_seconds=wait_seconds)
+                        raise
+                    except Exception as error:
+                        message=str(error) if isinstance(error,ValueError) else f'识别失败（{type(error).__name__}），请检查文件或完整安装包。'
+                        analysis_seconds=perf_counter()-analysis_started
+                        save_started=perf_counter()
+                        self.store.update_attachment(identity,asset['id'],status='failed',error=message)
+                        self.performance.record_attachment(failed=True,analysis_seconds=analysis_seconds,
+                            save_seconds=save_seconds+perf_counter()-save_started,wait_seconds=wait_seconds)
+                        continue
+                    analysis_seconds=perf_counter()-analysis_started
+                save_started=perf_counter()
+                self.store.update_attachment(identity,asset['id'],status='done',result=result,error='',
+                                             recognition_version=RECOGNITION_VERSION)
+                self.recognition_cache.remember(key, asset['id'], result)
+                self.performance.record_attachment(result,reused,analysis_seconds,
+                    save_seconds+perf_counter()-save_started,wait_seconds)
         from .mail_matching import build_payments
         updated=self.store.get(identity)
         if updated:
             payments=build_payments(updated)
+            save_started=perf_counter()
             self.store.set_payments(identity,payments,mail_summary(updated,payments,indexed=True))
+            self.performance.add_save(perf_counter()-save_started)
 
     def start(self, store, folder, days, limit, generation=None, **options):
         with self.lock:
@@ -217,6 +277,7 @@ class MailManager:
                 self.analysis_busy=True
                 self.state['analysis_error']=''
                 Thread(target=self._analyze_queue,daemon=True).start()
+            self.queue_resume_scheduled=False
             self.state.update(busy=True,error='',next_run=None)
             self.state.update(store=store,folder=folder,days=days,limit=limit,**options)
             saved=self.store.get_state('poll_settings',{})
@@ -225,12 +286,16 @@ class MailManager:
 
     def _run(self, store, folder, days, limit, options=None):
         options=options or {}
+        read_started=None;read_recorded=False
         try:
             reason=self.storage.block_reason(reserve_bytes=32*1024**2)
             if reason: raise ValueError(reason)
-            if len(self.analysis_queue)>=self.storage.settings()['queue_limit']:
-                raise ValueError('等待识别的邮件较多，正在消化队列；自动读取将在后续检查时继续。')
+            if len(self.analysis_queue)+len(self.analysis_current)>=self.storage.settings()['queue_limit']:
+                with self.lock:self.state['queue_paused']=True
+                raise ValueError('等待识别的邮件较多，正在消化队列；积压下降后自动读取将提前继续。')
+            with self.lock:self.state['queue_paused']=False
             targets=options.get('folders')
+            read_started=perf_counter()
             if self.paged_reader:
                 scope=json.dumps([sorted((f['store'],f['folder']) for f in targets),bool(options.get('include_children'))]) if targets else folder
                 plan=self.sync.plan(store,scope,days,start_date=options.get('start_date'),end_date=options.get('end_date'))
@@ -239,20 +304,27 @@ class MailManager:
                                 folders_total=plan.get('folders_total'),folders_done=plan.get('folders_done'))
                 elif targets:
                     from .mail_scope import read_scope_page
-                    result=read_scope_page(targets,bool(options.get('include_children')),datetime.fromisoformat(plan['start']),datetime.fromisoformat(plan['end']),limit,plan['cursor'])
+                    result=read_scope_page(targets,bool(options.get('include_children')),datetime.fromisoformat(plan['start']),datetime.fromisoformat(plan['end']),limit,plan['cursor'],known_unchanged=self.store.mail_unchanged)
                 else:
-                    result=self.paged_reader(store,folder,datetime.fromisoformat(plan['start']),datetime.fromisoformat(plan['end']),limit,plan['cursor'])
+                    result=self.paged_reader(store,folder,datetime.fromisoformat(plan['start']),datetime.fromisoformat(plan['end']),limit,plan['cursor'],**({'known_unchanged':self.store.mail_unchanged} if self.paged_reader is read_outlook_page else {}))
             else: result=self.reader(store,folder,datetime.now(timezone.utc)-timedelta(days=days),limit)
+            self.performance.record_read(perf_counter()-read_started,result.get('read',len(result['rows'])),
+                result.get('unchanged',0),result.get('attachment_seconds',0))
+            read_recorded=True
             reserve=32*1024**2+sum(len(a.get('raw') or b'')*3 for row in result['rows'] for a in row.get('_attachments',[]))
             reason=self.storage.block_reason(reserve_bytes=reserve)
             if reason:raise ValueError(reason)
+            save_started=perf_counter()
             new=self.store.save(result['rows'])
             for row in result['rows']:
                 if self.store.has_mail(row['id']): self.analyze(row['id'])
             if self.paged_reader: self.sync.commit(plan,result)
-            update=dict(error='',errors=result['errors'],partial=result['partial'],new=new,read=len(result['rows']))
+            self.performance.add_save(perf_counter()-save_started)
+            update=dict(error='',errors=result['errors'],partial=result['partial'],new=new,read=result.get('read',len(result['rows'])))
             if result['rows']: update['folder_label']=result['rows'][0].get('folder','Outlook 收件箱')
         except Exception as error:
+            if read_started is not None and not read_recorded:
+                self.performance.record_read(perf_counter()-read_started,0)
             update=dict(error=str(error) if isinstance(error,ValueError) else
                         f'读取失败（{type(error).__name__}），请检查 Outlook 登录、权限提示和本机数据目录。',new=0,read=0,errors=[],partial=False)
         with self.lock:
@@ -267,6 +339,7 @@ class MailManager:
                 self.state['next_run']=(datetime.now(timezone.utc)+timedelta(seconds=delay)).isoformat()
                 self.timer=self.timer_factory(delay,lambda:self.start(*self.selection,generation=generation,**self.selection_options))
                 self.timer.daemon=True; self.timer.start()
+        self._resume_after_backpressure()
 
     def configure(self, enabled, store, folder, days, limit, seconds, resume_on_start=False, **options):
         with self.lock:
@@ -274,10 +347,14 @@ class MailManager:
             self.generation+=1
             if self.timer: self.timer.cancel()
             self.timer=None; self.selection=(store,folder,days,limit); self.selection_options=options
+            self.queue_resume_scheduled=False
+            if not enabled:self.state['queue_paused']=False
             self.state.update(enabled=enabled,seconds=seconds,next_run=None,resume_on_start=resume_on_start,store=store,folder=folder,days=days,limit=limit,**options)
             self.store.set_state('poll_settings',dict(enabled=enabled,store=store,folder=folder,days=days,limit=limit,seconds=seconds,resume_on_start=resume_on_start,**options))
         if enabled: self.start(store,folder,days,limit,**options)
         return self.status()
+
+
 
     def clear(self):
         with self.lock:

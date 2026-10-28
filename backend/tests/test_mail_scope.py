@@ -120,7 +120,7 @@ def test_manager_persists_manual_scope_and_continues_after_restart(tmp_path,monk
     from app import mail_scope
     from test_mail_tasks import wait
     calls=[]
-    def reader(targets,children,start,end,limit,cursor):
+    def reader(targets,children,start,end,limit,cursor,**kwargs):
         calls.append(cursor)
         return dict(rows=[],errors=[],partial=cursor is None,cursor={'position':1} if cursor is None else None,read=0,folders_total=2,folders_done=1 if cursor is None else 2)
     monkeypatch.setattr(mail_scope,'read_scope_page',reader)
@@ -139,7 +139,7 @@ def test_fixed_date_poll_stops_when_archive_range_finishes(tmp_path,monkeypatch)
     from app.mail_tasks import MailManager
     from app import mail_scope
     from test_mail_tasks import wait
-    monkeypatch.setattr(mail_scope,'read_scope_page',lambda *a:dict(rows=[],errors=[],partial=False,cursor=None,read=0,folders_total=1,folders_done=1))
+    monkeypatch.setattr(mail_scope,'read_scope_page',lambda *a,**kwargs:dict(rows=[],errors=[],partial=False,cursor=None,read=0,folders_total=1,folders_done=1))
     class NoTimer:
         def __init__(self,*args): raise AssertionError('Fixed range must not schedule another poll')
     manager=MailManager(MailStore(tmp_path/'mail.sqlite3'),timer_factory=NoTimer)

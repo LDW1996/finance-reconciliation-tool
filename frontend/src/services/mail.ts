@@ -34,7 +34,16 @@ export interface MailAttachment {
       lines: { text: string; confidence: number | null; box: number[][] | null }[] }[]
   }
 }
+export interface MailPerformance {
+  active_analysis?: number
+  elapsed_seconds: number
+  counters: { read_batches:number; read_mail:number; unchanged_mail:number; completed_attachments:number; analysis_runs:number; cache_hits:number; analysis_failures:number; ocr_pages:number; pdf_text_pages:number }
+  seconds: { read_seconds:number; attachment_read_seconds:number; analysis_seconds:number; save_seconds:number; cache_wait_seconds:number }
+  recent: { completed_attachments:number; ocr_pages:number; pdf_text_pages:number }
+  last_batch: { read_seconds:number; scanned:number; unchanged_mail:number; attachment_read_seconds:number } | null
+}
 export interface MailStatus {
+  performance?: MailPerformance; analysis_workers?:number; analysis_active?:number; queue_paused?:boolean
   saved_total?:number; analysis_pending?:number
   busy: boolean; enabled: boolean; seconds: number; last_run: string | null; next_run: string | null
   error: string; errors: string[]; partial: boolean; new: number; read: number; outlook_supported: boolean
@@ -49,6 +58,7 @@ export interface MailStatus {
 export interface MailFolder { id: string; store: string; label: string; name?:string; parent?:string|null; store_label?:string; selectable?:boolean }
 const client = axios.create({ baseURL: '/api/mail', headers: { 'X-Finance-Local': '1' }, timeout: 30000 })
 export const mailApi = {
+  preview: async (mailId:string,attachmentId:string,page:number) => (await client.get<Blob>(`/messages/${encodeURIComponent(mailId)}/attachments/${encodeURIComponent(attachmentId)}/preview/${page}`,{responseType:'blob'})).data,
   status: async () => (await client.get<MailStatus>('/status')).data,
   messagePage: async (params:{page:number;page_size:number;keyword:string;payment_filter:string}) => (await client.get<{rows:MailRow[];total:number;total_saved:number;page:number;page_size:number}>('/messages/page',{params})).data,
   messages: async () => (await client.get<MailRow[]>('/messages')).data,
