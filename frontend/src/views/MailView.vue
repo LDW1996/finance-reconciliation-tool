@@ -62,6 +62,9 @@
       <details class="mail-reading-note"><summary>读取说明</summary><p>仅读取 Outlook 中已打开且有权限访问的目录。标识与内容一致的邮件副本合并并保留来源；没有匹配邮件不代表其他目录也没有。</p></details>
     </details>
     <el-alert v-if="status?.error" :title="status.error" :type="status.queue_paused && status.error.includes('队列') ? 'info' : 'error'" :closable="false" show-icon class="mail-alert" />
+    <el-alert v-if="status?.analysis_recovery" :title="status.analysis_recovery" type="info" :closable="false" show-icon class="mail-alert" />
+    <el-alert v-if="status?.status_diagnostic" :title="status.status_diagnostic.message" type="warning" :closable="false" show-icon class="mail-alert" />
+    <el-alert v-if="status?.analysis_warning" :title="status.analysis_warning" type="warning" :closable="false" show-icon class="mail-alert" />
     <el-alert v-if="status?.analysis_error" :title="status.analysis_error" type="error" :closable="false" show-icon class="mail-alert" />
     <el-alert v-if="status?.partial" :title="status.enabled ? '本批已保存，后台将继续读取下一批。' : '本批已保存，可继续读取下一批，或开启定时读取自动补扫。'" type="info" :closable="false" show-icon class="mail-alert" />
     <el-alert v-for="(error,i) in warnings" :key="i" :title="error" type="warning" :closable="false" show-icon class="mail-alert" />
@@ -107,7 +110,7 @@ import ReceiptMatching from '../components/ReceiptMatching.vue'
 const performanceDuration=(value:number)=>`${Math.max(0, Number.isFinite(value) ? value : 0).toFixed(1)} 秒`
 function exportPerformance() {
   if (!status.value?.performance) return
-  const payload={generated_at:new Date().toISOString(),build_commit:import.meta.env.VITE_BUILD_COMMIT || 'unknown',performance:status.value.performance}
+  const payload={generated_at:new Date().toISOString(),build_commit:import.meta.env.VITE_BUILD_COMMIT || 'unknown',performance:status.value.performance,diagnostics:status.value.analysis_diagnostics || [],analysis_diagnostic:status.value.analysis_diagnostic || null,status_diagnostic:status.value.status_diagnostic || null}
   downloadBlob(new Blob([JSON.stringify(payload,null,2)],{type:'application/json;charset=utf-8'}),'邮件性能统计.json')
 }
 
@@ -168,7 +171,7 @@ async function refresh() {
       else if(status.value.store && status.value.folder){folders.value=[{store:status.value.store,id:status.value.folder,label:status.value.folder_label || '上次选择的 Outlook 文件夹'}];folderKeys.value=folders.value.map(folderValue)}
       initialized=true
     }
-    await loadMessages(); connectionError.value=''
+    if(!status.value.status_diagnostic) await loadMessages(); connectionError.value=''
     if(selected.value && (status.value.analysis_busy || selected.value.payment_summary?.status === 'pending' || rows.value.find(row => row.id === selected.value?.id)?.payment_summary?.status !== selected.value.payment_summary?.status || selected.value.attachment_details?.some(a=>a.status==='pending' || a.status==='running'))) {
       const identity=selected.value.id, request=detailRequest
       const detail=await mailApi.message(identity)

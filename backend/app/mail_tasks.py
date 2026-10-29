@@ -5,6 +5,11 @@ from concurrent.futures.process import BrokenProcessPool
 from contextlib import ExitStack
 from copy import deepcopy
 import json
+import sqlite3
+import logging
+from logging.handlers import RotatingFileHandler
+from contextvars import ContextVar
+from time import sleep
 from datetime import date
 import sys
 from datetime import datetime, timedelta, timezone
@@ -14,6 +19,9 @@ from .mail_storage import MailStorage, AnalysisQueue
 from .mail_workers import analysis_pool, configured_workers
 from .mail_recognition import RecognitionCache, VERSION as RECOGNITION_VERSION
 from .mail_performance import MailPerformance
+from .mail_failures import AnalysisFailure, describe_failure
+
+_analysis_stage=ContextVar("mail_analysis_stage",default="读取邮件")
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel, Field, model_validator
@@ -83,16 +91,18 @@ class OnlineWriteback(BaseModel):
 
 
 class MailManager:
-    def __init__(self, store, reader=read_outlook, timer_factory=Timer, analyzer=analyze_attachment, paged_reader=None, analysis_workers=None):
+    def __init__(self, store, reader=read_outlook, timer_factory=Timer, analyzer=analyze_attachment, paged_reader=None, analysis_workers=None, analysis_retry_limit=3, retry_wait=sleep):
         self.store=store; self.reader=reader; self.timer_factory=timer_factory
         self.lock=Lock(); self.timer=None; self.generation=0; self.selection=None
         self.queue_resume_scheduled=False
+        self.analysis_retry_limit=max(0,min(3,analysis_retry_limit));self.retry_wait=retry_wait
         self.storage=MailStorage(store)
         self.analyzer=analyzer; self.analysis_queue=AnalysisQueue(store); self.analysis_busy=False; self.analysis_current=set()
         self.analysis_workers=configured_workers(analysis_workers)
         self.recognition_cache=RecognitionCache(store)
         self.performance=MailPerformance()
-        self.state=dict(busy=False,enabled=False,queue_paused=False,seconds=300,last_run=None,next_run=None,error='',errors=[],partial=False,new=0,read=0)
+        self._status_counts={'saved_total':0,'analysis_pending':0};self._status_progress={}
+        self.state=dict(busy=False,enabled=False,queue_paused=False,analysis_skipped=0,analysis_halted=False,analysis_recovering=False,seconds=300,last_run=None,next_run=None,error='',errors=[],partial=False,new=0,read=0)
         self.sync=MailSync(store);self.workspace=MailWorkspace(store);self.online=OnlineLedger(self.workspace)
         self.paged_reader=paged_reader or (read_outlook_page if reader is read_outlook else None)
         saved=self.store.get_state('poll_settings',{})
@@ -106,12 +116,19 @@ class MailManager:
 
     def status(self):
         with self.lock:
-            progress=self.store.get_state('sync_progress',{})
+            try:
+                progress=self.store.get_state('sync_progress',{})
+                self._status_counts=dict(saved_total=self.store.mail_count(),analysis_pending=len(self.analysis_queue)+len(self.analysis_current))
+                self._status_progress=progress
+                status_diagnostic=None
+            except (sqlite3.Error,OSError) as error:
+                progress=self._status_progress
+                status_diagnostic=describe_failure(error,phase='读取状态',limit=0)
             return {**deepcopy(self.state),'outlook_supported':sys.platform=='win32','analysis_busy':self.analysis_busy,
                     'errors':self.state['errors'] or progress.get('errors',[]),
                     'sync_phase':progress.get('phase'),'sync_complete':progress.get('complete',False),
                     'folders_total':progress.get('folders_total'),'folders_done':progress.get('folders_done'),
-                    'saved_total':self.store.mail_count(),'analysis_pending':len(self.analysis_queue)+len(self.analysis_current),
+                    **self._status_counts,'status_diagnostic':status_diagnostic,
                     'analysis_active':len(self.analysis_current),'analysis_workers':self.analysis_workers,
                     'performance':self.performance.snapshot(),
                     'sync_scanned':progress.get('scanned',0),'sync_start':progress.get('start'),'sync_end':progress.get('end')}
@@ -134,68 +151,157 @@ class MailManager:
             if identity not in self.analysis_current: self.analysis_queue.append((identity,retry))
             if not self.analysis_busy:
                 self.state['analysis_error']=''
+                self.state['analysis_halted']=False
                 self.analysis_busy=True
                 Thread(target=self._analyze_queue,daemon=True).start()
 
-    def _analyze_queue(self):
-        # Only this coordinator claims/acknowledges durable queue entries.
-        # At most N mails (and N attachment payloads) can be in flight.
-        pending = {}
-        stopping = False
+    def _record_analysis_failure(self,error,attempt,retrying):
+        info=describe_failure(error,attempt=attempt,limit=self.analysis_retry_limit)
+        info['status']='recovering' if retrying else 'paused'
+        code=('/'+str(info['error_code'])) if info.get('error_code') else ''
+        detail=f"阶段：{info['phase']}；原因：{info['reason']}（{info['error_type']}{code}）。"
+        if retrying:
+            info['message']=detail+f"正在安排自动恢复 {attempt}/{self.analysis_retry_limit} 次，已有结果保留。"
+        else:
+            suffix=f"自动恢复已用尽 {attempt}/{self.analysis_retry_limit} 次；" if info['retryable'] else ''
+            info['message']=detail+suffix+'队列已暂停，已有结果保留。'+info['action']
+        with self.lock:
+            self.state['analysis_diagnostic']=info
+            history=self.state.get('analysis_diagnostics',[])
+            self.state['analysis_diagnostics']=(history+[dict(info)])[-20:]
+            self.state['analysis_recovering']=retrying
+            self.state['analysis_recovery']=info['message'] if retrying else ''
+            self.state['analysis_error']='' if retrying else info['message']
+            self.state['analysis_halted']=not retrying
+        # Diagnostics must remain available even if SQLite cannot be written.
+        # Store no raw exception message, email identity, content or credentials.
         try:
+            handler=RotatingFileHandler(self.store.path.parent/'mail-errors.log',maxBytes=256*1024,backupCount=2,encoding='utf-8')
+            try:
+                handler.emit(logging.LogRecord('mail',logging.ERROR,'',0,json.dumps(info,ensure_ascii=False),(),None))
+            finally:handler.close()
+        except Exception:pass  # Full disk must not replace the original diagnosis.
+
+    def _analyze_queue(self):
+        try:
+            for attempt in range(self.analysis_retry_limit+1):
+                try:
+                    completed=self._drain_analysis_queue()
+                    with self.lock:
+                        self.state['analysis_recovering']=False
+                        self.state['analysis_recovery']=''
+                        if completed:
+                            self.state['analysis_error']=''
+                            self.state['analysis_halted']=False
+                            if self.state.get('analysis_diagnostic',{}).get('status') in ('recovering','paused'):
+                                self.state['analysis_diagnostic']={**self.state['analysis_diagnostic'],'status':'recovered','message':'任务已恢复，正在继续处理后续邮件。'}
+                        else:self.state['analysis_halted']=True
+                    break
+                except Exception as error:
+                    info=describe_failure(error)
+                    retrying=info['retryable'] and attempt<self.analysis_retry_limit
+                    self._record_analysis_failure(error,attempt+1 if retrying else attempt,retrying)
+                    if not retrying:break
+                    self.retry_wait(min(4,2**attempt))
+        finally:
+            final_error=None
+            with self.lock:
+                self.analysis_busy=False
+                if not self.state['analysis_halted']:
+                    try:restart=bool(self.analysis_current or self.analysis_queue)
+                    except Exception as error:
+                        final_error=AnalysisFailure(error,'检查剩余识别队列')
+                        restart=False
+                    if restart:
+                        self.analysis_busy=True
+                        Thread(target=self._analyze_queue,daemon=True).start()
+            if final_error:self._record_analysis_failure(final_error,0,False)
+            try:self._resume_after_backpressure()
+            except Exception as error:
+                self._record_analysis_failure(AnalysisFailure(error,'恢复自动读取'),0,False)
+
+    def _drain_analysis_queue(self):
+        pending={};errors=[];stopping=False;phase='恢复队列断点'
+        try:
+            with self.lock:
+                for identity in list(self.analysis_current):
+                    self.analysis_queue.release(identity)
+                    self.analysis_current.discard(identity)
+            phase='建立复用索引'
             self.recognition_cache.prepare()
             with ExitStack() as stack:
-                pool = None
-                if self.analyzer is analyze_attachment:
-                    pool = stack.enter_context(analysis_pool(self.analysis_workers))
-                controllers = stack.enter_context(ThreadPoolExecutor(max_workers=self.analysis_workers))
-                def analyze(raw, name):
-                    return pool.submit(analyze_attachment, raw, name).result() if pool else self.analyzer(raw, name)
+                phase='启动识别进程'
+                pool=stack.enter_context(analysis_pool(self.analysis_workers)) if self.analyzer is analyze_attachment else None
+                controllers=stack.enter_context(ThreadPoolExecutor(max_workers=self.analysis_workers))
+                def analyze(raw,name):
+                    return pool.submit(analyze_attachment,raw,name).result() if pool else self.analyzer(raw,name)
                 while True:
                     with self.lock:
-                        reason = self.storage.block_reason(reserve_bytes=32*1024**2)
+                        phase='检查存储空间'
+                        reason=self.storage.block_reason(reserve_bytes=32*1024**2)
                         if reason:
-                            self.state['analysis_error'] = reason
-                            stopping = True
-                        while not stopping and self.analysis_queue and len(pending) < self.analysis_workers:
-                            identity, retry = self.analysis_queue.popleft()
+                            self.state['analysis_error']=reason
+                            stopping=True
+                        while not stopping and self.analysis_queue and len(pending)<self.analysis_workers:
+                            phase='领取识别任务'
+                            identity,retry=self.analysis_queue.popleft()
                             self.analysis_current.add(identity)
-                            future = controllers.submit(self._analyze_mail, identity, retry, analyze)
-                            pending[future] = identity
-                        if not pending:
-                            break
-                    completed, _ = wait(pending, timeout=.1, return_when=FIRST_COMPLETED)
+                            pending[controllers.submit(self._analyze_mail,identity,retry,analyze)]=identity
+                        if not pending:break
+                    completed,_=wait(pending,timeout=.1,return_when=FIRST_COMPLETED)
                     for future in completed:
-                        identity = pending.pop(future)
+                        identity=pending.pop(future)
                         try:
                             future.result()
-                            with self.lock:
-                                self.analysis_queue.done(identity)
-                        except Exception:
-                            stopping = True
-                            with self.lock:
-                                self.analysis_queue.release(identity)
-                                self.state['analysis_error'] = '识别进程或结果保存异常，已暂停队列；请检查资源后重试或重启。'
-                        finally:
-                            with self.lock:
-                                self.analysis_current.discard(identity)
+                        except (AnalysisFailure,sqlite3.Error,OSError,MemoryError,BrokenProcessPool) as error:
+                            errors.append(error if isinstance(error,AnalysisFailure) else AnalysisFailure(error,'处理邮件'))
+                            stopping=True
+                            continue
+                        except Exception as error:
+                            phase='记录并跳过异常邮件'
+                            self._skip_bad_mail(identity,error)
+                        phase='保存识别队列进度'
+                        with self.lock:
+                            self.analysis_queue.done(identity)
+                            self.analysis_current.discard(identity)
+                    phase='恢复自动读取'
                     self._resume_after_backpressure()
-        except Exception:
-            stopping = True
-            with self.lock:
-                for identity in self.analysis_current:
-                    self.analysis_queue.release(identity)
-                self.analysis_current.clear()
-                self.state['analysis_error'] = '识别任务启动或保存失败，请检查本机资源并重试。'
+        except Exception as error:
+            errors.append(error if isinstance(error,AnalysisFailure) else AnalysisFailure(error,phase))
         finally:
-            # Keep busy until both pools have exited. New arrivals during
-            # shutdown stay queued, then start a fresh coordinator atomically.
+            # Both pools have closed before releasing claims or rebuilding.
+            # A failed release stays claimed and is retried at the next drain.
             with self.lock:
-                self.analysis_busy = False
-                if not stopping and self.analysis_queue:
-                    self.analysis_busy = True
-                    Thread(target=self._analyze_queue, daemon=True).start()
-            self._resume_after_backpressure()
+                for identity in list(self.analysis_current):
+                    try:self.analysis_queue.release(identity)
+                    except Exception as error:
+                        errors.append(AnalysisFailure(error,'恢复队列断点'))
+                    else:self.analysis_current.discard(identity)
+        if errors:
+            raise next((error for error in errors if not describe_failure(error)['retryable']),errors[0])
+        return not stopping
+
+    def _skip_bad_mail(self, identity, error):
+        row=self.store.get(identity)
+        if row:
+            for asset in row.get('attachment_details',[]):
+                if asset.get('status') in ('pending','running'):
+                    self.store.update_attachment(identity,asset['id'],status='failed',
+                        error='本邮件处理异常，已跳过；其余邮件继续，可稍后单独重试。')
+        index=self.store.payment_index([identity])
+        summary=mail_summary(row or {},index.get(identity,[]),indexed=True)
+        summary['status']='failed'
+        if identity not in index:
+            self.store.set_payments(identity,[],summary)
+        else:
+            self.store.set_payment_summary(identity,summary)
+        failures=self.store.get_state('mail_analysis_skipped',[])
+        failures=[entry for entry in failures if entry.get('mail_id')!=identity]
+        failures.append(dict(mail_id=identity,error_type=type(error).__name__,at=datetime.now(timezone.utc).isoformat()))
+        self.store.set_state('mail_analysis_skipped',failures[-100:])
+        with self.lock:
+            self.state['analysis_skipped']+=1
+            self.state['analysis_warning']=f"本次已跳过 {self.state['analysis_skipped']} 封处理异常的邮件，其余邮件继续；可在邮件详情单独重试。"
 
     def _resume_after_backpressure(self):
         with self.lock:
@@ -218,28 +324,39 @@ class MailManager:
             self.timer.start()
 
     def _analyze_mail(self, identity, retry, analyzer=None):
+        token=_analysis_stage.set('读取邮件')
+        try:return self._process_mail(identity,retry,analyzer)
+        except (sqlite3.Error,OSError,MemoryError,BrokenProcessPool) as error:
+            raise AnalysisFailure(error,_analysis_stage.get()) from error
+        finally:_analysis_stage.reset(token)
+
+    def _process_mail(self, identity, retry, analyzer=None):
         row=self.store.get(identity)
         for metadata in (row or {}).get('attachment_details',[]):
             allowed=('pending','running','failed') if retry else ('pending','running')
             if metadata['status'] not in allowed: continue
+            _analysis_stage.set('读取附件')
             asset=self.store.attachment(identity,metadata['id'])
             if not asset or not asset['raw']: continue
             save_started=perf_counter()
+            _analysis_stage.set('保存附件处理状态')
             self.store.update_attachment(identity,asset['id'],status='running',error='')
             save_seconds=perf_counter()-save_started
             key = self.recognition_cache.key(asset['raw'], asset['name'])
             wait_started=perf_counter()
             with self.recognition_cache.lock(key):
                 wait_seconds=perf_counter()-wait_started
+                _analysis_stage.set('查询附件复用结果')
                 result = self.recognition_cache.get(key)
                 reused=result is not None
                 analysis_seconds=0.0
                 if result is None:
                     analysis_started=perf_counter()
                     try:
+                        _analysis_stage.set('识别附件')
                         with self.performance.analyzing():
                             result=(analyzer or self.analyzer)(asset['raw'],asset['name'])
-                    except (BrokenProcessPool, MemoryError):
+                    except (sqlite3.Error,OSError,BrokenProcessPool,MemoryError):
                         self.performance.record_attachment(failed=True,analysis_seconds=perf_counter()-analysis_started,
                                                            save_seconds=save_seconds,wait_seconds=wait_seconds)
                         raise
@@ -247,22 +364,26 @@ class MailManager:
                         message=str(error) if isinstance(error,ValueError) else f'识别失败（{type(error).__name__}），请检查文件或完整安装包。'
                         analysis_seconds=perf_counter()-analysis_started
                         save_started=perf_counter()
+                        _analysis_stage.set('保存附件失败状态')
                         self.store.update_attachment(identity,asset['id'],status='failed',error=message)
                         self.performance.record_attachment(failed=True,analysis_seconds=analysis_seconds,
                             save_seconds=save_seconds+perf_counter()-save_started,wait_seconds=wait_seconds)
                         continue
                     analysis_seconds=perf_counter()-analysis_started
                 save_started=perf_counter()
+                _analysis_stage.set('保存附件识别结果')
                 self.store.update_attachment(identity,asset['id'],status='done',result=result,error='',
                                              recognition_version=RECOGNITION_VERSION)
                 self.recognition_cache.remember(key, asset['id'], result)
                 self.performance.record_attachment(result,reused,analysis_seconds,
                     save_seconds+perf_counter()-save_started,wait_seconds)
+        _analysis_stage.set('整理付款信息')
         from .mail_matching import build_payments
         updated=self.store.get(identity)
         if updated:
             payments=build_payments(updated)
             save_started=perf_counter()
+            _analysis_stage.set('保存付款信息')
             self.store.set_payments(identity,payments,mail_summary(updated,payments,indexed=True))
             self.performance.add_save(perf_counter()-save_started)
 
@@ -273,9 +394,10 @@ class MailManager:
             if generation is None:
                 self.generation+=1
                 if self.timer: self.timer.cancel()
-            if self.analysis_queue and not self.analysis_busy:
+            if (self.analysis_current or self.analysis_queue) and not self.analysis_busy and (generation is None or not self.state['analysis_halted']):
                 self.analysis_busy=True
                 self.state['analysis_error']=''
+                self.state['analysis_halted']=False
                 Thread(target=self._analyze_queue,daemon=True).start()
             self.queue_resume_scheduled=False
             self.state.update(busy=True,error='',next_run=None)
@@ -288,6 +410,8 @@ class MailManager:
         options=options or {}
         read_started=None;read_recorded=False
         try:
+            if self.state['analysis_halted']:
+                raise ValueError('附件处理已因明确故障暂停，新增读取暂缓。请按上方故障提示处理后手动重试。')
             reason=self.storage.block_reason(reserve_bytes=32*1024**2)
             if reason: raise ValueError(reason)
             if len(self.analysis_queue)+len(self.analysis_current)>=self.storage.settings()['queue_limit']:
@@ -326,7 +450,7 @@ class MailManager:
             if read_started is not None and not read_recorded:
                 self.performance.record_read(perf_counter()-read_started,0)
             update=dict(error=str(error) if isinstance(error,ValueError) else
-                        f'读取失败（{type(error).__name__}），请检查 Outlook 登录、权限提示和本机数据目录。',new=0,read=0,errors=[],partial=False)
+                        describe_failure(error,phase='保存邮件与读取进度' if read_recorded else '读取 Outlook',limit=0)['message'],new=0,read=0,errors=[],partial=False)
         with self.lock:
             self.state.update(**update,busy=False,last_run=datetime.now(timezone.utc).isoformat())
             if options.get('start_date') and not update['partial'] and not update['error']:
@@ -382,7 +506,11 @@ def create_router(require_local):
     def status(): return manager().status()
 
     @router.get('/storage')
-    def storage():return manager().storage.snapshot()
+    def storage():
+        try:return manager().storage.snapshot()
+        except (sqlite3.Error,OSError) as error:
+            info=describe_failure(error,phase='查询邮件存储占用',limit=0)
+            raise HTTPException(503,info['message']) from None
 
     @router.put('/storage')
     def configure_storage(values: dict):

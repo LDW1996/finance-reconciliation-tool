@@ -128,7 +128,7 @@ def test_worker_crash_leaves_mail_recoverable_and_stops_dispatch(tmp_path, monke
     for i in range(2):
         store.save([dict(id=str(i), body='', _attachments=[dict(
             name=f'{i}.png', raw=b'image', status='pending')])])
-    manager = MailManager(store, analyzer=crash)
+    manager = MailManager(store, analyzer=crash, analysis_retry_limit=0)
     wait_idle(manager)
     assert calls == ['0.png']
     assert manager.status()['analysis_pending'] == 2

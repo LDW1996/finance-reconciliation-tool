@@ -36,8 +36,14 @@ const client=axios.create({baseURL:'/api/mail',headers:{'X-Finance-Local':'1'},t
 const bytes=(value:number)=> value>=1024**3 ? `${(value/1024**3).toFixed(2)} GB` : `${(value/1024**2).toFixed(1)} MB`
 async function load(){
   loading.value=true;error.value=''
-  try{const [storage,status]=await Promise.all([client.get<Stats>('/storage'),client.get('/status')]);stats.value=storage.data;form.value={...storage.data.settings};pending.value=status.data.analysis_pending||0}
-  catch{error.value='无法读取邮件占用，请检查本地服务后重试。'}finally{loading.value=false}
+  try{
+    const [storage,status]=await Promise.allSettled([client.get<Stats>('/storage'),client.get('/status')])
+    if(storage.status==='rejected') throw storage.reason
+    stats.value=storage.value.data;form.value={...storage.value.data.settings}
+    if(status.status==='fulfilled') pending.value=status.value.data.analysis_pending||0
+    else error.value='邮件占用已读取，但队列状态暂时不可用，请稍后刷新。'
+  }
+  catch(cause:any){const detail=cause.response?.data?.detail;error.value=typeof detail==='string' ? detail : cause.code==='ECONNABORTED' ? '存储占用查询超过30秒，数据库可能繁忙；后台任务不一定已停止，请稍后刷新。' : '无法连接邮件存储查询服务，请检查程序运行状态后重试。'}finally{loading.value=false}
 }
 async function save(){
   saving.value=true;error.value=''
