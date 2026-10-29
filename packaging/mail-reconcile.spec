@@ -94,7 +94,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="Mail Reconciliation",
+    name="邮件核销工具（英文版）",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

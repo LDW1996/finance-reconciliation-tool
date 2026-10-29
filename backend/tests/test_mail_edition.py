@@ -117,7 +117,7 @@ def test_packaging_artifact_names_and_guide_agree(monkeypatch):
     root=Path(__file__).resolve().parents[2]
     tree=ast.parse((root/'packaging/mail-reconcile.spec').read_text(encoding='utf-8'))
     names=[kw.value.value for node in ast.walk(tree) if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id=='EXE' for kw in node.keywords if kw.arg=='name']
-    assert names==['Mail Reconciliation']
+    assert names==['邮件核销工具（英文版）']
     assert names[0] in (root/'.github/workflows/build-windows-exe.yml').read_text(encoding='utf-8')
     guide=(root/'packaging/Mail-Reconciliation-Guide.txt').read_text(encoding='utf-8')
     assert names[0]+'.exe' in guide

@@ -1,7 +1,7 @@
 MAIL RECONCILIATION — ENGLISH EDITION
 
 1. Start
-Extract the downloaded ZIP and double-click Mail Reconciliation.exe.
+Extract the downloaded ZIP and double-click 邮件核销工具（英文版）.exe.
 Your default browser will open http://127.0.0.1:8765.
 Keep the program running while reading or recognizing mail.
 If the port is occupied, close the other Finance Reconciliation application first.
