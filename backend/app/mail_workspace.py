@@ -82,7 +82,11 @@ class MailWorkspace:
 
     def customer_mapping(self):
         data=self.store.get_state('customer_mapping',{})
-        return {k:v for k,v in data.items() if k!='entries'}
+        return {k:v for k,v in data.items() if k not in ('entries','excluded_rows')}
+
+    def customer_mapping_preview(self,status='valid',keyword='',page=1,page_size=50):
+        from .customer_mapping import preview_contacts
+        return preview_contacts(self.store.get_state('customer_mapping',{}),status,keyword,page,page_size)
 
     def mapping_index(self):
         from .customer_mapping import MappingIndex

@@ -804,6 +804,11 @@ def create_router(require_local):
         try:return manager().customer_online.refresh()
         except ValueError as error:raise HTTPException(409,str(error)) from None
 
+    @router.get('/customer-mapping/preview')
+    def customer_mapping_preview(status: str=Query('valid',pattern='^(valid|excluded)$'),keyword: str=Query('',max_length=200),
+                                 page: int=Query(1,ge=1),page_size: int=Query(50,ge=1,le=100)):
+        return manager().workspace.customer_mapping_preview(status,keyword,page,page_size)
+
     @router.get('/customer-mapping')
     def customer_mapping():return manager().workspace.customer_mapping()
 

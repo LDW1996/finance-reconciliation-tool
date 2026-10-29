@@ -1,13 +1,14 @@
 <template>
   <section class="customer-source source-card" aria-label="在线客户台账">
     <div class="source-heading"><h3>客户台账</h3><el-tag :type="config.configured ? 'success' : 'info'">{{ config.configured ? '已配置' : '待配置' }}</el-tag><el-tag v-if="metadata.entries_count" :type="metadata.enabled ? 'success' : 'info'">{{ metadata.enabled ? '参与匹配' : '已暂停使用' }}</el-tag></div>
-    <p class="source-summary">{{ metadata.entries_count ? `${metadata.sheet} · ${metadata.entries_count.toLocaleString()} 条有效映射` : '读取客户、银行付款人和邮箱的映射关系' }}<span v-if="metadata.skipped"> · {{ metadata.skipped }} 行信息不完整</span></p>
+    <p class="source-summary">{{ metadata.entries_count ? `${metadata.sheet} · ${metadata.entries_count.toLocaleString()} 条有效映射` : '读取客户、银行付款人和邮箱的映射关系' }}<span v-if="metadata.skipped"> · {{ metadata.skipped }} 行未导入</span><span v-if="metadata.duplicates_count"> · {{ metadata.duplicates_count }} 行重复已合并</span></p>
     <p class="source-summary">上次在线读取：{{ time(config.last_read_at) }}<span v-if="metadata.entries_count && !metadata.online"> · 当前使用备用文件</span></p>
-    <div class="source-actions"><el-button :disabled="disabled || working" @click="openConfig">配置来源</el-button><el-button type="primary" :loading="operation==='read'" :disabled="disabled || working || !config.configured" @click="readOnline">读取客户台账</el-button><el-button v-if="metadata.entries_count" text :disabled="disabled || working" @click="toggle">{{ metadata.enabled ? '暂停使用' : '启用映射' }}</el-button></div>
+    <div class="source-actions"><el-button :disabled="disabled || working" @click="openConfig">配置来源</el-button><el-button type="primary" :loading="operation==='read'" :disabled="disabled || working || !config.configured" @click="readOnline">读取客户台账</el-button><el-button :disabled="disabled || working || !metadata.entries_count" @click="previewOpen=true">查看台账</el-button><el-button v-if="metadata.entries_count" text :disabled="disabled || working" @click="toggle">{{ metadata.enabled ? '暂停使用' : '启用映射' }}</el-button></div>
     <p class="source-note">只读，不修改客户原表。在线表更新后，请重新读取。</p>
     <p v-if="sourceChanged" class="source-note">来源已修改，当前仍使用上次数据；读取成功后才替换。</p>
     <el-alert v-if="error || config.last_error" :title="error || config.last_error || ''" type="error" :closable="false" />
     <p v-if="metadata.entries_count && (readFailed || config.last_error)" class="source-note">读取未完成，仍使用上次成功的数据。</p>
+    <CustomerMappingPreview v-if="previewOpen" @close="previewOpen=false" />
     <el-dialog v-model="configOpen" title="配置客户台账来源" width="min(600px, 94vw)" :close-on-click-modal="false" :close-on-press-escape="!working" :show-close="!working" @closed="clearCredential">
       <el-form label-position="top" @submit.prevent="saveConfig">
         <el-form-item label="Google Sheets 工作表链接（含 gid）"><el-input v-model="url" aria-label="客户台账工作表链接" :disabled="working" /></el-form-item>
@@ -25,11 +26,12 @@
 <script setup lang="ts">
 import {computed,onMounted,onBeforeUnmount,ref} from 'vue'
 import {ElMessageBox} from 'element-plus'
+import CustomerMappingPreview from './CustomerMappingPreview.vue'
 import {mailMatchingApi,matchingError,validateSpreadsheetUrl,type CustomerMappingMetadata,type CustomerOnlineConfig} from '../services/mailMatching'
 const props=defineProps<{disabled:boolean}>()
 const emit=defineEmits<{'changed':[];'busy-change':[value:boolean]}>()
 const metadata=ref<CustomerMappingMetadata>({}),config=ref<CustomerOnlineConfig>({configured:false,use_shared:true}),error=ref(''),operation=ref(''),readFailed=ref(false)
-const configOpen=ref(false),url=ref(''),useShared=ref(true),credential=ref<File>(),credentialInput=ref<HTMLInputElement>()
+const previewOpen=ref(false),configOpen=ref(false),url=ref(''),useShared=ref(true),credential=ref<File>(),credentialInput=ref<HTMLInputElement>()
 const working=computed(()=>!!operation.value)
 const sourceChanged=computed(()=>metadata.value.online && metadata.value.online.spreadsheet_url!==config.value.spreadsheet_url)
 const time=(value?:string|null)=>value?new Date(value).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}):'尚未读取'

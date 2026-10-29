@@ -17,7 +17,13 @@ export interface CustomerOnlineConfig {
 }
 export interface CustomerMappingMetadata {
   online?:{spreadsheet_id:string;sheet_id:number;spreadsheet_url:string}
-  name?:string;sheet?:string;available_sheets?:string[];entries_count?:number;skipped?:number;enabled?:boolean;revision?:string;imported_at?:string
+  name?:string;sheet?:string;available_sheets?:string[];entries_count?:number;skipped?:number;duplicates_count?:number;enabled?:boolean;revision?:string;imported_at?:string
+}
+export interface CustomerMappingPreviewRow {
+  customer:string;bank_name:string;row:number;sheet:string;emails?:string[];email?:string;flags:string[];reasons?:string[];duplicate_of?:number;truncated?:boolean
+}
+export interface CustomerMappingPreviewResult {
+  metadata:CustomerMappingMetadata;rows:CustomerMappingPreviewRow[];total:number;page:number;page_size:number;diagnostics_available:boolean;notice:string
 }
 export interface CustomerMappingEvidence {
   points:number;ambiguous:boolean;label:string
@@ -69,6 +75,7 @@ export function validateSpreadsheetUrl(value: string): string {
 }
 const client = axios.create({ baseURL: '/api/mail', headers: { 'X-Finance-Local': '1' }, timeout: 30000 })
 export const mailMatchingApi = {
+  customerMappingPreview:async(params:{status:'valid'|'excluded';keyword:string;page:number;page_size:number},signal?:AbortSignal)=>(await client.get<CustomerMappingPreviewResult>('/customer-mapping/preview',{params,signal})).data,
   customerOnlineConfig:async(signal?:AbortSignal)=>(await client.get<CustomerOnlineConfig>('/customer-mapping/online/config',{signal})).data,
   saveCustomerOnlineConfig:async(url:string,useShared:boolean,credential?:File,signal?:AbortSignal)=>{
     const data=new FormData();data.append('spreadsheet_url',validateSpreadsheetUrl(url));data.append('use_shared',String(useShared))

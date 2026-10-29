@@ -57,7 +57,7 @@ class OnlineCustomerMapping:
                 text=StringIO();csv.writer(text).writerows(snapshot['values'])
                 data=parse_contacts(text.getvalue().encode('utf-8'),'在线客户台账.csv')
                 data['sheet']=snapshot['title'];data['available_sheets']=[snapshot['title']]
-                for entry in data['entries']:entry['sheet']=snapshot['title']
+                for entry in data['entries']+data.get('excluded_rows',[]):entry['sheet']=snapshot['title']
                 data['revision']=sha256(json.dumps(data['entries'],ensure_ascii=False,sort_keys=True).encode()).hexdigest()
                 data['imported_at']=now()
                 data['online']={k:config[k] for k in ('spreadsheet_id','sheet_id','spreadsheet_url')}
@@ -69,7 +69,7 @@ class OnlineCustomerMapping:
                         db.execute('INSERT OR REPLACE INTO mail_state VALUES(?,?)',('customer_mapping',self.store.encode(data)))
                         db.execute('INSERT OR REPLACE INTO mail_state VALUES(?,?)',('customer_online_config',self.store.encode(config)))
                     self.workspace.cache=None
-                return {k:v for k,v in data.items() if k!='entries'}
+                return {k:v for k,v in data.items() if k not in ('entries','excluded_rows')}
             except Exception as error:
                 # Never expose raw HTTP responses or credentials. Persist error
                 # status separately; last successful data/timestamp stay intact.
