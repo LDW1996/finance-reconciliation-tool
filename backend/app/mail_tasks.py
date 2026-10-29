@@ -480,7 +480,8 @@ class MailManager:
             update=dict(error='',errors=result['errors'],partial=result['partial'],new=new,read=result.get('read',len(result['rows'])))
             if result['rows']: update['folder_label']=result['rows'][0].get('folder','Outlook 收件箱')
         except Exception as error:
-            diagnostic_record('mail_batch_read',error)
+            if not self.state.get('queue_paused'):
+                diagnostic_record('mail_batch_read',error)
             if read_started is not None and not read_recorded:
                 self.performance.record_read(perf_counter()-read_started,0)
             update=dict(error=str(error) if isinstance(error,ValueError) else

@@ -121,3 +121,31 @@ def test_payment_filter_excludes_partial_and_pending_candidates(tmp_path):
     assert [r['id'] for r in store.message_page(payment_filter='payment')['rows']]==['ready']
     assert [r['id'] for r in store.message_page(payment_filter='partial')['rows']]==['partial']
     assert [r['id'] for r in store.message_page(payment_filter='pending')['rows']]==['pending']
+
+
+def test_missing_received_time_does_not_break_equal_time_snapshot():
+    from app.outlook_probe import scan_folder_page
+    from test_outlook_probe import Mail
+    stamp=datetime(2026,10,22,tzinfo=timezone.utc)
+    class Notice:
+        Class=46
+        EntryID='notice'
+    messages=[Mail(str(i)) for i in range(20)]
+    for m in messages:m.ReceivedTime=stamp
+    messages.insert(10,Notice())
+    class Items:
+        Count=len(messages)
+        def Restrict(self,*a):return self
+        def Sort(self,*a):pass
+        def Item(self,i):return messages[i-1]
+    class Session:
+        def GetItemFromID(self,identity,store):return next(m for m in messages if m.EntryID==identity)
+    folder=type('Folder',(),{'Items':Items(),'Session':Session()})()
+    cursor=None;ids=[];errors=[]
+    for _ in range(12):
+        page=scan_folder_page(folder,'s',stamp-timedelta(days=1),stamp+timedelta(days=1),3,cursor)
+        ids.extend(m['id'] for m in page['rows']);errors.extend(page['errors'])
+        if not page['partial']:break
+        cursor=page['cursor']
+    assert len(set(ids))==20
+    assert not errors

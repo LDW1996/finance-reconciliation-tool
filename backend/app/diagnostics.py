@@ -42,7 +42,11 @@ def record(stage,error=None,**context):
                 _seen[key]=(previous,count+1);return
             _seen[key]=(now,0)
             if len(_seen)>2000:_seen.clear()
-            row=dict(time=datetime.now(timezone.utc).isoformat(),stage=stage,error_type=kind,attribute=attribute,frames=frames,context=safe,suppressed=count)
+            engine_reason=None
+            if error and ('onnx' in kind.lower() or 'onnxruntime' in type(error).__module__.lower()):
+                message=str(error).lower()
+                engine_reason=next((label for needle,label in [('allocate','memory_allocation'),('out of memory','memory_allocation'),('invalid dimension','invalid_dimensions'),('invalid rank','invalid_dimensions'),('invalid input','invalid_input'),('no such file','model_file_missing'),('not implemented','unsupported_operator')] if needle in message),'unclassified_engine_error')
+            row=dict(engine_reason=engine_reason,time=datetime.now(timezone.utc).isoformat(),stage=stage,error_type=kind,attribute=attribute,frames=frames,context=safe,suppressed=count)
             data=(json.dumps(row,ensure_ascii=False)+'\n').encode()
             files=sorted(path.glob('diagnostic-*.jsonl'))
             target=files[-1] if files and files[-1].stat().st_size+len(data)<=MAX_FILE else path/f'diagnostic-{time.time_ns()}.jsonl'

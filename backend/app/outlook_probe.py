@@ -531,6 +531,7 @@ def scan_folder_page(folder, store_id, start, end, limit, cursor=None, known_unc
     for index in range(first,stop+1):
         try:
             item=items.Item(index)
+            if item.Class!=43:continue
             received=item.ReceivedTime
             if received.tzinfo is None: received=received.astimezone()
             received=received.astimezone(timezone.utc)
@@ -577,8 +578,25 @@ def scan_folder_page(folder, store_id, start, end, limit, cursor=None, known_unc
                 if pending:
                     next_cursor={'before':before.isoformat(),'pending_ids':pending,'has_older':bucket_end<items.Count,'skip_boundary':True}
             except Exception as error:
-                diagnostic_record('outlook_same_time_snapshot',error,store_id=store_id)
-                result['errors'].append(f'同时间邮件清单创建失败（{type(error).__name__}），已保留时间游标，后续批次继续读取。')
+                # Non-mail objects can lack ReceivedTime and invalidate binary
+                # seeking. Freeze remaining valid IDs once instead of retrying
+                # the same broken boundary on every batch.
+                pending=[];known=set(ids)
+                for remaining_index in range(index,items.Count+1):
+                    try:
+                        candidate=items.Item(remaining_index)
+                        if candidate.Class!=43:continue
+                        stamp=candidate.ReceivedTime
+                        if stamp.tzinfo is None:stamp=stamp.astimezone()
+                        stamp=stamp.astimezone(timezone.utc)
+                        entry=str(candidate.EntryID)
+                        if start<=stamp<=before and stamp<end and entry not in known:
+                            pending.append(entry);known.add(entry)
+                    except Exception as item_error:
+                        diagnostic_record('outlook_snapshot_item',item_error,index=remaining_index,store_id=store_id)
+                        result['errors'].append(f'第 {remaining_index} 项缺少有效邮件属性，已跳过，请人工检查该项目。')
+                next_cursor={'before':before.isoformat(),'pending_ids':pending,'has_older':False,'skip_boundary':True} if pending else None
+                more=bool(pending)
     result.update(cursor=next_cursor,partial=more,errors=errors+result['errors'])
     return result
 
