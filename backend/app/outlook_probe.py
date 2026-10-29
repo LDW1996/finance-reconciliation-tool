@@ -135,6 +135,9 @@ class MailStore:
             db.execute('CREATE TABLE IF NOT EXISTS mail (id TEXT PRIMARY KEY, payload TEXT NOT NULL, seen TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS mail_attachment (id TEXT PRIMARY KEY, mail_id TEXT NOT NULL, position INTEGER NOT NULL, metadata TEXT NOT NULL, content BLOB NOT NULL)')
             db.execute('CREATE INDEX IF NOT EXISTS attachment_mail ON mail_attachment(mail_id)')
+            db.execute('CREATE TABLE IF NOT EXISTS mail_blob (digest TEXT PRIMARY KEY, content BLOB NOT NULL)')
+            db.execute('CREATE TABLE IF NOT EXISTS mail_attachment_blob_ref (attachment_id TEXT PRIMARY KEY, digest TEXT NOT NULL)')
+            db.execute('CREATE INDEX IF NOT EXISTS blob_digest ON mail_attachment_blob_ref(digest)')
             db.execute('CREATE TABLE IF NOT EXISTS mail_identity (fingerprint TEXT PRIMARY KEY, mail_id TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS mail_state (key TEXT PRIMARY KEY, payload TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS mail_payments (mail_id TEXT PRIMARY KEY, payload TEXT NOT NULL)')
@@ -148,6 +151,7 @@ class MailStore:
             with connection: yield connection
         finally: connection.close()
     def save(self, rows):
+        from .mail_assets import save_blob, without_previews
         new=0
         with self.db() as db:
             for row in rows:
@@ -188,6 +192,7 @@ class MailStore:
                     digest=hashlib.sha256(raw).hexdigest()
                     identity=hashlib.sha256(f"{row['id']}|{position}|{asset['name']}|{digest}".encode()).hexdigest()
                     metadata={key:value for key,value in asset.items() if key!='raw'}
+                    if raw:metadata=without_previews(metadata)
                     metadata.update(id=identity, sha256=digest)
                     previous=[(key,self.decode(value)) for key,value in db.execute('SELECT id,metadata FROM mail_attachment WHERE mail_id=? AND position=?',(row['id'],position))]
                     existing=next(((key,value) for key,value in previous if value['name']==asset['name']),None)
@@ -196,10 +201,10 @@ class MailStore:
                         if not raw or old.get('sha256')==digest: continue
                         metadata['id']=key
                         db.execute('UPDATE mail_attachment SET metadata=?,content=? WHERE id=?',
-                                   (self.encode(metadata),self.cipher.encrypt(raw),key))
+                                   (self.encode(metadata),save_blob(self,db,key,raw),key))
                         continue
                     db.execute('INSERT OR IGNORE INTO mail_attachment VALUES(?,?,?,?,?)',
-                               (identity,row['id'],position,self.encode(metadata),self.cipher.encrypt(raw)))
+                               (identity,row['id'],position,self.encode(metadata),save_blob(self,db,identity,raw)))
         return new
     def encode(self, value): return self.cipher.encrypt(json.dumps(value,ensure_ascii=False).encode()).decode()
     def decode(self, value): return json.loads(self.cipher.decrypt(value.encode()).decode('utf-8'))
@@ -240,11 +245,12 @@ class MailStore:
                 for field in ('body','latest_body','signature','quoted_body'):row.pop(field,None)
             return dict(rows=rows,total=total,total_saved=total_saved,page=page,page_size=page_size)
     def get(self, identity):
+        from .mail_assets import without_previews
         with self.db() as db:
             row=db.execute('SELECT payload FROM mail WHERE id=?',(identity,)).fetchone()
             if not row: return None
             result=self.decode(row[0])
-            result['attachment_details']=[self.decode(value) for value, in db.execute('SELECT metadata FROM mail_attachment WHERE mail_id=? ORDER BY position',(identity,))]
+            result['attachment_details']=[without_previews(self.decode(value)) for value, in db.execute('SELECT metadata FROM mail_attachment WHERE mail_id=? ORDER BY position',(identity,))]
             return result
     def has_mail(self,identity):
         with self.db() as db:return db.execute('SELECT 1 FROM mail WHERE id=?',(identity,)).fetchone() is not None
@@ -261,13 +267,19 @@ class MailStore:
 
     def attachment(self, mail_id, identity):
         with self.db() as db:
-            row=db.execute('SELECT metadata,content FROM mail_attachment WHERE mail_id=? AND id=?',(mail_id,identity)).fetchone()
-            return {**self.decode(row[0]), 'raw':self.cipher.decrypt(row[1])} if row else None
+            row=db.execute('SELECT a.metadata,a.content,b.content FROM mail_attachment a LEFT JOIN mail_attachment_blob_ref r ON r.attachment_id=a.id LEFT JOIN mail_blob b ON b.digest=r.digest WHERE a.mail_id=? AND a.id=?',(mail_id,identity)).fetchone()
+            if row is None:return None
+            encrypted=row[2] if row[2] is not None else row[1]
+            return {**self.decode(row[0]),'raw':self.cipher.decrypt(encrypted) if encrypted else b''}
     def update_attachment(self, mail_id, identity, **changes):
+        from .mail_assets import without_previews
         with self.db() as db:
             row=db.execute('SELECT metadata FROM mail_attachment WHERE mail_id=? AND id=?',(mail_id,identity)).fetchone()
             if row:
-                db.execute('UPDATE mail_attachment SET metadata=? WHERE id=?', (self.encode({**self.decode(row[0]),**changes}),identity))
+                metadata={**self.decode(row[0]),**changes}
+                available=db.execute('''SELECT 1 FROM mail_attachment a LEFT JOIN mail_attachment_blob_ref r ON r.attachment_id=a.id LEFT JOIN mail_blob b ON b.digest=r.digest WHERE a.id=? AND (LENGTH(a.content)>100 OR LENGTH(b.content)>100)''',(identity,)).fetchone()
+                if available:metadata=without_previews(metadata)
+                db.execute('UPDATE mail_attachment SET metadata=? WHERE id=?',(self.encode(metadata),identity))
     def get_state(self, key, default=None):
         with self.db() as db:
             row=db.execute('SELECT payload FROM mail_state WHERE key=?',(key,)).fetchone()
@@ -309,10 +321,14 @@ class MailStore:
             pending=[key for key,payload in db.execute('SELECT mail_id,metadata FROM mail_attachment') if self.decode(payload)['status'] in ('pending','running')]
             return list(dict.fromkeys(unindexed+pending))
     def clear(self):
+        from .mail_assets import PreviewCache
+        PreviewCache(self).clear()
         with self.db() as db:
             db.execute('DELETE FROM mail_identity')
             if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='mail_recognition_lookup'").fetchone():
                 db.execute('DELETE FROM mail_recognition_lookup')
+            db.execute('DELETE FROM mail_attachment_blob_ref')
+            db.execute('DELETE FROM mail_blob')
             db.execute('DELETE FROM mail_attachment')
             db.execute('DELETE FROM mail')
             db.execute('DELETE FROM mail_payments')

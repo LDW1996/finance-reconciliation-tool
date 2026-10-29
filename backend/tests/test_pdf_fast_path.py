@@ -80,7 +80,9 @@ def test_text_page_is_rendered_at_preview_size(monkeypatch):
     result = mail_attachments.analyze_attachment(out.getvalue(), 'text.pdf')
     assert result['pages'][0]['method'] == 'pdf_text'
     # Large native-text pages need only a preview raster, not a 12 MP OCR raster.
-    assert calls[0][0] <= 1200 and calls[0][1] <= 1600
+    assert calls == []  # Preview encoding happens only when the user opens a page.
+    assert result['pages'][0]['width'] <= 1200 and result['pages'][0]['height'] <= 1600
+    assert not result['pages'][0].get('preview')
 
 
 def test_unreadable_text_layer_falls_back_to_ocr(monkeypatch):

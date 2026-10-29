@@ -14,7 +14,8 @@ from datetime import date
 import sys
 from datetime import datetime, timedelta, timezone
 from threading import Lock, Thread, Timer
-from time import perf_counter
+from time import perf_counter, sleep
+from uuid import uuid4
 from .mail_storage import MailStorage, AnalysisQueue
 from .mail_workers import analysis_pool, configured_workers
 from .mail_recognition import RecognitionCache, VERSION as RECOGNITION_VERSION
@@ -88,6 +89,10 @@ class OnlineWriteback(BaseModel):
     confirmation_token: str = Field(min_length=64,max_length=64)
 
 
+class StorageOptimization(BaseModel):
+    confirmed: bool = False
+    preview_id: str = Field(min_length=1,max_length=64)
+    compact: bool = True
 
 
 class MailManager:
@@ -97,6 +102,10 @@ class MailManager:
         self.queue_resume_scheduled=False
         self.analysis_retry_limit=max(0,min(3,analysis_retry_limit));self.retry_wait=retry_wait
         self.storage=MailStorage(store)
+        self.maintenance_active=False
+        previous=self.store.get_state('mail_maintenance_job',{})
+        if previous.get('status')=='running':
+            self.store.set_state('mail_maintenance_job',{**previous,'status':'interrupted','message':'上次存储优化被中断；数据保留，可重新预览并继续。'})
         self.analyzer=analyzer; self.analysis_queue=AnalysisQueue(store); self.analysis_busy=False; self.analysis_current=set()
         self.analysis_workers=configured_workers(analysis_workers)
         self.recognition_cache=RecognitionCache(store)
@@ -128,22 +137,27 @@ class MailManager:
                     'errors':self.state['errors'] or progress.get('errors',[]),
                     'sync_phase':progress.get('phase'),'sync_complete':progress.get('complete',False),
                     'folders_total':progress.get('folders_total'),'folders_done':progress.get('folders_done'),
-                    **self._status_counts,'status_diagnostic':status_diagnostic,
+                    **self._status_counts,'status_diagnostic':status_diagnostic,'maintenance_active':self.maintenance_active,
                     'analysis_active':len(self.analysis_current),'analysis_workers':self.analysis_workers,
                     'performance':self.performance.snapshot(),
                     'sync_scanned':progress.get('scanned',0),'sync_start':progress.get('start'),'sync_end':progress.get('end')}
 
     def import_row(self, row):
+        with self.lock:
+            if self.maintenance_active:raise ValueError('存储优化进行中，请稍后导入邮件。')
         reason=self.storage.block_reason(reserve_bytes=32*1024**2+sum(len(a.get('raw') or b'')*3 for a in row.get('_attachments',[])))
         if reason:raise ValueError(reason)
         save_started=perf_counter()
-        with self.lock: new=self.store.save([row])
+        with self.lock:
+            if self.maintenance_active:raise ValueError('存储优化进行中，请稍后导入邮件。')
+            new=self.store.save([row])
         self.analyze(row['id'])
         self.performance.add_save(perf_counter()-save_started)
         return {'new':new,'id':row['id']}
 
     def analyze(self, identity, retry=False):
         with self.lock:
+            if self.maintenance_active:raise ValueError('存储优化进行中，请稍后识别。')
             row=self.store.get(identity)
             if row is None: raise ValueError('邮件记录不存在，请刷新列表。')
             summary=mail_summary(row,self.store.payment_index([identity]).get(identity,[]),indexed=False)
@@ -207,7 +221,7 @@ class MailManager:
             final_error=None
             with self.lock:
                 self.analysis_busy=False
-                if not self.state['analysis_halted']:
+                if not self.state['analysis_halted'] and not self.maintenance_active:
                     try:restart=bool(self.analysis_current or self.analysis_queue)
                     except Exception as error:
                         final_error=AnalysisFailure(error,'检查剩余识别队列')
@@ -242,7 +256,7 @@ class MailManager:
                         if reason:
                             self.state['analysis_error']=reason
                             stopping=True
-                        while not stopping and self.analysis_queue and len(pending)<self.analysis_workers:
+                        while not stopping and not self.maintenance_active and self.analysis_queue and len(pending)<self.analysis_workers:
                             phase='领取识别任务'
                             identity,retry=self.analysis_queue.popleft()
                             self.analysis_current.add(identity)
@@ -306,7 +320,7 @@ class MailManager:
     def _resume_after_backpressure(self):
         with self.lock:
             if (not self.state['enabled'] or self.state['busy'] or not self.state['queue_paused']
-                    or self.queue_resume_scheduled or not self.selection or self.state.get('analysis_error')):
+                    or self.queue_resume_scheduled or not self.selection or self.state.get('analysis_error') or self.maintenance_active):
                 return
             low_water=max(1,self.storage.settings()['queue_limit']//2)
             if len(self.analysis_queue)+len(self.analysis_current)>low_water:
@@ -389,6 +403,7 @@ class MailManager:
 
     def start(self, store, folder, days, limit, generation=None, **options):
         with self.lock:
+            if self.maintenance_active:raise ValueError('存储优化进行中，请稍后读取。')
             if generation is not None and (generation!=self.generation or not self.state['enabled']): return
             if self.state['busy']: raise ValueError('邮件正在读取，请等待完成后再操作。')
             if generation is None:
@@ -467,6 +482,7 @@ class MailManager:
 
     def configure(self, enabled, store, folder, days, limit, seconds, resume_on_start=False, **options):
         with self.lock:
+            if self.maintenance_active:raise ValueError('存储优化进行中，请稍后修改自动读取。')
             if enabled and self.state['busy']: raise ValueError('请等待当前读取完成后再开启定时读取。')
             self.generation+=1
             if self.timer: self.timer.cancel()
@@ -478,11 +494,55 @@ class MailManager:
         if enabled: self.start(store,folder,days,limit,**options)
         return self.status()
 
+    def maintenance_job(self):
+        return self.store.get_state('mail_maintenance_job',{})
 
+    def maintain_storage(self,mode,preview_id=None,compact=True):
+        with self.lock:
+            if self.maintenance_active or self.state['busy'] or self.state['enabled']:
+                raise ValueError('请先关闭自动读取并等待本批读取完成后再优化存储。')
+            previous=self.maintenance_job()
+            if mode=='optimize' and (previous.get('id')!=preview_id or previous.get('mode')!='preview' or previous.get('status')!='completed'):
+                raise ValueError('请先完成存储优化预览，再确认执行。')
+            self.maintenance_active=True
+            job=dict(id=uuid4().hex,mode=mode,status='running',phase='准备检查存储',processed=0,total=0,
+                     started_at=datetime.now(timezone.utc).isoformat())
+            self.store.set_state('mail_maintenance_job',job)
+        def run():
+            from .mail_maintenance import MailMaintenance
+            def progress(**changes):
+                job.update(changes)
+                self.store.set_state('mail_maintenance_job',job)
+            try:
+                progress(phase='等待当前附件识别完成，剩余队列已暂停')
+                while True:
+                    with self.lock:processing=self.analysis_busy
+                    if not processing:break
+                    sleep(.2)
+                maintenance=MailMaintenance(self.store)
+                result=maintenance.preview(progress) if mode=='preview' else maintenance.optimize(compact,progress)
+                job.update(status='completed',result=result,phase='检查完成' if mode=='preview' else '存储优化完成')
+            except Exception as error:
+                job.update(status='failed',message=str(error) if isinstance(error,ValueError) else '存储优化未完成，已有数据保留。请检查磁盘空间后重新预览；数据库整理期间请勿关闭程序。')
+            finally:
+                try:
+                    job['finished_at']=datetime.now(timezone.utc).isoformat()
+                    self.store.set_state('mail_maintenance_job',job)
+                    history=self.store.get_state('mail_maintenance_history',[])
+                    self.store.set_state('mail_maintenance_history',([job]+history)[:20])
+                finally:
+                    with self.lock:
+                        self.maintenance_active=False
+                        self.state['analysis_error']=''
+                        if (self.analysis_current or self.analysis_queue) and not self.analysis_busy and not self.state['analysis_halted']:
+                            self.analysis_busy=True
+                            Thread(target=self._analyze_queue,daemon=True).start()
+        Thread(target=run,daemon=True).start()
+        return dict(job)
 
     def clear(self):
         with self.lock:
-            if self.state['busy'] or self.state['enabled'] or self.analysis_busy: raise ValueError('请先停止定时读取并等待邮件及附件识别完成。')
+            if self.maintenance_active or self.state['busy'] or self.state['enabled'] or self.analysis_busy: raise ValueError('请先停止存储优化及定时读取并等待邮件及附件识别完成。')
             self.store.clear()
             with self.store.db() as db:db.execute('DELETE FROM mail_analysis_queue')
 
@@ -515,10 +575,42 @@ def create_router(require_local):
     @router.put('/storage')
     def configure_storage(values: dict):
         try:
-            if set(values)-{'max_gb','min_free_gb','queue_limit'}:raise ValueError('包含未知的保存设置。')
-            manager().storage.configure(values)
+            if set(values)-{'max_gb','min_free_gb','queue_limit','preview_cache_mb'}:raise ValueError('包含未知的保存设置。')
+            with manager().lock:
+                if manager().maintenance_active:raise ValueError('存储优化进行中，请稍后修改规则。')
+                manager().storage.configure(values)
             return manager().storage.snapshot()
         except ValueError as error:raise HTTPException(400,str(error)) from None
+
+    @router.get('/storage/maintenance')
+    def maintenance_status():return manager().maintenance_job()
+
+    @router.get('/storage/maintenance/history')
+    def maintenance_history():return manager().store.get_state('mail_maintenance_history',[])
+
+    @router.post('/storage/maintenance/preview',status_code=202)
+    def maintenance_preview():
+        try:return manager().maintain_storage('preview')
+        except ValueError as error:raise HTTPException(409,str(error)) from None
+
+    @router.post('/storage/maintenance/optimize',status_code=202)
+    def maintenance_optimize(body: StorageOptimization):
+        if not body.confirmed:raise HTTPException(400,'请先确认存储优化。')
+        try:return manager().maintain_storage('optimize',body.preview_id,body.compact)
+        except ValueError as error:raise HTTPException(409,str(error)) from None
+
+    @router.get('/messages/{identity}/attachments/{attachment_id}/preview/{number}')
+    def attachment_preview(identity:str,attachment_id:str,number:int):
+        from .mail_assets import PreviewCache
+        try:
+            with manager().lock:
+                if manager().maintenance_active:raise ValueError('存储优化进行中，请稍后查看原件预览。')
+                if not 1<=number<=10:raise ValueError('页码无效。')
+                value=PreviewCache(manager().store).get(identity,attachment_id,number)
+            return Response(value,media_type='image/png',headers={'Cache-Control':'no-store'})
+        except LookupError:raise HTTPException(404,'附件不存在。') from None
+        except ValueError as error:raise HTTPException(409,str(error)) from None
+        except Exception:raise HTTPException(422,'附件预览生成失败，识别文字仍保留，请检查原始附件。') from None
 
     @router.post('/folders')
     def folders():

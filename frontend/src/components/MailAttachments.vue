@@ -22,7 +22,7 @@
       <template v-if="page">
         <p v-if="evidence" class="quote">原文：{{ evidence.quote }}<span v-if="evidence.confidence !== null"> · 文字识别置信度 {{ Math.round(evidence.confidence * 100) }}%</span></p>
         <div class="evidence-layout">
-          <div class="preview-scroll"><div class="image-wrap"><img :src="`data:image/png;base64,${page.preview}`" :alt="`${previewName} 第 ${page.number} 页`" /><span v-if="evidence?.box" class="highlight" :style="highlightStyle(evidence.box)" /></div></div>
+          <div class="preview-scroll" v-loading="previewLoading"><el-alert v-if="previewError" :title="previewError" type="warning" :closable="false" /><div v-if="previewUrl" class="image-wrap"><img :src="previewUrl" :alt="`${previewName} 第 ${page.number} 页`" /><span v-if="evidence?.box" class="highlight" :style="highlightStyle(evidence.box)" /></div></div>
           <section class="text-scroll"><h3>识别文字</h3><pre>{{ page.text || '未识别到文字，请查看原图。' }}</pre></section>
         </div>
       </template>
@@ -31,13 +31,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, watch, onBeforeUnmount } from 'vue'
 import { Refresh, View } from '@element-plus/icons-vue'
-import type { MailAttachment, MailEvidence } from '../services/mail'
+import { mailApi, type MailAttachment, type MailEvidence } from '../services/mail'
 
-const props=defineProps<{ assets: MailAttachment[]; legacyNames: string[]; busy: boolean; warning?: string }>()
+const props=defineProps<{ mailId:string; assets: MailAttachment[]; legacyNames: string[]; busy: boolean; warning?: string }>()
 defineEmits<{analyze: []}>()
 const opened=ref<string[]>([]), visible=ref(false), previewName=ref('')
+const previewUrl=ref(''),previewLoading=ref(false),previewError=ref('')
+let previewRequest=0
+function clearPreview(){if(previewUrl.value)URL.revokeObjectURL(previewUrl.value);previewUrl.value=''}
 const page=ref<NonNullable<MailAttachment['result']>['pages'][number]>()
 const evidence=ref<MailEvidence>()
 const labels={pending:'等待识别',running:'正在识别',done:'已识别 · 待核对',failed:'识别失败',unsupported:'暂不支持',skipped:'已跳过'}
@@ -49,10 +52,17 @@ function fieldRows(asset: MailAttachment) {
     return items.length ? items.map(item=>({label,item})) : [{label,item:undefined}]
   })
 }
-function show(asset: MailAttachment, number: number, item?: MailEvidence) {
+async function show(asset: MailAttachment, number: number, item?: MailEvidence) {
+  const request=++previewRequest
+  clearPreview();previewError.value='';previewLoading.value=true
   page.value=asset.result?.pages.find(p=>p.number===number)
   previewName.value=asset.name;evidence.value=item;visible.value=true
+  try{const blob=await mailApi.preview(props.mailId,asset.id,number);if(request===previewRequest && visible.value)previewUrl.value=URL.createObjectURL(blob)}
+  catch{if(request===previewRequest)previewError.value='原件预览暂不可用。识别文字仍在，请稍后重试或检查原始附件。'}
+  finally{if(request===previewRequest)previewLoading.value=false}
 }
+watch(visible,(value)=>{if(!value){previewRequest++;clearPreview();previewLoading.value=false}})
+onBeforeUnmount(()=>{previewRequest++;clearPreview()})
 function highlightStyle(box: number[][]) {
   const xs=box.map(p=>p[0]),ys=box.map(p=>p[1])
   return {left:`${Math.min(...xs)*100}%`,top:`${Math.min(...ys)*100}%`,width:`${(Math.max(...xs)-Math.min(...xs))*100}%`,height:`${(Math.max(...ys)-Math.min(...ys))*100}%`}
