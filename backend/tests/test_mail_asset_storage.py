@@ -214,3 +214,39 @@ def test_failed_migration_transaction_can_be_retried_without_losing_original(tmp
     assert module.MailMaintenance(store).optimize(compact=False)['errors']==0
     aid=store.get('a')['attachment_details'][0]['id']
     assert store.attachment('a',aid)['raw']==raw
+
+
+def test_completed_preview_cannot_reject_next_job_while_history_is_persisted(tmp_path,monkeypatch):
+    """Force the Windows-observed gap between publishing completion and unlocking."""
+    from threading import Event, Thread
+    from app.mail_tasks import MailManager
+    store,raw=legacy_store(tmp_path)
+    for key in ('a','b'):store.set_payments(key,[])
+    manager=MailManager(store,reader=lambda *x:dict(rows=[],errors=[],partial=False))
+    published=Event();release=Event();finished=Event();outcome=[]
+    original=store.set_state
+    def delayed_history(key,value):
+        if key=='mail_maintenance_history' and value[0]['mode']=='preview':
+            published.set()
+            assert release.wait(5)
+        return original(key,value)
+    monkeypatch.setattr(store,'set_state',delayed_history)
+    manager.maintain_storage('preview')
+    assert published.wait(5)
+    preview=manager.maintenance_job()
+    assert preview['status']=='completed'
+    def start_next():
+        try:outcome.append(manager.maintain_storage('optimize',preview['id'],compact=False))
+        except ValueError as error:outcome.append(error)
+        finally:finished.set()
+    caller=Thread(target=start_next);caller.start()
+    # Old code immediately rejects with 409 while maintenance_active is true.
+    rejected_early=finished.wait(.1)
+    release.set();caller.join(5)
+    assert not rejected_early, outcome
+    assert finished.is_set() and isinstance(outcome[0],dict), outcome
+    import time
+    for _ in range(500):
+        if not manager.maintenance_active:break
+        time.sleep(.01)
+    assert manager.maintenance_job()['status']=='completed'

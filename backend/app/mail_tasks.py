@@ -551,13 +551,16 @@ class MailManager:
                     message+='；本批数据库变更已回滚，恢复备份保留，可重新预览。'
                 job.update(status='failed',message=message,diagnostic=diagnostic)
             finally:
-                try:
-                    job['finished_at']=datetime.now(timezone.utc).isoformat()
-                    self.store.set_state('mail_maintenance_job',job)
-                    history=self.store.get_state('mail_maintenance_history',[])
-                    self.store.set_state('mail_maintenance_history',([job]+history)[:20])
-                finally:
-                    with self.lock:
+                # Publish completion and release the maintenance guard under the
+                # same lock used to start jobs. A caller seeing "completed" must
+                # wait for finalization, never receive a spurious busy conflict.
+                with self.lock:
+                    try:
+                        job['finished_at']=datetime.now(timezone.utc).isoformat()
+                        self.store.set_state('mail_maintenance_job',job)
+                        history=self.store.get_state('mail_maintenance_history',[])
+                        self.store.set_state('mail_maintenance_history',([job]+history)[:20])
+                    finally:
                         self.maintenance_active=False
                         self.state['analysis_error']=''
                         if (self.analysis_current or self.analysis_queue) and not self.analysis_busy and not self.state['analysis_halted']:
