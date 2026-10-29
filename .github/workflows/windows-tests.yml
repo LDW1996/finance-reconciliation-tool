@@ -1,0 +1,43 @@
+name: Windows Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Windows full tests
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+            packaging/requirements-build.txt
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Validate fast-build eligibility checks
+        run: node --test .github/scripts/windows-validation.test.cjs
+      - name: Install Python dependencies
+        run: python -m pip install --disable-pip-version-check -r packaging/requirements-build.txt
+      - name: Run tests
+        run: python -m pytest backend/tests -q
+        env:
+          PYTHONPATH: backend
