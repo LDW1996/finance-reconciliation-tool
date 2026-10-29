@@ -80,6 +80,33 @@ class MailWorkspace:
             self.cache=None
         return self.ledger()
 
+    def customer_mapping(self):
+        data=self.store.get_state('customer_mapping',{})
+        return {k:v for k,v in data.items() if k!='entries'}
+
+    def mapping_index(self):
+        from .customer_mapping import MappingIndex
+        data=self.store.get_state('customer_mapping',{})
+        return MappingIndex(data.get('entries',[])) if data.get('enabled') else None
+
+    def import_customer_mapping(self,raw,name,sheet_name=None):
+        from .customer_mapping import parse_contacts
+        data=parse_contacts(raw,name,sheet_name)
+        data['imported_at']=datetime.now(timezone.utc).isoformat()
+        with self.lock:
+            self.store.set_state('customer_mapping',data)
+            self.cache=None
+        return self.customer_mapping()
+
+    def enable_customer_mapping(self,enabled):
+        with self.lock:
+            data=self.store.get_state('customer_mapping',{})
+            if not data:raise ValueError('请先导入客户映射台账。')
+            data['enabled']=enabled
+            self.store.set_state('customer_mapping',data)
+            self.cache=None
+        return self.customer_mapping()
+
     def _review_map(self):
         with self.store.db() as db:
             return {key:self.store.decode(payload) for key,payload in db.execute('SELECT receipt_id,payload FROM mail_review')}
@@ -87,18 +114,21 @@ class MailWorkspace:
     def _ranked(self,data,scope,day_window,candidate_limit):
         from .mail_matching import rank_receipts
         revision=self.store.get_state('match_revision','0')
+        contact=self.customer_mapping()
+        mapping_revision=str(contact.get('revision','0')) if contact.get('enabled') else 'disabled'
+        revision=f'{revision}:{mapping_revision}'
         key=(data['id'],revision,scope,day_window,candidate_limit)
         if self.cache and self.cache[0]==key: return deepcopy(self.cache[1]),revision
         receipts=[r for r in data['entries'] if eligible(r,scope)]
-        result=rank_receipts(receipts,self.store.payment_rows(),day_window=day_window,limit=candidate_limit)
+        result=rank_receipts(receipts,self.store.payment_rows(),day_window=day_window,limit=candidate_limit,mapping=self.mapping_index())
         self.cache=(key,deepcopy(result))
         return result,revision
 
     def _candidate(self,receipt,payment_id,day_window):
         from .mail_matching import rank_receipts
-        payments=[p for p in self.store.payment_rows() if p.get('id')==payment_id or p.get('payment_id')==payment_id]
-        result=rank_receipts([receipt],payments,day_window=day_window,limit=1)
-        return result[0]['candidates'][0] if result and result[0]['candidates'] else None
+        payments=self.store.payment_rows()
+        result=rank_receipts([receipt],payments,day_window=day_window,limit=1,mapping=self.mapping_index(),payment_id=payment_id)
+        return next((p for p in result[0]['candidates'] if p.get('payment_id')==payment_id or p.get('id')==payment_id),None) if result else None
 
     def matching(self,scope='unidentified',page=1,page_size=50,minimum_score=0,day_window=3,candidate_limit=3,keyword='',sort_by='source'):
         with self.lock:

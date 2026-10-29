@@ -12,10 +12,17 @@ export interface Receipt {
   id: string; row: number; date: string | null; amount: number | string | null
   currency: string; payer: string; ref: string; description: string; status: string
 }
+export interface CustomerMappingMetadata {
+  name?:string;sheet?:string;available_sheets?:string[];entries_count?:number;skipped?:number;enabled?:boolean;revision?:string;imported_at?:string
+}
+export interface CustomerMappingEvidence {
+  points:number;ambiguous:boolean;label:string
+  rows:Array<{customer:string;bank_name:string;emails:string[];row:number;sheet:string}>
+}
 export interface MatchingCandidate {
   payment_id: string; id: string; mail_id: string; attachment_id: string; page: number
-  payer: string; date: string | null; amount: number | string | null; currency: string
-  score: number; breakdown: { amount: number; payer: number; date: number }
+  payer: string | null; date: string | null; amount: number | string | null; currency: string
+  score: number; breakdown: { amount: number; payer: number; date: number; mapping?:number }; mapping?:CustomerMappingEvidence
   warnings: string[]; subject: string; sender: string; received: string; keyword: string
   business_ids: string[]; remark: string; search_info: unknown; evidence: unknown
   related_mail_ids?: string[]
@@ -58,6 +65,15 @@ export function validateSpreadsheetUrl(value: string): string {
 }
 const client = axios.create({ baseURL: '/api/mail', headers: { 'X-Finance-Local': '1' }, timeout: 30000 })
 export const mailMatchingApi = {
+  customerMapping:async(signal?:AbortSignal)=>(await client.get<CustomerMappingMetadata>('/customer-mapping',{signal})).data,
+  enableCustomerMapping:async(enabled:boolean,signal?:AbortSignal)=>(await client.put<CustomerMappingMetadata>('/customer-mapping',{enabled},{signal})).data,
+  importCustomerMapping:async(file:File,sheet?:string,signal?:AbortSignal)=>{
+    if(!/\.(xlsx|csv)$/i.test(file.name))throw new Error('请选择XLSX或CSV客户台账')
+    if(file.size>5*1024**2)throw new Error('客户台账不能超过5MB')
+    const data=new FormData();data.append('workbook',file)
+    if(sheet?.trim())data.append('sheet_name',sheet.trim())
+    return (await client.post<CustomerMappingMetadata>('/customer-mapping/import',data,{signal})).data
+  },
   onlineConfig: async (signal?: AbortSignal) =>
     (await client.get<OnlineConfig>('/online/config', { signal })).data,
   saveOnlineConfig: async (spreadsheetUrl: string, currency: string, credential?: File, signal?: AbortSignal) => {

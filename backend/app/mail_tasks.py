@@ -90,6 +90,10 @@ class OnlineWriteback(BaseModel):
     confirmation_token: str = Field(min_length=64,max_length=64)
 
 
+class CustomerMappingSetting(BaseModel):
+    enabled: bool
+
+
 class StorageOptimization(BaseModel):
     confirmed: bool = False
     preview_id: str = Field(min_length=1,max_length=64)
@@ -780,6 +784,24 @@ def create_router(require_local):
 
     @router.get('/online/history')
     def online_history():return manager().online.history()
+
+    @router.get('/customer-mapping')
+    def customer_mapping():return manager().workspace.customer_mapping()
+
+    @router.put('/customer-mapping')
+    def customer_mapping_setting(body: CustomerMappingSetting):
+        try:return manager().workspace.enable_customer_mapping(body.enabled)
+        except ValueError as error:raise HTTPException(400,str(error)) from None
+
+    @router.post('/customer-mapping/import')
+    async def import_customer_mapping(workbook: UploadFile=File(...),sheet_name: str | None=Form(None)):
+        from .customer_mapping import MAX_BYTES
+        try:
+            name=(workbook.filename or '').replace('\\','/').rsplit('/',1)[-1].replace('\r','').replace('\n','')
+            raw=await workbook.read(MAX_BYTES+1)
+            return await run_in_threadpool(manager().workspace.import_customer_mapping,raw,name,sheet_name)
+        except ValueError as error:raise HTTPException(400,str(error)) from None
+        finally:await workbook.close()
 
     @router.post('/ledger/import')
     async def import_ledger(workbook: UploadFile=File(...),currency: str=Form('IDR'),sheet_name: str | None=Form(None)):

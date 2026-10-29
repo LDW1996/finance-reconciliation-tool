@@ -24,11 +24,12 @@ def related_receipts(workspace,mail_id,day_window=3,limit=5,payment_id=None):
     with workspace.lock:
         data=workspace._dataset()
         if not data:return dict(ledger=None,rows=[],total_rows=0,day_window=day_window)
-        payments=workspace.store.payment_index([mail_id]).get(mail_id,[])
-        if payment_id:
-            payments=[p for p in payments if p['id']==payment_id]
-            if not payments:raise ValueError('该付款凭证已更新，请重新选择邮件。')
-        rows=rank_receipts(data['entries'],payments,day_window=day_window,limit=3)
+        from .mail_matching import _group_payments
+        groups=_group_payments(workspace.store.payment_rows())
+        relevant=[group for group in groups if any(p.get('mail_id')==mail_id and (not payment_id or p.get('id')==payment_id) for p in group)]
+        payments=[payment for group in relevant for payment in group]
+        if payment_id and not payments:raise ValueError('该付款凭证已更新，请重新选择邮件。')
+        rows=rank_receipts(data['entries'],payments,day_window=day_window,limit=3,mapping=workspace.mapping_index())
         rows=[row for row in rows if row['candidates']]
         rows.sort(key=lambda row:row['candidates'][0]['score'],reverse=True)
         total=len(rows);rows=rows[:limit];reviews=workspace._review_map()

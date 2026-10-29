@@ -47,6 +47,7 @@
     <p class="source" v-if="result?.ledger && !result.ledger.online">{{ result.ledger.name }} · {{ result.ledger.sheet || 'CSV' }} · {{ result.ledger.entries_count }} 条收款</p>
     <p class="source" v-if="!result?.ledger">导入 xlsx、xls 或 csv 台账，最大 25MB</p>
     </details>
+    <CustomerMapping :disabled="busy" @busy-change="mappingBusy=$event" @changed="mappingChanged" />
     <section class="review-workspace" aria-label="收款查询与列表">
       <header class="workspace-heading"><div><h2>收款核对</h2></div><span v-if="result?.ledger?.skipped" class="skipped-note">{{ result.ledger.skipped }} 行无有效日期或金额，已跳过</span></header>
       <div v-if="result?.ledger" class="overview" role="status">
@@ -93,6 +94,7 @@
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
 import { Download, Refresh, Upload, Search, ArrowDown } from '@element-plus/icons-vue'
 import ReceiptReview from './ReceiptReview.vue'
+import CustomerMapping from './CustomerMapping.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { mailMatchingApi, matchingError, validateSpreadsheetUrl, type OnlineConfig, type OnlineHistoryItem, type OnlineWriteback, type MatchingCandidate, type MatchingResult, type MatchingRow, type MatchingScope, type ReviewState } from '../services/mailMatching'
 
@@ -112,8 +114,9 @@ const credentialInput = ref<HTMLInputElement>(), credential = ref<File>()
 const historyOpen = ref(false), history = ref<OnlineHistoryItem[]>([])
 const writebackResult = ref<OnlineWriteback>()
 const writebackIssues = computed(() => writebackResult.value?.items.filter(item => !['written', 'unchanged'].includes(item.status)) || [])
-const busy = computed(() => !!operation.value)
-const mutating = computed(() => !!operation.value && operation.value !== 'load')
+const mappingBusy=ref(false)
+const busy = computed(() => !!operation.value || mappingBusy.value)
+const mutating = computed(() => mappingBusy.value || (!!operation.value && operation.value !== 'load'))
 const selected = computed(() => result.value?.rows.find(row => row.receipt.id === selectedId.value))
 const reviewLabels: Record<ReviewState, string> = { pending: '待核对', confirmed: '已确认', rejected: '暂不关联' }
 let sequence = 0, alive = true, activated = true, visible = true, pendingRefresh = false
@@ -142,6 +145,7 @@ async function run(kind: string, work: (signal: AbortSignal, token: number) => P
     }
   }
 }
+function mappingChanged(){stale.value=true;void refresh()}
 async function refresh() {
   if (!isActive()) return
   if (busy.value) { pendingRefresh = true; return }

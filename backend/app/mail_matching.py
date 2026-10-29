@@ -20,6 +20,7 @@ from dateutil import parser as date_parser
 
 MAX_BYTES = 25 * 1024 * 1024
 MAX_ROWS = 20_000
+MAPPING_CURRENCIES = frozenset(('IDR','USD','CNY','SGD','EUR','HKD','MYR','THB','JPY','AUD','GBP'))
 _INDONESIAN_MONTHS={'januari':'Jan','februari':'Feb','maret':'Mar','mei':'May','juni':'Jun','juli':'Jul',
                     'agustus':'Aug','agu':'Aug','agt':'Aug','oktober':'Oct','okt':'Oct','desember':'Dec','des':'Dec'}
 
@@ -367,7 +368,7 @@ def _group_payments(payments):
     return groups
 
 
-def rank_receipts(receipts: list, payments: list, day_window=3, limit=3) -> list:
+def rank_receipts(receipts: list, payments: list, day_window=3, limit=3, mapping=None, payment_id=None) -> list:
     """Date window is mandatory; amount/currency differences lower similarity.
 
     candidate_count is the deduplicated count before limit. Related search info
@@ -376,6 +377,11 @@ def rank_receipts(receipts: list, payments: list, day_window=3, limit=3) -> list
     if day_window < 0 or limit < 0:
         raise ValueError('day_window and limit must be nonnegative')
     groups = _group_payments([effective_payment_date(payment) for payment in payments])
+    if payment_id is not None:
+        # A saved confirmation may reference a noncanonical source copy. Keep
+        # its original provenance, while retaining all copies for mapping clues.
+        groups=[[selected]+[p for p in group if p is not selected]
+                for group in groups for selected in group if selected.get('id')==payment_id]
     by_date={}
     for group in groups:
         day=_date(group[0].get('date'))
@@ -428,9 +434,24 @@ def rank_receipts(receipts: list, payments: list, day_window=3, limit=3) -> list
             if warning:
                 warnings.append(warning.lower())
             breakdown = dict(amount=amount_score, payer=payer_score, date=date_score)
+            relationship=None
+            if (mapping is not None and payer_score<30 and amount==other_amount
+                    and rc in MAPPING_CURRENCIES and rc==pc):
+                relationship=mapping.match(receipt.get('payer'),group)
+                if relationship and relationship['points']>payer_score:
+                    breakdown['mapping']=relationship['points']-payer_score
+                    warnings.append('客户台账包含共享邮箱或一对多客户关系，请逐项核对。' if relationship['ambiguous'] else '通过客户台账关系补充匹配；未替换凭证付款人，请核对原始凭证。')
+                else:relationship=None
             candidate = dict(payment, payment_id=payment.get('id'), score=sum(breakdown.values()), breakdown=breakdown,
                 warnings=list(dict.fromkeys(warnings)), related_mail_ids=list(dict.fromkeys(p.get('mail_id') for p in group)),
                 related_search_info=[dict(mail_id=p.get('mail_id'), search_info=p.get('search_info', '')) for p in group])
+            if relationship:
+                from copy import deepcopy
+                candidate['mapping']=deepcopy(relationship)
+                candidate['evidence']=deepcopy(candidate.get('evidence') or {})
+                candidate['evidence']['customer_mapping']=deepcopy(relationship)
+                lines=[f"{row['bank_name']} → {row['customer']}；邮箱：{', '.join(row['emails']) or '未登记'}；{row['sheet']} 第{row['row']}行" for row in relationship['rows']]
+                candidate['remark']=str(candidate.get('remark') or '')+'\n客户台账关联（辅助依据）：'+'；'.join(lines)
             candidates.append(candidate)
         candidates.sort(key=lambda c: (-c['score'], _text(c.get('id'))))
         results.append(dict(receipt=receipt, candidates=candidates[:limit], candidate_count=len(candidates),
