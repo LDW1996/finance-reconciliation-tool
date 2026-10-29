@@ -56,7 +56,7 @@
           <span>保存 {{ performanceDuration(status.performance.seconds.save_seconds) }}</span>
           <span>复用等待 {{ performanceDuration(status.performance.seconds.cache_wait_seconds) }}</span>
         </div>
-        <div class="mail-performance-footer"><p>耗时为累计工作时间，并发任务可能重叠。最近60秒按秒统计，边界最多相差1秒；重启后重新计数。</p><el-button size="small" :icon="Download" @click="exportPerformance">导出性能 JSON</el-button></div>
+        <div class="mail-performance-footer"><p>耗时为累计工作时间，并发任务可能重叠。最近60秒按秒统计，边界最多相差1秒；重启后重新计数。</p><el-button size="small" :icon="Download" @click="exportPerformance">导出性能 JSON</el-button><el-button size="small" @click="exportDiagnostics(3)">导出近3天日志</el-button><el-button size="small" @click="exportDiagnostics(14)">近14天日志</el-button></div>
       </details>
       <p v-if="status?.queue_paused && !status.analysis_error && !status.error" class="mail-queue-note" role="status">{{ status.enabled ? '正在消化附件队列，积压下降后将自动继续读取。' : '正在消化附件队列，可稍后继续读取。' }}</p>
       <details class="mail-reading-note"><summary>读取说明</summary><p>仅读取 Outlook 中已打开且有权限访问的目录。标识与内容一致的邮件副本合并并保留来源；没有匹配邮件不代表其他目录也没有。</p></details>
@@ -108,6 +108,9 @@ import MailFolderTree from '../components/MailFolderTree.vue'
 import ReceiptMatching from '../components/ReceiptMatching.vue'
 
 const performanceDuration=(value:number)=>`${Math.max(0, Number.isFinite(value) ? value : 0).toFixed(1)} 秒`
+async function exportDiagnostics(days:number) {
+  try { downloadBlob(await mailApi.diagnostics(days),'邮件诊断日志.zip') } catch(error) { ElMessage.error(errorText(error)) }
+}
 function exportPerformance() {
   if (!status.value?.performance) return
   const payload={generated_at:new Date().toISOString(),build_commit:import.meta.env.VITE_BUILD_COMMIT || 'unknown',performance:status.value.performance,diagnostics:status.value.analysis_diagnostics || [],analysis_diagnostic:status.value.analysis_diagnostic || null,status_diagnostic:status.value.status_diagnostic || null}
@@ -150,10 +153,20 @@ async function loadMessages(){
   const data=await mailApi.messagePage(query)
   if(disposed || request!==messageRequest || query.page!==mailPage.value || query.keyword!==filter.value || query.payment_filter!==paymentFilter.value)return
   rows.value=data.rows;mailTotal.value=data.total;savedTotal.value=data.total_saved
+  if(selected.value && !data.rows.some(row=>row.id===selected.value?.id)) {
+    ++detailRequest; ++relatedRequest
+    selected.value=null; related.value=null; relatedError.value=''; relatedLoading.value=false
+    relatedPaymentId.value=''; detailLoading.value=false
+  }
   const last=Math.max(1,Math.ceil(data.total/50));if(mailPage.value>last)mailPage.value=last
 }
 function scheduleMessages(){clearTimeout(searchTimer);searchTimer=setTimeout(()=>{void loadMessages().catch(error=>{connectionError.value=errorText(error)})},250)}
-watch([filter,paymentFilter],()=>{mailPage.value=1;scheduleMessages()})
+watch([filter,paymentFilter],()=>{
+  ++detailRequest; ++relatedRequest
+  selected.value=null; related.value=null; relatedError.value=''; relatedLoading.value=false
+  relatedPaymentId.value=''; detailLoading.value=false
+  rows.value=[]; mailTotal.value=0; mailPage.value=1; scheduleMessages()
+})
 watch(mailPage,scheduleMessages)
 
 let timer: ReturnType<typeof setTimeout> | undefined, disposed=false, detailRequest=0, relatedRequest=0, initialized=false

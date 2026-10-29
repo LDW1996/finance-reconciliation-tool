@@ -1,3 +1,4 @@
+from .diagnostics import record as diagnostic_record
 """Read-only classic Outlook adapter and local mail parsing for connection trials."""
 
 import hashlib
@@ -96,6 +97,7 @@ def parse_msg(raw):
                         _attachments=assets, attachment_warning='仅保留前 20 个附件。' if len(mail.attachments)>MAX_ATTACHMENTS else '',
                         candidates=candidates(subject+'\n'+body[:200000]), **mail_sections(body[:200000]))
     except Exception as error:
+        diagnostic_record('outlook_read',error)
         raise ValueError('无法读取 MSG：文件可能损坏、加密或不是普通邮件，请从 Outlook 重新另存为 MSG。') from error
 
 
@@ -233,7 +235,7 @@ class MailStore:
                 for payload,summary_payload in items:
                     summary=self.decode(summary_payload) if summary_payload else {}
                     status=summary.get('status','pending')
-                    matches=(payment_filter=='all' or (payment_filter=='payment' and summary.get('count',0)>0) or payment_filter==status)
+                    matches=(payment_filter=='all' or (payment_filter=='payment' and status=='ready') or payment_filter==status)
                     if not matches:continue
                     row=self.decode(payload)
                     fields=[row.get('subject',''),row.get('sender',''),*row.get('candidates',[]),*summary.get('payers',[]),*summary.get('dates',[]),*summary.get('business_ids',[])]
@@ -443,6 +445,7 @@ def scan_folder(folder, store_id, cutoff, limit, known_unchanged=None):
                            and all(a['status'] not in ('failed','skipped') for a in assets))
             rows.append(row)
         except Exception as error:
+            diagnostic_record('outlook_metadata',error,index=index,store_id=store_id)
             errors.append(f'第 {index} 项读取失败（{type(error).__name__}）。请在 Outlook 检查该项及权限提示；其余邮件继续读取。')
     else:
         partial=items.Count>budget
@@ -457,6 +460,7 @@ def read_outlook(store_id, folder_id, cutoff, limit):
             for row in result['rows']: row['folder']=str(folder.FolderPath)
             return result
         except Exception as error:
+            diagnostic_record('outlook_read',error)
             raise ValueError(f'文件夹读取失败（{type(error).__name__}）。请检查 Outlook 是否可正常收信、有无权限弹窗或文件夹是否已移动。') from None
 
 
@@ -538,6 +542,7 @@ def scan_folder_page(folder, store_id, start, end, limit, cursor=None, known_unc
             consumed.append((received,identity))
             if item.Class==43: selected.append(item)
         except Exception as error:
+            diagnostic_record('outlook_metadata',error,index=index,store_id=store_id)
             errors.append(f'第 {index} 项元数据读取失败（{type(error).__name__}），请检查 Outlook；可重新补扫。')
     else: more=items.Count>stop
     result=_scan_selected_messages(selected,store_id,start,limit,known_unchanged)
@@ -567,10 +572,12 @@ def scan_folder_page(folder, store_id, start, end, limit, cursor=None, known_unc
                         entry=str(items.Item(snapshot_index).EntryID)
                         if entry not in known:pending.append(entry);known.add(entry)
                     except Exception as error:
+                        diagnostic_record('outlook_read',error)
                         result['errors'].append(f'同时间邮件标识读取失败（{type(error).__name__}），请重新补扫该目录。')
                 if pending:
                     next_cursor={'before':before.isoformat(),'pending_ids':pending,'has_older':bucket_end<items.Count,'skip_boundary':True}
             except Exception as error:
+                diagnostic_record('outlook_same_time_snapshot',error,store_id=store_id)
                 result['errors'].append(f'同时间邮件清单创建失败（{type(error).__name__}），已保留时间游标，后续批次继续读取。')
     result.update(cursor=next_cursor,partial=more,errors=errors+result['errors'])
     return result
@@ -585,6 +592,7 @@ def read_outlook_page(store_id, folder_id, start, end, limit, cursor=None, known
             return result
         except ValueError: raise
         except Exception as error:
+            diagnostic_record('outlook_read',error)
             raise ValueError(f'邮箱分页读取失败（{type(error).__name__}），进度已保留，下一次将重试本批。') from None
 
 

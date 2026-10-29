@@ -111,3 +111,13 @@ def test_equal_time_id_snapshot_continues_to_older_fractional_bucket():
         cursor=result['cursor'];messages.reverse()
     else:raise AssertionError('Did not reach older timestamp bucket')
     assert len(ids)==len(set(ids))==2200
+
+
+def test_payment_filter_excludes_partial_and_pending_candidates(tmp_path):
+    store=MailStore(tmp_path/'mail.sqlite3')
+    store.save([dict(id=identity,subject=identity,body='') for identity in ('ready','partial','pending','empty')])
+    for identity in ('ready','partial','pending','empty'):
+        store.set_payment_summary(identity,dict(count=0 if identity=='empty' else 1,status=identity))
+    assert [r['id'] for r in store.message_page(payment_filter='payment')['rows']]==['ready']
+    assert [r['id'] for r in store.message_page(payment_filter='partial')['rows']]==['partial']
+    assert [r['id'] for r in store.message_page(payment_filter='pending')['rows']]==['pending']
