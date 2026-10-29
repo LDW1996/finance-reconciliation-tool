@@ -95,6 +95,16 @@ class StorageOptimization(BaseModel):
     compact: bool = True
 
 
+class MailCleanupRequest(BaseModel):
+    confirmed: bool = False
+    preview_id: str = Field(min_length=1,max_length=64)
+    selected: list[str] = Field(default_factory=list,max_length=200)
+
+
+class MailRestoreRequest(BaseModel):
+    backup_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+
+
 class MailManager:
     def __init__(self, store, reader=read_outlook, timer_factory=Timer, analyzer=analyze_attachment, paged_reader=None, analysis_workers=None, analysis_retry_limit=3, retry_wait=sleep):
         self.store=store; self.reader=reader; self.timer_factory=timer_factory
@@ -497,13 +507,15 @@ class MailManager:
     def maintenance_job(self):
         return self.store.get_state('mail_maintenance_job',{})
 
-    def maintain_storage(self,mode,preview_id=None,compact=True):
+    def maintain_storage(self,mode,preview_id=None,compact=True,selected=None,backup_id=None):
         with self.lock:
             if self.maintenance_active or self.state['busy'] or self.state['enabled']:
                 raise ValueError('请先关闭自动读取并等待本批读取完成后再优化存储。')
             previous=self.maintenance_job()
             if mode=='optimize' and (previous.get('id')!=preview_id or previous.get('mode')!='preview' or previous.get('status')!='completed'):
                 raise ValueError('请先完成存储优化预览，再确认执行。')
+            if mode=='cleanup' and (previous.get('id')!=preview_id or previous.get('mode')!='cleanup_preview' or previous.get('status')!='completed'):
+                raise ValueError('请先完成邮件清理预览，再逐封确认。')
             self.maintenance_active=True
             job=dict(id=uuid4().hex,mode=mode,status='running',phase='准备检查存储',processed=0,total=0,
                      started_at=datetime.now(timezone.utc).isoformat())
@@ -520,10 +532,24 @@ class MailManager:
                     if not processing:break
                     sleep(.2)
                 maintenance=MailMaintenance(self.store)
-                result=maintenance.preview(progress) if mode=='preview' else maintenance.optimize(compact,progress)
-                job.update(status='completed',result=result,phase='检查完成' if mode=='preview' else '存储优化完成')
+                if mode in ('cleanup_preview','cleanup','cleanup_restore'):
+                    from .mail_cleanup import MailCleanup
+                    cleanup=MailCleanup(self.store)
+                    if mode=='cleanup_preview':result=cleanup.preview(progress)
+                    elif mode=='cleanup':
+                        progress(phase='复查所选邮件并保存加密恢复备份')
+                        result=cleanup.delete(previous['result']['candidates'],selected or [])
+                    else:
+                        progress(phase='恢复清理备份，保留后来读取的数据')
+                        result=cleanup.restore(backup_id)
+                else:result=maintenance.preview(progress) if mode=='preview' else maintenance.optimize(compact,progress)
+                job.update(status='completed',result=result,phase='检查完成' if mode in ('preview','cleanup_preview') else '恢复完成' if mode=='cleanup_restore' else '清理完成' if mode=='cleanup' else '存储优化完成')
             except Exception as error:
-                job.update(status='failed',message=str(error) if isinstance(error,ValueError) else '存储优化未完成，已有数据保留。请检查磁盘空间后重新预览；数据库整理期间请勿关闭程序。')
+                diagnostic=describe_failure(error,job.get('phase','存储维护'),limit=0)
+                message=str(error) if isinstance(error,ValueError) else diagnostic['message']
+                if mode.startswith('cleanup'):
+                    message+='；本批数据库变更已回滚，恢复备份保留，可重新预览。'
+                job.update(status='failed',message=message,diagnostic=diagnostic)
             finally:
                 try:
                     job['finished_at']=datetime.now(timezone.utc).isoformat()
@@ -597,6 +623,27 @@ def create_router(require_local):
     def maintenance_optimize(body: StorageOptimization):
         if not body.confirmed:raise HTTPException(400,'请先确认存储优化。')
         try:return manager().maintain_storage('optimize',body.preview_id,body.compact)
+        except ValueError as error:raise HTTPException(409,str(error)) from None
+
+    @router.get('/storage/cleanup/backups')
+    def cleanup_backups():
+        from .mail_cleanup import MailCleanup
+        return MailCleanup(manager().store).backups()
+
+    @router.post('/storage/cleanup/preview',status_code=202)
+    def cleanup_preview():
+        try:return manager().maintain_storage('cleanup_preview')
+        except ValueError as error:raise HTTPException(409,str(error)) from None
+
+    @router.post('/storage/cleanup/execute',status_code=202)
+    def cleanup_execute(body: MailCleanupRequest):
+        if not body.confirmed:raise HTTPException(400,'请先逐封核对并确认本地邮件清理。')
+        try:return manager().maintain_storage('cleanup',body.preview_id,selected=body.selected)
+        except ValueError as error:raise HTTPException(409,str(error)) from None
+
+    @router.post('/storage/cleanup/restore',status_code=202)
+    def cleanup_restore(body: MailRestoreRequest):
+        try:return manager().maintain_storage('cleanup_restore',backup_id=body.backup_id)
         except ValueError as error:raise HTTPException(409,str(error)) from None
 
     @router.get('/messages/{identity}/attachments/{attachment_id}/preview/{number}')
