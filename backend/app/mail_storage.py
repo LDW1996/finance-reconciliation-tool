@@ -29,7 +29,10 @@ class MailStorage:
 
     def used_bytes(self):
         from .mail_assets import PreviewCache
-        return self.database_bytes()+PreviewCache(self.store).used_bytes()
+        return self.database_bytes()+PreviewCache(self.store).used_bytes()+self.cleanup_backup_bytes()
+
+    def cleanup_backup_bytes(self):
+        return sum(p.stat().st_size for p in (self.store.path.parent/'mail-cleanup-backups').glob('*.backup') if p.is_file())
 
     def database_bytes(self):
         return sum(p.stat().st_size for p in self.store.path.parent.glob(self.store.path.name+'*') if p.is_file())
@@ -53,7 +56,7 @@ class MailStorage:
         settings=self.settings();used=self.used_bytes()
         from .mail_assets import PreviewCache
         cache=PreviewCache(self.store)
-        return dict(database_bytes=self.database_bytes(),preview_cache_bytes=cache.used_bytes(),unique_attachments=unique,settings=settings,mail_count=count,attachment_count=attachment_count,used_bytes=used,
+        return dict(cleanup_backup_bytes=self.cleanup_backup_bytes(),database_bytes=self.database_bytes(),preview_cache_bytes=cache.used_bytes(),unique_attachments=unique,settings=settings,mail_count=count,attachment_count=attachment_count,used_bytes=used,
                     attachment_bytes=raw,recognition_bytes=metadata,reusable_bytes=reusable,
                     free_bytes=self.disk_free(),data_directory=str(self.store.path.parent),
                     warning=used>=settings['max_gb']*GIB*.8,blocked_reason=self.block_reason())

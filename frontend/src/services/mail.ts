@@ -42,7 +42,13 @@ export interface MailPerformance {
   recent: { completed_attachments:number; ocr_pages:number; pdf_text_pages:number }
   last_batch: { read_seconds:number; scanned:number; unchanged_mail:number; attachment_read_seconds:number } | null
 }
+export interface MailDiagnostic {
+  kind:string;phase:string;error_type:string;error_code:number|null;attempt:number;limit:number
+  reason:string;action:string;message:string;at:string;status?:'recovering'|'paused'|'recovered'
+}
 export interface MailStatus {
+  analysis_halted?:boolean;analysis_recovering?:boolean;analysis_recovery?:string
+  analysis_diagnostic?:MailDiagnostic;analysis_diagnostics?:MailDiagnostic[];status_diagnostic?:MailDiagnostic|null
   performance?: MailPerformance; analysis_workers?:number; analysis_active?:number; queue_paused?:boolean
   saved_total?:number; analysis_pending?:number
   busy: boolean; enabled: boolean; seconds: number; last_run: string | null; next_run: string | null
@@ -51,6 +57,8 @@ export interface MailStatus {
   folders?: {store:string;folder:string;label?:string}[]; include_children?:boolean; start_date?:string; end_date?:string
   folders_total?:number; folders_done?:number
   analysis_busy?: boolean
+  analysis_skipped?: number
+  analysis_warning?: string
   analysis_error?: string
   resume_on_start?: boolean; sync_phase?: 'history' | 'incremental'; sync_complete?: boolean
   sync_scanned?: number; sync_start?: string; sync_end?: string
