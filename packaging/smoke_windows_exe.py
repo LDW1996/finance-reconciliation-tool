@@ -125,6 +125,21 @@ def assert_ilog_local_services() -> None:
     response.raise_for_status()
 
 
+def poll_json(path, deadline):
+    """Cold native OCR startup may delay a request; keep a bounded overall wait."""
+    last_error=None
+    while time.monotonic()<deadline:
+        try:
+            response=httpx.get(APP_URL+path,headers={'X-Finance-Local':'1'},
+                               timeout=max(.1,min(10,deadline-time.monotonic())))
+            response.raise_for_status()
+            return response.json()
+        except httpx.TimeoutException as error:
+            last_error=error
+            time.sleep(.2)
+    raise AssertionError('Frozen API did not respond before deadline: '+path) from last_error
+
+
 def assert_mail_local_services() -> dict:
     from PIL import Image, ImageDraw, ImageFont
     # Check bundling only; CI must not connect to Outlook or any real mailbox.
@@ -153,9 +168,7 @@ def assert_mail_local_services() -> dict:
     identity=response.json()['id']
     deadline=time.monotonic()+90
     while time.monotonic()<deadline:
-        detail=httpx.get(APP_URL+'/api/mail/messages/'+identity,headers=headers,timeout=10)
-        detail.raise_for_status()
-        assets=detail.json()['attachment_details']
+        assets=poll_json('/api/mail/messages/'+identity,deadline)['attachment_details']
         if len(assets)==2 and all(a['status'] not in ('pending','running') for a in assets): break
         time.sleep(.2)
     else: raise AssertionError('Frozen attachment recognition timed out')
@@ -185,9 +198,7 @@ def assert_mail_local_services() -> dict:
 def wait_for_mail_analysis():
     deadline=time.monotonic()+90
     while time.monotonic()<deadline:
-        response=httpx.get(APP_URL+'/api/mail/status',headers={'X-Finance-Local':'1'},timeout=10)
-        response.raise_for_status()
-        status=response.json()
+        status=poll_json('/api/mail/status',deadline)
         if status.get('analysis_error'):
             raise AssertionError('Frozen analysis failed: '+status['analysis_error'])
         if not status['analysis_busy']:
@@ -208,7 +219,44 @@ def assert_mail_restart_preserved(expected):
         raise AssertionError('Restart unnecessarily analyzed already completed attachments')
 
 
+def start_test_process(exe, env):
+    process=subprocess.Popen([str(exe)],env=env)
+    if sys.platform=='win32':
+        # A Windows job retains descendants even if the one-file bootloader exits.
+        import ctypes
+        from ctypes import wintypes
+        kernel=ctypes.WinDLL('kernel32',use_last_error=True)
+        kernel.CreateJobObjectW.argtypes=[ctypes.c_void_p,wintypes.LPCWSTR]
+        kernel.CreateJobObjectW.restype=wintypes.HANDLE
+        kernel.AssignProcessToJobObject.argtypes=[wintypes.HANDLE,wintypes.HANDLE]
+        kernel.AssignProcessToJobObject.restype=wintypes.BOOL
+        kernel.TerminateJobObject.argtypes=[wintypes.HANDLE,wintypes.UINT]
+        kernel.TerminateJobObject.restype=wintypes.BOOL
+        kernel.CloseHandle.argtypes=[wintypes.HANDLE]
+        kernel.CloseHandle.restype=wintypes.BOOL
+        job=kernel.CreateJobObjectW(None,None)
+        if not job or not kernel.AssignProcessToJobObject(job,int(process._handle)):
+            error=ctypes.WinError(ctypes.get_last_error())
+            if job:kernel.CloseHandle(job)
+            stop_process_tree(process)
+            raise error
+        process._smoke_job=(kernel,job)
+    return process
+
+
 def stop_process_tree(process):
+    job=getattr(process,'_smoke_job',None)
+    if job:
+        kernel,handle=job
+        try:
+            if not kernel.TerminateJobObject(handle,1):
+                import ctypes
+                raise ctypes.WinError(ctypes.get_last_error())
+            process.wait(timeout=10)
+        finally:
+            kernel.CloseHandle(handle)
+            process._smoke_job=None
+        return
     if process.poll() is not None:return
     if sys.platform=='win32':
         # PyInstaller one-file builds have a bootloader child; terminate the

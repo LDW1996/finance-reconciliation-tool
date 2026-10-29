@@ -6,9 +6,13 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import shutil
+import time
+import traceback
+from contextlib import contextmanager
 import httpx
 from openpyxl import load_workbook
-from smoke_windows_exe import (APP_URL,wait_for_health,assert_mail_local_services,assert_mail_restart_preserved,stop_process_tree)
+from smoke_windows_exe import (APP_URL,wait_for_health,assert_mail_local_services,assert_mail_restart_preserved,stop_process_tree,start_test_process)
 
 
 def check_local_ledgers():
@@ -30,6 +34,32 @@ def check_local_ledgers():
     book.close()
 
 
+@contextmanager
+def smoke_directory(diagnostics):
+    # A cleanup failure must never hide the original startup/OCR failure.
+    root=Path(tempfile.mkdtemp(prefix='mail-en-smoke-'))
+    failed=False
+    try:
+        yield str(root)
+    except BaseException:
+        failed=True
+        (diagnostics/'failure.log').write_text(traceback.format_exc(),encoding='utf-8')
+        raise
+    finally:
+        deadline=time.monotonic()+10
+        while True:
+            try:
+                shutil.rmtree(root)
+                break
+            except PermissionError:
+                if time.monotonic()<deadline:
+                    time.sleep(.25)
+                    continue
+                (diagnostics/'cleanup.log').write_text(traceback.format_exc(),encoding='utf-8')
+                if not failed:raise
+                break
+
+
 def main():
     exe=Path(sys.argv[1]).resolve()
     try:httpx.get(APP_URL+'/api/health',timeout=2)
@@ -38,14 +68,14 @@ def main():
     diagnostics=Path('build/smoke-diagnostics/mail-en').resolve();diagnostics.mkdir(parents=True,exist_ok=True)
     startup=diagnostics/'startup.log';startup.write_text('',encoding='utf-8')
     report=diagnostics/'probe.json'
-    with tempfile.TemporaryDirectory(prefix='mail-en-smoke-') as temp:
+    with smoke_directory(diagnostics) as temp:
         root=Path(temp);env={**os.environ,'FINANCE_RECONCILE_DATA_DIR':str(root/'data'),'FINANCE_RECONCILE_STARTUP_LOG':str(startup)}
         checked=subprocess.run([str(exe),'--verify-bundle',str(report)],env=env,timeout=90)
         if checked.returncode or not report.exists():
             raise AssertionError('Mail runtime probe failed: '+startup.read_text(encoding='utf-8',errors='replace')[-12000:])
         result=json.loads(report.read_text(encoding='utf-8'))
         if not result.get('ok'):raise AssertionError('Mail runtime probe failed: '+str(result))
-        process=subprocess.Popen([str(exe)],env=env)
+        process=start_test_process(exe,env)
         try:
             wait_for_health(process=process,startup_log=startup)
             assert httpx.get(APP_URL+'/api/health').json()['edition']=='mail_en'
@@ -58,7 +88,7 @@ def main():
             check_local_ledgers()
             (diagnostics/'mail-performance.json').write_text(json.dumps(sample['performance'],indent=2),encoding='utf-8')
             key=root/'data'/'mail'/'mail.key';before=key.read_bytes()
-            stop_process_tree(process);process=subprocess.Popen([str(exe)],env=env)
+            stop_process_tree(process);process=start_test_process(exe,env)
             wait_for_health(process=process,startup_log=startup)
             assert_mail_restart_preserved(sample['mail'])
             assert key.read_bytes()==before
