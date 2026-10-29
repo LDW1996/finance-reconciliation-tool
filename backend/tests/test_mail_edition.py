@@ -106,13 +106,18 @@ def test_forbidden_api_methods_are_not_registered():
         assert getattr(client,method)('/api/analyze-combined').status_code==404
 
 
-def test_packaging_artifact_names_and_guide_agree():
+def test_packaging_artifact_names_and_guide_agree(monkeypatch):
     import ast
     from pathlib import Path
+    # Exercise Windows' non-UTF-8 default even on UTF-8 development machines.
+    original_read_text=Path.read_text
+    def windows_read_text(path,encoding=None,errors=None):
+        return original_read_text(path,encoding=encoding or 'cp1252',errors=errors)
+    monkeypatch.setattr(Path,'read_text',windows_read_text)
     root=Path(__file__).resolve().parents[2]
-    tree=ast.parse((root/'packaging/mail-reconcile.spec').read_text())
+    tree=ast.parse((root/'packaging/mail-reconcile.spec').read_text(encoding='utf-8'))
     names=[kw.value.value for node in ast.walk(tree) if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id=='EXE' for kw in node.keywords if kw.arg=='name']
     assert names==['Mail Reconciliation']
-    assert names[0] in (root/'.github/workflows/build-windows-exe.yml').read_text()
-    guide=(root/'packaging/Mail-Reconciliation-Guide.txt').read_text()
+    assert names[0] in (root/'.github/workflows/build-windows-exe.yml').read_text(encoding='utf-8')
+    guide=(root/'packaging/Mail-Reconciliation-Guide.txt').read_text(encoding='utf-8')
     assert names[0]+'.exe' in guide
