@@ -15,6 +15,7 @@ from .mail_storage import MailStorage, AnalysisQueue
 from .mail_workers import analysis_pool, configured_workers
 from .mail_recognition import RecognitionCache, VERSION as RECOGNITION_VERSION
 from .mail_performance import MailPerformance
+from .diagnostics import record as diagnostic_record, export as export_diagnostics, start_cleanup
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel, Field, model_validator
@@ -101,6 +102,7 @@ class MailManager:
         self.analysis_workers=configured_workers(analysis_workers)
         self.recognition_cache=RecognitionCache(store)
         self.performance=MailPerformance()
+        start_cleanup()
         self.state=dict(busy=False,enabled=False,queue_paused=False,seconds=300,last_run=None,next_run=None,error='',errors=[],partial=False,new=0,read=0)
         self.sync=MailSync(store);self.workspace=MailWorkspace(store);self.online=OnlineLedger(self.workspace)
         self.paged_reader=paged_reader or (read_outlook_page if reader is read_outlook else None)
@@ -258,6 +260,7 @@ class MailManager:
                                                            save_seconds=save_seconds,wait_seconds=wait_seconds)
                         raise
                     except Exception as error:
+                        diagnostic_record('attachment_recognition',error,mail_id=identity,attachment_id=asset['id'])
                         message=str(error) if isinstance(error,ValueError) else f'识别失败（{type(error).__name__}），请检查文件或完整安装包。'
                         analysis_seconds=perf_counter()-analysis_started
                         save_started=perf_counter()
@@ -338,6 +341,7 @@ class MailManager:
             update=dict(error='',errors=result['errors'],partial=result['partial'],new=new,read=result.get('read',len(result['rows'])))
             if result['rows']: update['folder_label']=result['rows'][0].get('folder','Outlook 收件箱')
         except Exception as error:
+            diagnostic_record('mail_batch_read',error)
             if read_started is not None and not read_recorded:
                 self.performance.record_read(perf_counter()-read_started,0)
             update=dict(error=str(error) if isinstance(error,ValueError) else
@@ -399,6 +403,7 @@ class MailManager:
                 result=maintenance.preview(progress) if mode=='preview' else maintenance.optimize(compact,progress)
                 job.update(status='completed',result=result,phase='检查完成' if mode=='preview' else '存储优化完成')
             except Exception as error:
+                diagnostic_record('storage_maintenance',error)
                 job.update(status='failed',message=str(error) if isinstance(error,ValueError) else '存储优化未完成，已有数据保留。请检查磁盘空间后重新预览；数据库整理期间请勿关闭程序。')
             finally:
                 try:
@@ -513,6 +518,10 @@ def create_router(require_local):
         index=store.payment_index(identities);summaries=store.payment_summaries(identities)
         for row in rows:row['payment_summary']=summaries.get(row['id']) or mail_summary(row,index.get(row['id'],[]),indexed=row['id'] in index)
         return rows
+
+    @router.get('/diagnostics/export')
+    def diagnostics_export(days: int=Query(3,ge=1,le=14)):
+        return Response(export_diagnostics(days),media_type='application/zip',headers={'Content-Disposition':'attachment; filename="mail-diagnostics.zip"'})
 
     @router.get('/messages/page')
     def message_page(page: int=Query(1,ge=1),page_size: int=Query(50,ge=1,le=100),keyword: str=Query('',max_length=200),payment_filter: str=Query('all',pattern='^(all|payment|partial|pending)$')):

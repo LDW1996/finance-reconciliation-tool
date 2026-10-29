@@ -60,6 +60,7 @@ const client = axios.create({ baseURL: '/api/mail', headers: { 'X-Finance-Local'
 export const mailApi = {
   preview: async (mailId:string,attachmentId:string,page:number) => (await client.get<Blob>(`/messages/${encodeURIComponent(mailId)}/attachments/${encodeURIComponent(attachmentId)}/preview/${page}`,{responseType:'blob'})).data,
   status: async () => (await client.get<MailStatus>('/status')).data,
+  diagnostics: async (days=3) => (await client.get('/diagnostics/export',{params:{days},responseType:'blob'})).data,
   messagePage: async (params:{page:number;page_size:number;keyword:string;payment_filter:string}) => (await client.get<{rows:MailRow[];total:number;total_saved:number;page:number;page_size:number}>('/messages/page',{params})).data,
   messages: async () => (await client.get<MailRow[]>('/messages')).data,
   message: async (id: string) => (await client.get<MailRow>(`/messages/${encodeURIComponent(id)}`)).data,
