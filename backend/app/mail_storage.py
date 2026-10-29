@@ -1,5 +1,6 @@
 """Bound mail ingestion without removing user data; durable recognition backlog."""
 import shutil
+from .mail_file_stats import optional_file_stats
 
 GIB=1024**3
 DEFAULTS=dict(max_gb=10,min_free_gb=5,queue_limit=500,preview_cache_mb=256)
@@ -32,10 +33,12 @@ class MailStorage:
         return self.database_bytes()+PreviewCache(self.store).used_bytes()+self.cleanup_backup_bytes()
 
     def cleanup_backup_bytes(self):
-        return sum(p.stat().st_size for p in (self.store.path.parent/'mail-cleanup-backups').glob('*.backup') if p.is_file())
+        return sum(info.st_size for _,info in optional_file_stats((self.store.path.parent/'mail-cleanup-backups').glob('*.backup')))
 
     def database_bytes(self):
-        return sum(p.stat().st_size for p in self.store.path.parent.glob(self.store.path.name+'*') if p.is_file())
+        # The primary database is required; only transient sidecars may vanish.
+        primary=self.store.path.stat().st_size
+        return primary+sum(info.st_size for _,info in optional_file_stats(self.store.path.parent.glob(self.store.path.name+'-*')))
 
     def block_reason(self,reserve_bytes=0):
         settings=self.settings()

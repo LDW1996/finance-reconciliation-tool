@@ -36,6 +36,8 @@ def describe_failure(error, phase='任务调度', attempt=0, limit=3):
         kind = 'storage_io'
     elif isinstance(error, sqlite3.Error):
         kind = 'unknown_db'
+    elif isinstance(error, FileNotFoundError):
+        kind = 'storage_path_missing'
     elif isinstance(error, OSError):
         kind = 'unknown_io'
     details = {
@@ -47,6 +49,7 @@ def describe_failure(error, phase='任务调度', attempt=0, limit=3):
         'memory_low': ('可用内存不足', '释放内存后手动重试'),
         'storage_io': ('存储读写失败', '检查磁盘和存储连接后手动重试'),
         'unknown_db': ('数据库操作失败', '检查数据库状态后手动重试'),
+        'storage_path_missing': ('存储路径或文件不存在', '检查数据目录是否被移动、删除或断开；恢复原目录后手动重试'),
         'unknown_io': ('文件读写失败', '检查存储状态后手动重试'),
         'internal_error': ('任务执行异常', '检查任务状态后手动重试'),
     }

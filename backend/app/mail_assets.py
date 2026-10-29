@@ -9,6 +9,7 @@ import shutil
 import tempfile
 from threading import RLock
 import time
+from .mail_file_stats import optional_file_stats
 
 _CACHE_LOCK=RLock()
 MIB=1024**2
@@ -80,23 +81,26 @@ class PreviewCache:
 
     def files(self):return list(self.directory.glob('*.cache')) if self.directory.exists() else []
 
-    def used_bytes(self):return sum(p.stat().st_size for p in self.files())
+    def used_bytes(self):
+        with _CACHE_LOCK:
+            return sum(info.st_size for _,info in optional_file_stats(self.files()))
 
     def prune(self,reserve=0):
         with _CACHE_LOCK:
             # Temporary files can survive a process interruption; they are disposable.
             if self.directory.exists():
                 for path in self.directory.glob('*.tmp'):path.unlink(missing_ok=True)
-            files=sorted(self.files(),key=lambda p:p.stat().st_mtime)
-            total=sum(p.stat().st_size for p in files)
-            for path in files:
-                if path.stat().st_mtime<time.time()-7*86400 or total+reserve>self.limit_bytes():
-                    size=path.stat().st_size;path.unlink();total-=size
+            files=sorted(optional_file_stats(self.files()),key=lambda item:item[1].st_mtime)
+            total=sum(info.st_size for _,info in files)
+            for path,info in files:
+                if info.st_mtime<time.time()-7*86400 or total+reserve>self.limit_bytes():
+                    path.unlink(missing_ok=True);total-=info.st_size
 
     def clear(self):
         with _CACHE_LOCK:
             size=0
-            for path in self.files():size+=path.stat().st_size;path.unlink()
+            for path,info in optional_file_stats(self.files()):
+                path.unlink(missing_ok=True);size+=info.st_size
             return size
 
     def get(self,mail_id,attachment_id,number):
