@@ -1,0 +1,56 @@
+MAIL RECONCILIATION — ENGLISH EDITION
+
+1. Start
+Extract the downloaded ZIP and double-click Mail Reconciliation.exe.
+Your default browser will open http://127.0.0.1:8765.
+Keep the program running while reading or recognizing mail.
+If the port is occupied, close the other Finance Reconciliation application first.
+
+2. Read email
+Automatic mailbox reading requires Windows classic Outlook, an opened profile,
+and access to the selected mailbox/archive folders. New Outlook is not supported.
+Choose folders, whether to include subfolders, and the date range. Start reading.
+MSG/EML file import can be used to verify sample messages.
+OCR runs in the background; duplicate attachments reuse existing results.
+A queue pause due to backlog resumes after the backlog decreases.
+A storage or process error shows its stage and recovery guidance.
+
+3. Read bank receipts and customer contacts
+Configure the two Google Sheets sources separately with their complete worksheet
+links, including gid. Upload a valid Google service-account JSON when required.
+Bank writeback requires editor access. Customer contacts are read-only and need
+viewer access; they may reuse the bank service account or use separate credentials.
+Read each source manually after changes to its online worksheet.
+Failed reads preserve the last valid local data.
+
+Customer columns: Customer Name, Customer Bank Name Reff, Email.
+Each accepted mapping needs a customer name and bank payer. Email may be blank.
+Use View contacts to inspect accepted mappings, excluded rows and their reasons.
+Old snapshots without excluded-row details need a manual re-read to show details.
+Local XLSX/CSV import and matching-result export remain available as backup tools.
+
+4. Reconcile and review
+Match bank receipts against recognized payment attachments using amount, date,
+currency and payer. Explicit customer/payer/email mappings improve candidate
+ranking without replacing the original payer. Shared relationships are flagged.
+Scores are rule-based similarity points, not probabilities or final confirmation.
+Inspect the original evidence, select a candidate, and confirm the association.
+Use Write confirmed associations separately to update the bank worksheet.
+Customer worksheets are never written by this application.
+
+5. Storage and upgrades
+Mail Storage shows usage, quota, backlog and maintenance actions.
+Preview before optimizing storage or selecting local mail for cleanup.
+Conservative cleanup protects payment clues and attachments, and creates an
+encrypted recovery backup before removing selected local records.
+The Outlook originals are not deleted.
+
+This edition uses the same local mail data directory as the full Finance
+Reconciliation application on the same Windows account. Close the old program
+before opening this edition. Mail, recognition results, mappings, encryption keys
+and reading checkpoints are reused; no rescan or data reset is required.
+Do not run both editions against the same data directory at the same time.
+On a different computer/account, existing data is not transferred automatically.
+To back up data, close the application and copy its complete data directory,
+including encryption keys. Never delete a key file to resolve a startup error.
+Source-language business data is intentionally preserved in the English UI.

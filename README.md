@@ -53,6 +53,14 @@ ilog解锁工具.exe
 财务人员使用说明.txt
 ```
 
+### 独立英文邮件核销版
+
+`Build Windows EXE` 的 `edition` 可选 `mail_en`。产物为 `Mail Reconciliation.zip`，包含 `Mail Reconciliation.exe` 和 `User Guide.txt`。独立版仅提供邮件核销与存储管理，保留Outlook、OCR、在线银行流水、客户台账、确认回写和导出，不提供Excel对账、iLog或账号管理接口。
+
+界面和程序生成的说明使用英文；客户名称、邮件正文和原始银行表格内容保留原文。同一用户使用原有邮件数据目录和密钥，与原版共用8765端口，请关闭原版后再打开。构建文件不包含本机邮件、账号或Google授权数据。英文专用变更推送后会自动触发 `Build English Mail Reconciliation`，也可手动运行；只有Windows打包和EXE启动检查通过才会上传成品。
+
+本地检查英文界面可使用 `VITE_EDITION=mail_en npm run build --prefix frontend -- --outDir ../build/mail-en-frontend`；普通构建仍为原中文版本。
+
 ### 方案二：Windows 本机打包
 
 在 Windows 打包机上准备：

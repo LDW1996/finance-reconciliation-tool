@@ -1,5 +1,6 @@
 """Online ledger adapter with encrypted durable write-ahead audit records."""
 from collections import Counter
+from contextvars import ContextVar
 from datetime import datetime, timezone
 import hashlib
 from io import BytesIO
@@ -13,6 +14,9 @@ import openpyxl
 from .google_sheets import SheetsClient, sheet_source, validate_credentials
 from .mail_matching import parse_ledger, _header, _ALIASES
 from .mail_workspace import signature, translated
+
+
+OUTPUT_LANGUAGE=ContextVar('mail_output_language',default='zh-CN')
 
 
 def now():return datetime.now(timezone.utc).isoformat()
@@ -140,7 +144,9 @@ class OnlineLedger:
             ref_columns=[i for i,v in enumerate(headers) if _header(v) in {_header(a) for a in _ALIASES['ref']}]
             if len(ref_columns)!=1:raise ValueError('在线表需有唯一的流水参考号列（REF NO）。')
             raw_refs=Counter(str(cell(values,r,ref_columns[0])).strip() for r in range(header+1,len(values)))
-            aliases=[('邮件关联备注','邮件关联备注（候选）'),('匹配分数',),('邮件检索信息','来源邮件')]
+            english=OUTPUT_LANGUAGE.get()=='en'
+            names=[('邮件关联备注','邮件关联备注（候选）','Mail association notes'),('匹配分数','Match score'),('邮件检索信息','来源邮件','Mail search information')]
+            aliases=[tuple([row[-1],*row[:-1]]) if english else row for row in names]
             next_col=max((len(row) for row in values),default=0)
             for names in aliases:
                 hits=[i for i,v in enumerate(headers) if str(v).strip() in names]
@@ -162,6 +168,9 @@ class OnlineLedger:
                     if not candidate:raise ValueError('已确认的邮件证据不存在，请重新核对。')
                     r=target['row']-1;before=[cell(values,r,c) for c in columns]
                     after=[f"已确认关联：{candidate['remark']}",candidate['score'],candidate['search_info']]
+                    if english:
+                        from .mail_english import generated_lines
+                        after=[generated_lines(value) if isinstance(value,str) else value for value in after]
                     record.update(before=before,after=after)
                     if any(len(str(v))>45000 for v in after):raise ValueError('备注内容超过在线单元格长度限制，请缩短邮件信息。')
                     owned=any(old.get('spreadsheet_id')==config['spreadsheet_id'] and old.get('sheet_id')==config['sheet_id']

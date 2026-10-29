@@ -4,19 +4,31 @@ on:
   workflow_dispatch:
     inputs:
       edition:
-        description: "打包版本：full 完整版 / excel 仅对账 / all 两种都打"
+        description: "打包版本：full 完整版 / excel 仅对账 / mail_en 英文邮件核销 / all 全部版本"
         required: true
         default: full
         type: choice
         options:
           - full
           - excel
+          - mail_en
           - all
       fast_build:
         description: "快速打包：复用同一提交已通过的 Windows Tests；仍检查 EXE 启动"
         required: true
         default: false
         type: boolean
+
+  workflow_call:
+    inputs:
+      edition:
+        type: string
+        required: false
+        default: full
+      fast_build:
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -29,9 +41,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        edition: ${{ fromJSON(inputs.edition == 'all' && '["full","excel"]' || inputs.edition == 'excel' && '["excel"]' || '["full"]') }}
+        edition: ${{ fromJSON(inputs.edition == 'all' && '["full","excel","mail_en"]' || inputs.edition == 'excel' && '["excel"]' || inputs.edition == 'mail_en' && '["mail_en"]' || '["full"]') }}
     env:
-      EXE_NAME: ${{ matrix.edition == 'excel' && 'Excel对账工具' || 'ilog解锁工具' }}
+      EXE_NAME: ${{ matrix.edition == 'excel' && 'Excel对账工具' || matrix.edition == 'mail_en' && 'Mail Reconciliation' || 'ilog解锁工具' }}
+      GUIDE_NAME: ${{ matrix.edition == 'mail_en' && 'User Guide.txt' || '使用说明.txt' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -66,6 +79,11 @@ jobs:
         run: npm ci
         working-directory: frontend
 
+      - name: Validate English mail localization
+        if: ${{ matrix.edition == 'mail_en' }}
+        run: node tooling/check-mail-english.mjs
+        working-directory: frontend
+
       - name: Build frontend
         run: npm run build
         working-directory: frontend
@@ -97,7 +115,9 @@ jobs:
       - name: Build EXE
         shell: pwsh
         run: |
-          if ('${{ matrix.edition }}' -eq 'excel') {
+          if ('${{ matrix.edition }}' -eq 'mail_en') {
+            pyinstaller --clean --noconfirm packaging\mail-reconcile.spec
+          } elseif ('${{ matrix.edition }}' -eq 'excel') {
             pyinstaller --clean --noconfirm packaging\excel-reconcile.spec
           } else {
             pyinstaller --clean --noconfirm packaging\finance-reconcile.spec
@@ -106,7 +126,9 @@ jobs:
       - name: Smoke test EXE
         shell: pwsh
         run: |
-          if ('${{ matrix.edition }}' -eq 'excel') {
+          if ('${{ matrix.edition }}' -eq 'mail_en') {
+            python packaging\smoke_mail_exe.py "dist\$env:EXE_NAME.exe"
+          } elseif ('${{ matrix.edition }}' -eq 'excel') {
             python packaging\smoke_windows_exe.py "dist\$env:EXE_NAME.exe" --excel-only
           } else {
             python packaging\smoke_windows_exe.py "dist\$env:EXE_NAME.exe"
@@ -115,7 +137,9 @@ jobs:
       - name: Copy user guide
         shell: pwsh
         run: |
-          if ('${{ matrix.edition }}' -eq 'excel') {
+          if ('${{ matrix.edition }}' -eq 'mail_en') {
+            Copy-Item "packaging\Mail-Reconciliation-Guide.txt" "dist\$env:GUIDE_NAME"
+          } elseif ('${{ matrix.edition }}' -eq 'excel') {
             Copy-Item "packaging\Excel对账使用说明.txt" "dist\使用说明.txt"
           } else {
             Copy-Item "packaging\财务人员使用说明.txt" "dist\使用说明.txt"
@@ -129,7 +153,7 @@ jobs:
           if-no-files-found: error
           path: |
             dist/${{ env.EXE_NAME }}.exe
-            dist/使用说明.txt
+            dist/${{ env.GUIDE_NAME }}
 
       - name: Upload bundle inventory
         if: always()
@@ -142,3 +166,4 @@ jobs:
             build/smoke-diagnostics/
             build/finance-reconcile/warn-finance-reconcile.txt
             build/excel-reconcile/warn-excel-reconcile.txt
+            build/mail-reconcile/warn-mail-reconcile.txt

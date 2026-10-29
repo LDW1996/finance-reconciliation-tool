@@ -1,0 +1,37 @@
+name: Build English Mail Reconciliation
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-mail-english.yml'
+      - 'backend/launcher_mail.py'
+      - 'backend/app/mail*.py'
+      - 'backend/app/customer*.py'
+      - 'backend/app/google_sheets.py'
+      - 'backend/app/mail_english*'
+      - 'backend/app/mail_probe.py'
+      - 'frontend/src/MailEnglishApp.vue'
+      - 'frontend/src/views/MailView.vue'
+      - 'frontend/src/components/Mail*.vue'
+      - 'frontend/src/components/Receipt*.vue'
+      - 'frontend/src/components/Customer*.vue'
+      - 'frontend/src/services/mail*.ts'
+      - 'frontend/tooling/mailEnglish*'
+      - 'frontend/tooling/check-mail-english.mjs'
+      - 'frontend/vite.config.ts'
+      - 'packaging/mail-reconcile.spec'
+      - 'packaging/smoke_mail_exe.py'
+      - 'packaging/Mail-Reconciliation-Guide.txt'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build:
+    uses: ./.github/workflows/build-windows-exe.yml
+    with:
+      edition: mail_en
+      fast_build: false

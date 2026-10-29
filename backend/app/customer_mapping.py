@@ -126,7 +126,7 @@ class MappingIndex:
                     label='客户台账映射（共享关系，需核对）' if ambiguous else '客户台账映射')
 
 
-def preview_contacts(snapshot,status='valid',keyword='',page=1,page_size=50):
+def preview_contacts(snapshot,status='valid',keyword='',page=1,page_size=50,search_aliases=()):
     """Read an encrypted-store snapshot only; do not reparse or fetch a source."""
     if status not in ('valid','excluded') or page<1 or not 1<=page_size<=100:
         raise ValueError('预览筛选或页码无效。')
@@ -139,7 +139,7 @@ def preview_contacts(snapshot,status='valid',keyword='',page=1,page_size=50):
     index=MappingIndex(entries) if status=='valid' else None
     multiple={key for key,rows in index.by_payer.items() if len({(_name(item['customer']),_name(item['bank_name'])) for item in rows})>1} if index else set()
     source=entries if status=='valid' else snapshot.get('excluded_rows',[])
-    needle=keyword.strip().casefold();matched=[];total=0
+    needle=keyword.strip().casefold();needles=[needle]+[alias.casefold() for alias in search_aliases];matched=[];total=0
     start=(page-1)*page_size
     for row in source:
         flags=[]
@@ -149,7 +149,7 @@ def preview_contacts(snapshot,status='valid',keyword='',page=1,page_size=50):
             if any(key in multiple for key in {_name(row['customer']),_name(row['bank_name'])}):flags.append('一对多关系')
         searchable=[row.get('customer',''),row.get('bank_name',''),row.get('email',''),*row.get('emails',[]),
                     str(row.get('row','')),row.get('sheet',''),*row.get('reasons',[]),*flags]
-        if needle and needle not in ' '.join(str(v) for v in searchable).casefold():continue
+        if needle and not any(term in ' '.join(str(v) for v in searchable).casefold() for term in needles):continue
         if start<=total<start+page_size:
             matched.append({**row,'flags':flags})
         total+=1
