@@ -52,7 +52,8 @@ def validate_credentials(raw):
 
 
 class SheetsClient:
-    def __init__(self,credential_provider):
+    def __init__(self,credential_provider,read_only=False):
+        self.read_only=read_only
         self.credentials=credential_provider;self.token='';self.expires=0;self.identity=None
 
     def _token(self):
@@ -62,7 +63,7 @@ class SheetsClient:
         if self.identity==identity and time.time()<self.expires:return self.token
         def encode(value):return base64.urlsafe_b64encode(value).rstrip(b'=')
         now=int(time.time())
-        claims=dict(iss=credentials['client_email'],scope='https://www.googleapis.com/auth/spreadsheets',
+        claims=dict(iss=credentials['client_email'],scope='https://www.googleapis.com/auth/spreadsheets'+('.readonly' if self.read_only else ''),
                     aud='https://oauth2.googleapis.com/token',iat=now,exp=now+3600)
         content=b'.'.join(encode(json.dumps(v,separators=(',',':')).encode()) for v in ({'alg':'RS256','typ':'JWT'},claims))
         key=serialization.load_pem_private_key(credentials['private_key'].encode(),password=None)
@@ -81,6 +82,8 @@ class SheetsClient:
                                    headers={'Authorization':'Bearer '+token},timeout=60,trust_env=False,proxy=google_proxy(),**kwargs)
         except httpx.HTTPError:raise ValueError('Google 表格连接超时或中断。写入请求若已发送，需读取在线表核对结果。') from None
         if response.status_code!=200:
+            if response.status_code==403 and self.read_only:
+                raise ValueError('无读取权限，请启用 Google Sheets API，并将客户台账以查看权限共享给服务账号。')
             if response.status_code==401:self.expires=0
             errors={401:'授权已失效，请检查授权文件。',403:'无访问权限，请启用 Google Sheets API，并将目标表以编辑权限共享给服务账号。',
                     404:'找不到目标表或工作表，请检查链接和共享权限。',429:'Google 请求过于频繁，请稍后重试。'}
@@ -99,11 +102,12 @@ class SheetsClient:
         title=props['title'];range_name="'"+title.replace("'","''")+f"'!A1:{get_column_letter(columns)}{last_row}"
         path=sid+'/values/'+quote(range_name,safe='')
         values=self._request('GET',path,params={'valueRenderOption':'FORMATTED_VALUE'}).get('values',[])
-        if len(values)>20020:raise ValueError('在线流水超过 20,000 行，请缩小工作表范围。')
-        formulas=self._request('GET',path,params={'valueRenderOption':'FORMULA','dateTimeRenderOption':'SERIAL_NUMBER'}).get('values',[])
+        if len(values)>20020:raise ValueError('在线工作表超过 20,000 行，请缩小工作表范围。')
+        formulas=[] if self.read_only else self._request('GET',path,params={'valueRenderOption':'FORMULA','dateTimeRenderOption':'SERIAL_NUMBER'}).get('values',[])
         return dict(title=title,values=values,formulas=formulas,column_count=columns)
 
     def write(self,config,updates,column_count):
+        if self.read_only:raise ValueError('客户台账为只读来源，不允许写入。')
         needed=max((col+1 for _,col,_ in updates),default=0);requests=[]
         if needed>column_count:requests.append({'appendDimension':{'sheetId':config['sheet_id'],'dimension':'COLUMNS','length':needed-column_count}})
         for row,col,value in updates:

@@ -34,6 +34,7 @@ from .mail_attachments import analyze_attachment, MAX_MAIL_BYTES
 from .mail_sync import MailSync
 from .mail_workspace import MailWorkspace
 from .mail_online import OnlineLedger
+from .customer_online import OnlineCustomerMapping
 from .mail_insights import mail_summary, related_receipts
 
 
@@ -128,7 +129,7 @@ class MailManager:
         start_cleanup()
         self._status_counts={'saved_total':0,'analysis_pending':0};self._status_progress={}
         self.state=dict(busy=False,enabled=False,queue_paused=False,analysis_skipped=0,analysis_halted=False,analysis_recovering=False,seconds=300,last_run=None,next_run=None,error='',errors=[],partial=False,new=0,read=0)
-        self.sync=MailSync(store);self.workspace=MailWorkspace(store);self.online=OnlineLedger(self.workspace)
+        self.sync=MailSync(store);self.workspace=MailWorkspace(store);self.online=OnlineLedger(self.workspace);self.customer_online=OnlineCustomerMapping(self.workspace)
         self.paged_reader=paged_reader or (read_outlook_page if reader is read_outlook else None)
         saved=self.store.get_state('poll_settings',{})
         self.state.update({k:v for k,v in saved.items() if k in ('seconds','store','folder','days','limit','resume_on_start','folders','include_children','start_date','end_date')})
@@ -784,6 +785,24 @@ def create_router(require_local):
 
     @router.get('/online/history')
     def online_history():return manager().online.history()
+
+    @router.get('/customer-mapping/online/config')
+    def customer_online_config():return manager().customer_online.config()
+
+    @router.post('/customer-mapping/online/config')
+    async def configure_customer_online(spreadsheet_url: str=Form(...),use_shared: bool=Form(True),credential: UploadFile | None=File(None)):
+        try:
+            raw=await credential.read(65537) if credential else None
+            if raw and len(raw)>65536:raise ValueError('授权文件不能超过64KB。')
+            return await run_in_threadpool(manager().customer_online.configure,spreadsheet_url,use_shared,raw)
+        except ValueError as error:raise HTTPException(400,str(error)) from None
+        finally:
+            if credential:await credential.close()
+
+    @router.post('/customer-mapping/online/refresh')
+    def refresh_customer_online():
+        try:return manager().customer_online.refresh()
+        except ValueError as error:raise HTTPException(409,str(error)) from None
 
     @router.get('/customer-mapping')
     def customer_mapping():return manager().workspace.customer_mapping()

@@ -1,22 +1,19 @@
 <template>
   <section ref="root" class="receipt-matching" aria-label="收款匹配" :aria-busy="busy">
-    <section class="online-panel" aria-label="在线流水来源">
-      <div class="online-heading"><h3>Google Sheets 在线流水</h3><el-tag :type="onlineConfig?.configured ? 'success' : 'info'">{{ onlineConfig?.configured ? '已配置' : '待配置' }}</el-tag><el-tag v-if="result?.ledger?.online" type="success">当前使用在线流水</el-tag></div>
-      <p class="source">{{ result?.ledger?.online ? `${result.ledger.sheet} · ${result.ledger.entries_count.toLocaleString()} 条收款` : '连接在线流水后，核对邮件并回写关联信息' }}<span v-if="onlineConfig?.last_read_at"> · 更新于 {{ readableTime(onlineConfig.last_read_at) }}</span></p>
-      <div class="actions">
-        <el-button :disabled="busy" @click="openConfig">配置在线来源</el-button>
-        <el-button type="primary" :loading="operation === 'online-read'" :disabled="busy || !onlineConfig?.configured" @click="readOnline">读取在线流水</el-button>
-        <el-button :loading="operation === 'online-write'" :disabled="busy || stale || !onlineConfig?.configured || !result?.ledger?.online" @click="writeOnline">回写已确认关联</el-button>
-        <el-button :disabled="busy" @click="openHistory">同步记录</el-button>
-      </div>
-      <el-alert v-if="onlineError" :title="onlineError" type="error" :closable="false" show-icon />
-      <template v-if="writebackResult">
-        <p class="summary" role="status">已写入 {{ writebackResult.written }} · 无变化 {{ writebackResult.unchanged }} · 失败 {{ writebackResult.failed }} · 待核实 {{ writebackResult.uncertain }}</p>
-        <el-alert v-if="writebackResult.uncertain" title="部分写入结果待核实，请先读取在线流水并查看同步记录，再决定是否重试。" type="warning" :closable="false" />
-        <el-table v-if="writebackIssues.length" :data="writebackIssues" max-height="240" empty-text="无失败记录"><el-table-column prop="ref" label="收款编号" min-width="150" /><el-table-column prop="status" label="状态" width="120" /><el-table-column prop="message" label="处理说明" min-width="240" /></el-table>
-      </template>
+    <section class="online-sources" aria-label="在线数据来源">
+      <section class="online-panel source-card" aria-label="在线银行流水">
+        <div class="online-heading"><h3>银行流水</h3><el-tag :type="onlineConfig?.configured ? 'success' : 'info'">{{ onlineConfig?.configured ? '已配置' : '待配置' }}</el-tag><el-tag v-if="result?.ledger?.online" type="success">当前使用在线流水</el-tag></div>
+        <p class="source">{{ result?.ledger ? `${result.ledger.sheet} · ${result.ledger.entries_count.toLocaleString()} 条收款` : '读取待核对的银行收款记录' }}<span v-if="result?.ledger && !result.ledger.online"> · 当前使用备用文件</span></p>
+        <p class="source">上次在线读取：{{ onlineConfig?.last_read_at ? readableTime(onlineConfig.last_read_at) : '尚未读取' }}</p>
+        <div class="actions"><el-button :disabled="busy" @click="openConfig">配置来源</el-button><el-button type="primary" :loading="operation === 'online-read'" :disabled="busy || !onlineConfig?.configured" @click="readOnline">读取银行流水</el-button></div>
+        <p class="source">核对后可单独回写关联。在线表更新后，请重新读取。</p>
+        <p v-if="result?.ledger?.online && onlineConfig?.spreadsheet_url && result.ledger.online.url !== onlineConfig.spreadsheet_url" class="source">来源已修改，当前仍使用上次数据；读取成功后才替换。</p>
+        <el-alert v-if="onlineError" :title="onlineError" type="error" :closable="false" show-icon />
+        <p v-if="onlineError && result?.ledger" class="source">未成功读取前，当前流水数据保持不变。</p>
+      </section>
+      <CustomerMapping ref="customerPanel" :disabled="busy" @busy-change="mappingBusy=$event" @changed="mappingChanged" />
     </section>
-    <el-dialog v-model="configOpen" title="配置在线流水" width="min(600px, 94vw)" :close-on-click-modal="false" :close-on-press-escape="operation !== 'online-config'" :show-close="operation !== 'online-config'" @closed="clearCredential">
+    <el-dialog v-model="configOpen" title="配置银行流水来源" width="min(600px, 94vw)" :close-on-click-modal="false" :close-on-press-escape="operation !== 'online-config'" :show-close="operation !== 'online-config'" @closed="clearCredential">
       <el-form label-position="top" @submit.prevent="saveConfig">
         <el-form-item label="Google Sheets 工作表链接（含 gid）"><el-input v-model="configUrl" aria-label="Google Sheets 工作表链接" :disabled="operation === 'online-config'" /></el-form-item>
         <el-form-item label="流水币种"><el-select v-model="configCurrency" aria-label="在线流水币种" :disabled="operation === 'online-config'"><el-option v-for="item in currencies" :key="item" :label="item" :value="item" /></el-select></el-form-item>
@@ -34,21 +31,14 @@
         <el-table-column prop="created_at" label="时间" min-width="180" /><el-table-column prop="ref" label="收款编号" min-width="150" /><el-table-column prop="status" label="状态" min-width="110" /><el-table-column prop="message" label="说明" min-width="240" />
       </el-table>
     </el-dialog>
-    <details class="file-backup">
-      <summary>本地文件验证 / 导出<span>日常使用在线流水，此处保留备用</span></summary>
-    <div class="toolbar">
-      <label>台账币种<el-select v-model="currency" aria-label="台账币种" :disabled="busy"><el-option v-for="item in currencies" :key="item" :label="item" :value="item" /></el-select></label>
-      <label>工作表<el-input v-model="sheet" aria-label="工作表" placeholder="自动选择 Bank Transactions" :disabled="busy" list="receipt-ledger-sheets" /></label>
-      <datalist id="receipt-ledger-sheets"><option v-for="item in result?.ledger?.available_sheets || []" :key="item" :value="item" /></datalist>
-      <input ref="fileInput" class="file-input" type="file" accept=".xlsx,.xls,.csv" aria-label="选择收款台账" @change="importFile" />
-      <el-button :icon="Upload" :loading="operation === 'import'" :disabled="busy" @click="fileInput?.click()">导入台账</el-button>
-      <el-button :icon="Download" :loading="operation === 'export'" :disabled="busy || !result?.ledger" @click="exportFile">导出匹配建议</el-button>
-    </div>
-    <p class="source" v-if="result?.ledger && !result.ledger.online">{{ result.ledger.name }} · {{ result.ledger.sheet || 'CSV' }} · {{ result.ledger.entries_count }} 条收款</p>
-    <p class="source" v-if="!result?.ledger">导入 xlsx、xls 或 csv 台账，最大 25MB</p>
-    </details>
-    <CustomerMapping :disabled="busy" @busy-change="mappingBusy=$event" @changed="mappingChanged" />
     <section class="review-workspace" aria-label="收款查询与列表">
+      <div class="writeback-actions actions"><el-button :loading="operation === 'online-write'" :disabled="busy || stale || !onlineConfig?.configured || !result?.ledger?.online" @click="writeOnline">回写已确认关联</el-button><el-button :disabled="busy" @click="openHistory">同步记录</el-button></div>
+      <template v-if="writebackResult">
+        <p class="summary" role="status">已写入 {{ writebackResult.written }} · 无变化 {{ writebackResult.unchanged }} · 失败 {{ writebackResult.failed }} · 待核实 {{ writebackResult.uncertain }}</p>
+        <el-alert v-if="writebackResult.uncertain" title="部分写入结果待核实，请先读取在线流水并查看同步记录，再决定是否重试。" type="warning" :closable="false" />
+        <el-table v-if="writebackIssues.length" :data="writebackIssues" max-height="240" empty-text="无失败记录"><el-table-column prop="ref" label="收款编号" min-width="150" /><el-table-column prop="status" label="状态" width="120" /><el-table-column prop="message" label="处理说明" min-width="240" /></el-table>
+      </template>
+
       <header class="workspace-heading"><div><h2>收款核对</h2></div><span v-if="result?.ledger?.skipped" class="skipped-note">{{ result.ledger.skipped }} 行无有效日期或金额，已跳过</span></header>
       <div v-if="result?.ledger" class="overview" role="status">
         <div><span>当前收款范围</span><strong>{{ result.summary.eligible.toLocaleString() }}</strong></div>
@@ -83,6 +73,20 @@
     </div>
     <div class="pagination"><el-pagination :current-page="page" :page-size="50" :total="result?.total_rows || 0" layout="prev, pager, next" :pager-count="5" :disabled="mutating" @current-change="changePage" /></div>
     </section>
+    <details class="file-backup">
+      <summary>备用文件导入与导出<span>日常使用上方两个在线读取入口</span></summary>
+    <div class="toolbar">
+      <label>台账币种<el-select v-model="currency" aria-label="台账币种" :disabled="busy"><el-option v-for="item in currencies" :key="item" :label="item" :value="item" /></el-select></label>
+      <label>工作表<el-input v-model="sheet" aria-label="工作表" placeholder="自动选择 Bank Transactions" :disabled="busy" list="receipt-ledger-sheets" /></label>
+      <datalist id="receipt-ledger-sheets"><option v-for="item in result?.ledger?.available_sheets || []" :key="item" :value="item" /></datalist>
+      <input ref="fileInput" class="file-input" type="file" accept=".xlsx,.xls,.csv" aria-label="选择收款台账" @change="importFile" />
+      <el-button :icon="Upload" :loading="operation === 'import'" :disabled="busy" @click="fileInput?.click()">导入台账</el-button>
+      <el-button :icon="Download" :loading="operation === 'export'" :disabled="busy || !result?.ledger" @click="exportFile">导出匹配建议</el-button>
+    </div>
+    <p class="source" v-if="result?.ledger && !result.ledger.online">{{ result.ledger.name }} · {{ result.ledger.sheet || 'CSV' }} · {{ result.ledger.entries_count }} 条收款</p>
+    <p class="source" v-if="!result?.ledger">导入 xlsx、xls 或 csv 台账，最大 25MB</p>
+      <div class="customer-file-backup"><h3>备用客户台账</h3><p class="source">仅作为备用；支持XLSX/CSV，最大5MB。导入后暂用文件数据，下次在线读取成功时更新。</p><label>客户台账工作表（可选）<el-input v-model="customerBackupSheet" aria-label="备用客户台账工作表" :disabled="busy" /></label><input type="file" accept=".xlsx,.csv" aria-label="选择备用客户映射台账" :disabled="busy" @change="customerPanel?.importBackup($event,customerBackupSheet)" /></div>
+    </details>
     <el-drawer v-model="reviewOpen" :with-header="false" size="min(1180px, 96vw)" class="receipt-review-drawer" :close-on-click-modal="!mutating" :close-on-press-escape="!mutating" destroy-on-close>
       <ReceiptReview v-if="selected" :row="selected" :busy="mutating" :stale="stale" :expanded="expanded" :preferred-mail-id="preferredMailId" :preferred-payment-id="preferredPaymentId" @close="reviewOpen=false" @expand="expandCandidates" @review="review" @open-mail="openMail" />
       <el-empty v-else description="该收款不在当前结果中，请重新选择"><el-button @click="reviewOpen=false">返回列表</el-button></el-empty>
@@ -114,6 +118,7 @@ const credentialInput = ref<HTMLInputElement>(), credential = ref<File>()
 const historyOpen = ref(false), history = ref<OnlineHistoryItem[]>([])
 const writebackResult = ref<OnlineWriteback>()
 const writebackIssues = computed(() => writebackResult.value?.items.filter(item => !['written', 'unchanged'].includes(item.status)) || [])
+const customerPanel=ref<InstanceType<typeof CustomerMapping>>(),customerBackupSheet=ref('')
 const mappingBusy=ref(false)
 const busy = computed(() => !!operation.value || mappingBusy.value)
 const mutating = computed(() => mappingBusy.value || (!!operation.value && operation.value !== 'load'))
@@ -373,4 +378,5 @@ defineExpose({ refresh, openMail, openReceipt })
 :global(.receipt-review-drawer .el-drawer__body){padding:0;overflow:hidden}
 @media(max-width:1100px){.online-panel{grid-template-columns:minmax(0,1fr)}.online-panel>.actions{grid-column:1;grid-row:3;margin-top:12px}.query-bar{grid-template-columns:minmax(180px,1fr) 150px 140px auto}.query-bar>.el-button:last-child{grid-column:4;grid-row:2}}
 @media(max-width:700px){.review-workspace{padding:16px}.online-panel{padding:16px}.workspace-heading{align-items:flex-start;flex-direction:column;gap:8px}.skipped-note{text-align:left}.overview{grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;margin:20px 0}.overview>div:nth-child(3){border:0;padding-left:0}.overview strong{font-size:24px}.query-bar{grid-template-columns:repeat(2,minmax(0,1fr))}.query-keyword{grid-column:1/-1}.query-bar>.el-button:last-child{grid-column:2;grid-row:auto}.results-caption{flex-wrap:wrap;gap:6px}.results-caption>span{width:100%;order:3}.toolbar label{width:100%}.toolbar .el-select,.toolbar .el-input{width:100%}.file-backup summary span{display:block;margin-left:14px}.advanced-filters label{width:100%}.advanced-filters .el-select{width:100%}}
+.online-sources{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin-bottom:22px}.online-sources>.online-panel{display:block;min-width:0;margin:0;padding:22px}.online-sources>.online-panel>.actions{margin:16px 0 10px}.online-sources .online-heading{flex-wrap:wrap}.writeback-actions{justify-content:flex-end;margin-bottom:16px}.customer-file-backup{display:flex;flex-wrap:wrap;align-items:center;gap:14px;margin-top:20px;border-top:1px solid var(--el-border-color-light);padding-top:16px}.customer-file-backup h3,.customer-file-backup p{flex-basis:100%;margin:0}.customer-file-backup label{display:grid;gap:6px;max-width:100%}.customer-file-backup input[type=file]{max-width:100%}@media(max-width:900px){.online-sources{grid-template-columns:minmax(0,1fr)}}@media(max-width:700px){.online-sources>.online-panel{padding:16px}}
 </style>

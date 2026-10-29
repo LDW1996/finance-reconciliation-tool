@@ -12,7 +12,11 @@ export interface Receipt {
   id: string; row: number; date: string | null; amount: number | string | null
   currency: string; payer: string; ref: string; description: string; status: string
 }
+export interface CustomerOnlineConfig {
+  configured:boolean;use_shared:boolean;spreadsheet_url?:string;sheet_id?:string|number;service_email?:string;last_read_at?:string|null;last_error?:string;last_attempt_at?:string
+}
 export interface CustomerMappingMetadata {
+  online?:{spreadsheet_id:string;sheet_id:number;spreadsheet_url:string}
   name?:string;sheet?:string;available_sheets?:string[];entries_count?:number;skipped?:number;enabled?:boolean;revision?:string;imported_at?:string
 }
 export interface CustomerMappingEvidence {
@@ -65,6 +69,13 @@ export function validateSpreadsheetUrl(value: string): string {
 }
 const client = axios.create({ baseURL: '/api/mail', headers: { 'X-Finance-Local': '1' }, timeout: 30000 })
 export const mailMatchingApi = {
+  customerOnlineConfig:async(signal?:AbortSignal)=>(await client.get<CustomerOnlineConfig>('/customer-mapping/online/config',{signal})).data,
+  saveCustomerOnlineConfig:async(url:string,useShared:boolean,credential?:File,signal?:AbortSignal)=>{
+    const data=new FormData();data.append('spreadsheet_url',validateSpreadsheetUrl(url));data.append('use_shared',String(useShared))
+    if(credential){if(!/\.json$/i.test(credential.name) || credential.size>65536)throw new Error('请选择不超过64KB的JSON授权文件');data.append('credential',credential)}
+    return (await client.post<CustomerOnlineConfig>('/customer-mapping/online/config',data,{signal})).data
+  },
+  refreshCustomerOnline:async(signal?:AbortSignal)=>(await client.post<CustomerMappingMetadata>('/customer-mapping/online/refresh',undefined,{signal,timeout:120000})).data,
   customerMapping:async(signal?:AbortSignal)=>(await client.get<CustomerMappingMetadata>('/customer-mapping',{signal})).data,
   enableCustomerMapping:async(enabled:boolean,signal?:AbortSignal)=>(await client.put<CustomerMappingMetadata>('/customer-mapping',{enabled},{signal})).data,
   importCustomerMapping:async(file:File,sheet?:string,signal?:AbortSignal)=>{
