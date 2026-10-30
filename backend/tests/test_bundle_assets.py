@@ -45,11 +45,11 @@ def test_frozen_probe_reports_failures_without_starting_app_or_creating_user_dat
 
 def test_report_includes_final_exe_size_without_full_path(tmp_path):
     module=load_assets()
-    exe=tmp_path/'ilog解锁工具.exe';exe.write_bytes(b'x'*23)
+    exe=tmp_path/'财务综合业务平台.exe';exe.write_bytes(b'x'*23)
     report=tmp_path/'report.json'
     module.write_bundle_report([],report,exe)
     data=json.loads(report.read_text(encoding='utf-8'))
-    assert data['exe_name']=='ilog解锁工具.exe' and data['exe_bytes']==23
+    assert data['exe_name']=='财务综合业务平台.exe' and data['exe_bytes']==23
     assert str(tmp_path) not in report.read_text(encoding='utf-8')
 
 

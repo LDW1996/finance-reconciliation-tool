@@ -280,7 +280,7 @@ def assert_excel_isolation() -> None:
 
 def main() -> int:
     excel_only='--excel-only' in sys.argv
-    exe_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("dist") / "ilog解锁工具.exe"
+    exe_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("dist") / "财务综合业务平台.exe"
     if not exe_path.exists():
         raise FileNotFoundError(exe_path)
 

@@ -43,7 +43,7 @@ jobs:
       matrix:
         edition: ${{ fromJSON(inputs.edition == 'all' && '["full","excel","mail_en"]' || inputs.edition == 'excel' && '["excel"]' || inputs.edition == 'mail_en' && '["mail_en"]' || '["full"]') }}
     env:
-      EXE_NAME: ${{ matrix.edition == 'excel' && 'Excel对账工具' || matrix.edition == 'mail_en' && '邮件核销工具（英文版）' || 'ilog解锁工具' }}
+      EXE_NAME: ${{ matrix.edition == 'excel' && 'Excel对账工具' || matrix.edition == 'mail_en' && '邮件核销工具（英文版）' || '财务综合业务平台' }}
       GUIDE_NAME: ${{ matrix.edition == 'mail_en' && 'User Guide.txt' || '使用说明.txt' }}
     steps:
       - name: Checkout
