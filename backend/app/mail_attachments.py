@@ -203,7 +203,13 @@ def _page_result(image, number, native_text=''):
         lines = [dict(text=t.strip(), confidence=None, box=None) for t in native_text.splitlines() if t.strip()][:3000]
         method = 'pdf_text'
     else:
-        lines, method = run_ocr(image), 'ocr'
+        try:
+            lines, method = run_ocr(image), 'ocr'
+        except Exception as error:
+            from .diagnostics import record
+            record('ocr_worker',error,page=number,width=image.width,height=image.height,
+                   pixels=image.width*image.height)
+            raise
     return dict(number=number, method=method, width=image.width, height=image.height,
                 preview='', lines=lines, text='\n'.join(l['text'] for l in lines),
                 fields=extract_fields(lines, number))

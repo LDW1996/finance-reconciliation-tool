@@ -27,6 +27,35 @@ def prune(path):
         if file.stat().st_mtime<time.time()-KEEP_DAYS*86400 or total>MAX_TOTAL:
             size=file.stat().st_size;file.unlink();total-=size
 
+def memory_snapshot():
+    """Best-effort numeric diagnostics; never inspect process command lines."""
+    import os
+    snapshot={'pid':os.getpid(),'available_bytes':None,'process_bytes':None}
+    try:
+        from .mail_workers import available_memory
+        snapshot['available_bytes']=available_memory()
+        import sys
+        if sys.platform=='win32':
+            import ctypes
+            from ctypes import wintypes
+            class Counters(ctypes.Structure):
+                _fields_=[('cb',wintypes.DWORD),('PageFaultCount',wintypes.DWORD)]+[
+                    (name,ctypes.c_size_t) for name in ('PeakWorkingSetSize','WorkingSetSize',
+                    'QuotaPeakPagedPoolUsage','QuotaPagedPoolUsage','QuotaPeakNonPagedPoolUsage',
+                    'QuotaNonPagedPoolUsage','PagefileUsage','PeakPagefileUsage','PrivateUsage')]
+            kernel=ctypes.WinDLL('kernel32',use_last_error=True)
+            kernel.GetCurrentProcess.restype=wintypes.HANDLE
+            api=ctypes.WinDLL('psapi',use_last_error=True).GetProcessMemoryInfo
+            api.argtypes=[wintypes.HANDLE,ctypes.POINTER(Counters),wintypes.DWORD]
+            counters=Counters();counters.cb=ctypes.sizeof(counters)
+            if api(kernel.GetCurrentProcess(),ctypes.byref(counters),counters.cb):
+                snapshot['process_bytes']=counters.WorkingSetSize
+                snapshot['private_bytes']=counters.PrivateUsage
+    except Exception:
+        pass
+    return snapshot
+
+
 def record(stage,error=None,**context):
     try:
         with LOCK:
@@ -46,7 +75,7 @@ def record(stage,error=None,**context):
             if error and ('onnx' in kind.lower() or 'onnxruntime' in type(error).__module__.lower()):
                 message=str(error).lower()
                 engine_reason=next((label for needle,label in [('allocate','memory_allocation'),('out of memory','memory_allocation'),('invalid dimension','invalid_dimensions'),('invalid rank','invalid_dimensions'),('invalid input','invalid_input'),('no such file','model_file_missing'),('not implemented','unsupported_operator')] if needle in message),'unclassified_engine_error')
-            row=dict(engine_reason=engine_reason,time=datetime.now(timezone.utc).isoformat(),stage=stage,error_type=kind,attribute=attribute,frames=frames,context=safe,suppressed=count)
+            row=dict(memory=memory_snapshot(),engine_reason=engine_reason,time=datetime.now(timezone.utc).isoformat(),stage=stage,error_type=kind,attribute=attribute,frames=frames,context=safe,suppressed=count)
             data=(json.dumps(row,ensure_ascii=False)+'\n').encode()
             files=sorted(path.glob('diagnostic-*.jsonl'))
             target=files[-1] if files and files[-1].stat().st_size+len(data)<=MAX_FILE else path/f'diagnostic-{time.time_ns()}.jsonl'
@@ -64,6 +93,14 @@ def export(days=3):
             for file in sorted(path.glob('diagnostic-*.jsonl')):
                 lines=[line for line in file.read_text(encoding='utf-8').splitlines() if json.loads(line)['time']>=cutoff]
                 if lines:archive.writestr(file.name,'\n'.join(lines)+'\n')
+            # Explicit allowlist: never include the database, key or attachments.
+            for name in ('mail-errors.log','mail-errors.log.1','mail-errors.log.2'):
+                try:
+                    with (account_data_dir()/'mail'/name).open('rb') as stream:
+                        data=stream.read(256*1024)
+                    archive.writestr(name,data)
+                except FileNotFoundError:
+                    pass
         return output.getvalue()
 
 _started=False

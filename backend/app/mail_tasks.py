@@ -188,6 +188,9 @@ class MailManager:
 
     def _record_analysis_failure(self,error,attempt,retrying):
         info=describe_failure(error,attempt=attempt,limit=self.analysis_retry_limit)
+        cause=error
+        while isinstance(cause,AnalysisFailure):cause=cause.cause
+        diagnostic_record('analysis_queue_failure',cause,attempt=attempt,retrying=retrying)
         info['status']='recovering' if retrying else 'paused'
         code=('/'+str(info['error_code'])) if info.get('error_code') else ''
         detail=f"阶段：{info['phase']}；原因：{info['reason']}（{info['error_type']}{code}）。"
@@ -480,7 +483,7 @@ class MailManager:
             update=dict(error='',errors=result['errors'],partial=result['partial'],new=new,read=result.get('read',len(result['rows'])))
             if result['rows']: update['folder_label']=result['rows'][0].get('folder','Outlook 收件箱')
         except Exception as error:
-            if not self.state.get('queue_paused'):
+            if not self.state.get('queue_paused') and not self.state.get('analysis_halted'):
                 diagnostic_record('mail_batch_read',error)
             if read_started is not None and not read_recorded:
                 self.performance.record_read(perf_counter()-read_started,0)
