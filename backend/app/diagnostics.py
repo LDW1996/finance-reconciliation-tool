@@ -14,6 +14,7 @@ MAX_FILE=10*1024*1024
 MAX_TOTAL=100*1024*1024
 KEEP_DAYS=14
 _seen={}
+_write_error=""
 
 def directory():
     path=account_data_dir()/'logs'
@@ -57,6 +58,7 @@ def memory_snapshot():
 
 
 def record(stage,error=None,**context):
+    global _write_error
     try:
         with LOCK:
             path=directory();prune(path)
@@ -67,8 +69,8 @@ def record(stage,error=None,**context):
             attribute=getattr(error,'name',None) if isinstance(error,AttributeError) else None
             key=(stage,kind,str(attribute),str(frames[-1:]),str(safe))
             now=time.time();previous,count=_seen.get(key,(0,0))
-            if now-previous<60:
-                _seen[key]=(previous,count+1);return
+            if now-previous<60 and not _write_error:
+                _seen[key]=(previous,count+1);return not bool(_write_error)
             _seen[key]=(now,0)
             if len(_seen)>2000:_seen.clear()
             engine_reason=None
@@ -81,8 +83,17 @@ def record(stage,error=None,**context):
             target=files[-1] if files and files[-1].stat().st_size+len(data)<=MAX_FILE else path/f'diagnostic-{time.time_ns()}.jsonl'
             with target.open('ab') as stream:stream.write(data)
             prune(path)
-    except Exception:
-        pass  # Diagnostic failures must never interrupt business tasks.
+            _write_error=''
+            return True
+    except Exception as failure:
+        _write_error=type(failure).__name__
+        return False  # Report failure through health without interrupting business tasks.
+
+def health():
+    # No database reads or expensive storage walk; usable during storage faults.
+    root=account_data_dir()
+    return dict(log_directory=str(root/'logs'),write_error=_write_error)
+
 
 def export(days=3):
     with LOCK:

@@ -23,6 +23,13 @@ from .mail_performance import MailPerformance
 from .diagnostics import record as diagnostic_record, export as export_diagnostics, start_cleanup
 from .mail_failures import AnalysisFailure, describe_failure
 
+class FaultLogHandler(RotatingFileHandler):
+    def handleError(self, record):
+        # Default logging handlers swallow write/rotation failures.
+        error=sys.exc_info()[1]
+        if error is not None:raise error
+        raise OSError('Fault log write failed')
+
 _analysis_stage=ContextVar("mail_analysis_stage",default="读取邮件")
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
@@ -210,11 +217,14 @@ class MailManager:
         # Diagnostics must remain available even if SQLite cannot be written.
         # Store no raw exception message, email identity, content or credentials.
         try:
-            handler=RotatingFileHandler(self.store.path.parent/'mail-errors.log',maxBytes=256*1024,backupCount=2,encoding='utf-8')
+            handler=FaultLogHandler(self.store.path.parent/'mail-errors.log',maxBytes=256*1024,backupCount=2,encoding='utf-8')
             try:
                 handler.emit(logging.LogRecord('mail',logging.ERROR,'',0,json.dumps(info,ensure_ascii=False),(),None))
             finally:handler.close()
-        except Exception:pass  # Full disk must not replace the original diagnosis.
+        except Exception as logging_error:
+            self.state['queue_log_write_error']=type(logging_error).__name__
+        else:
+            self.state['queue_log_write_error']=''
 
     def _analyze_queue(self):
         try:
@@ -705,6 +715,18 @@ def create_router(require_local):
         index=store.payment_index(identities);summaries=store.payment_summaries(identities)
         for row in rows:row['payment_summary']=summaries.get(row['id']) or mail_summary(row,index.get(row['id'],[]),indexed=row['id'] in index)
         return rows
+
+    @router.get('/diagnostics/status')
+    def diagnostics_status():
+        from .diagnostics import health
+        current=manager()
+        # User-triggered check records actual write success, not an assumption.
+        diagnostic_record('diagnostic_health_check')
+        root=current.store.path.parent
+        log=root/'mail-errors.log'
+        return {**health(),'data_directory':str(root),'database_path':str(current.store.path),
+                'queue_log_path':str(log),'queue_log_exists':log.is_file(),
+                'queue_log_write_error':current.state.get('queue_log_write_error','')}
 
     @router.get('/diagnostics/export')
     def diagnostics_export(days: int=Query(3,ge=1,le=14)):

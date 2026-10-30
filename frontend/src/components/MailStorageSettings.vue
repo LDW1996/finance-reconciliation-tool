@@ -2,6 +2,14 @@
   <section class="mail-storage" aria-labelledby="mail-storage-title" v-loading="loading">
     <div class="storage-heading"><h2 id="mail-storage-title">邮件存储</h2><el-button :loading="loading" :disabled="running" @click="load">刷新占用</el-button></div>
     <el-alert v-if="error" :title="error" type="error" :closable="false" />
+    <div v-if="diagnostics" class="storage-diagnostics">
+      <p><strong>当前实际数据目录</strong></p><p class="storage-path">{{ diagnostics.data_directory }}</p>
+      <p><strong>队列故障日志路径</strong></p><p class="storage-path">{{ diagnostics.queue_log_path }}</p>
+      <p class="storage-note">{{ diagnostics.queue_log_exists ? '故障日志文件已存在。' : '尚未生成队列故障日志；不代表程序从未发生异常。' }}</p>
+      <el-alert v-if="diagnostics.write_error || diagnostics.queue_log_write_error" type="error" :closable="false" :title="'日志写入失败，请检查目录权限和磁盘空间。'" />
+      <p v-if="diagnostics.write_error || diagnostics.queue_log_write_error">{{ diagnostics.write_error || diagnostics.queue_log_write_error }}</p>
+      <p class="storage-note">备份或发送数据库前，请关闭程序并复制完整数据目录，不要只复制单个数据库文件。</p>
+    </div>
     <template v-if="stats">
       <el-alert v-if="stats.blocked_reason || stats.warning" :title="stats.blocked_reason || '邮件存储已使用超过 80%，请关注容量。'" type="warning" :closable="false" />
       <div class="storage-metrics">
@@ -79,6 +87,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 type Rules={max_gb:number;min_free_gb:number;queue_limit:number;preview_cache_mb:number}
 type Stats={settings:Rules;mail_count:number;attachment_count:number;used_bytes:number;database_bytes:number;attachment_bytes:number;recognition_bytes:number;preview_cache_bytes:number;cleanup_backup_bytes?:number;free_bytes:number;reusable_bytes:number;data_directory:string;warning:boolean;blocked_reason:string}
 type Job={id?:string;mode?:string;status?:string;phase?:string;processed?:number;total?:number;message?:string;finished_at?:string;result?:Record<string,any>}
+type Diagnostics={data_directory:string;queue_log_path:string;queue_log_exists:boolean;write_error:string;queue_log_write_error:string}
+const diagnostics=ref<Diagnostics|null>(null)
 const stats=ref<Stats|null>(null),pending=ref(0),loading=ref(false),saving=ref(false),error=ref('')
 const job=ref<Job>({}),history=ref<Job[]>([]),compact=ref(true)
 const selected=ref<string[]>([])
@@ -95,8 +105,10 @@ function failure(cause:unknown,fallback:string){return axios.isAxiosError(cause)
 async function load(){
   loading.value=true;error.value=''
   try{
-    const [storage,status,task,records,backups]=await Promise.allSettled([client.get<Stats>('/storage'),client.get('/status'),client.get<Job>('/storage/maintenance'),client.get<Job[]>('/storage/maintenance/history'),client.get('/storage/cleanup/backups')])
+    const [storage,status,task,records,backups,diagnostic]=await Promise.allSettled([client.get<Stats>('/storage'),client.get('/status'),client.get<Job>('/storage/maintenance'),client.get<Job[]>('/storage/maintenance/history'),client.get('/storage/cleanup/backups'),client.get<Diagnostics>('/diagnostics/status')])
     if(!alive)return
+    if(diagnostic.status==='fulfilled')diagnostics.value=diagnostic.value.data
+    else error.value='诊断状态读取失败，无法确认日志是否成功写入。'
     if(storage.status==='rejected') throw storage.reason
     stats.value=storage.value.data;form.value={...storage.value.data.settings}
     if(status.status==='fulfilled') pending.value=status.value.data.analysis_pending||0
@@ -151,6 +163,7 @@ onMounted(load)
 onBeforeUnmount(()=>{alive=false;clearTimeout(timer)})
 </script>
 <style scoped>
+.storage-diagnostics{margin:16px 0;padding:12px 16px;background:var(--el-fill-color-light);border-radius:8px}.storage-diagnostics p{margin:6px 0}.storage-diagnostics .storage-path{overflow-wrap:anywhere;user-select:text}
 .mail-storage{margin-bottom:40px;padding-bottom:32px;border-bottom:1px solid var(--el-border-color-light)}
 .storage-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:20px}
 .storage-heading h2{margin:0}.storage-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:24px;margin:24px 0}

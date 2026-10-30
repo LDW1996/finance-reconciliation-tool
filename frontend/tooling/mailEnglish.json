@@ -637,5 +637,20 @@
   "台账文件不能超过 ": "Ledger file cannot exceed ",
   "请求超时，请重试": "Request timed out. Retry",
   "请求失败，请重试": "Request failed. Retry",
-  "操作失败，请重试": "Operation failed. Retry"
+  "操作失败，请重试": "Operation failed. Retry",
+  "当前实际数据目录": "Actual data directory",
+  "队列故障日志路径": "Queue fault log path",
+  "故障日志文件已存在。": "The fault log file exists.",
+  "尚未生成队列故障日志；不代表程序从未发生异常。": "No queue fault log has been created. This does not prove that no errors occurred.",
+  "日志写入失败，请检查目录权限和磁盘空间。": "Log writing failed. Check directory permissions and disk space.",
+  "备份或发送数据库前，请关闭程序并复制完整数据目录，不要只复制单个数据库文件。": "Before backing up or sharing the database, close the application and copy the complete data directory.",
+  "诊断状态读取失败，无法确认日志是否成功写入。": "Diagnostic status is unavailable. Successful log writing could not be confirmed.",
+  "链接混入了聊天文字或空格，请只粘贴完整的 ": "The link contains chat text or spaces. Paste only the complete ",
+  "表格链接。": " spreadsheet link.",
+  "链接格式无效，请从浏览器地址栏复制完整链接。": "Invalid link format. Copy the complete link from the browser address bar.",
+  "请填写 ": "Enter a ",
+  "表格链接，不能使用其他网站地址。": " spreadsheet link. Other websites are not supported.",
+  "链接缺少工作表 ": "The link is missing worksheet ",
+  "请打开目标工作表后复制完整链接。": "Open the target worksheet and copy its complete link.",
+  "无效，请重新复制目标工作表链接。": " is invalid. Copy the target worksheet link again."
 }

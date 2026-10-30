@@ -65,14 +65,19 @@ export interface OnlineHistoryItem {
   before?: unknown; after?: unknown; spreadsheet_id: string; sheet_id: string | number; row: number
 }
 export function validateSpreadsheetUrl(value: string): string {
-  try {
-    const url = new URL(value.trim())
-    const gid = new URLSearchParams(url.hash.slice(1)).get('gid') ?? url.searchParams.get('gid')
-    if (url.protocol === 'https:' && url.hostname === 'docs.google.com' &&
-      /^\/spreadsheets\/d\/[\w-]+(?:\/|$)/.test(url.pathname) && gid !== null && /^\d+$/.test(gid)) return url.href
-  } catch { /* Invalid URL. */ }
-  throw new Error('请输入含 gid 的 Google Sheets 工作表链接')
+  const input=value.trim()
+  if (/\s/.test(input)) throw new Error('链接混入了聊天文字或空格，请只粘贴完整的 Google 表格链接。')
+  let url:URL
+  try { url=new URL(input) } catch { throw new Error('链接格式无效，请从浏览器地址栏复制完整链接。') }
+  if (url.protocol!=='https:' || url.hostname!=='docs.google.com' || url.port ||
+      !/^\/spreadsheets\/d\/[A-Za-z0-9_-]+\/?(?:edit\/?)?$/.test(url.pathname))
+    throw new Error('请填写 Google 表格链接，不能使用其他网站地址。')
+  const gid=new URLSearchParams(url.hash.slice(1)).get('gid') ?? url.searchParams.get('gid')
+  if (gid===null) throw new Error('链接缺少工作表 gid，请打开目标工作表后复制完整链接。')
+  if (!/^\d{1,12}$/.test(gid)) throw new Error('工作表 gid 无效，请重新复制目标工作表链接。')
+  return url.href
 }
+
 const client = axios.create({ baseURL: '/api/mail', headers: { 'X-Finance-Local': '1' }, timeout: 30000 })
 export const mailMatchingApi = {
   customerMappingPreview:async(params:{status:'valid'|'excluded';keyword:string;page:number;page_size:number},signal?:AbortSignal)=>(await client.get<CustomerMappingPreviewResult>('/customer-mapping/preview',{params,signal})).data,
