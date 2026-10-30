@@ -1,40 +1,46 @@
 <template>
   <section class="mail-storage" aria-labelledby="mail-storage-title" v-loading="loading">
-    <div class="storage-heading"><h2 id="mail-storage-title">邮件存储</h2><el-button :loading="loading" :disabled="running" @click="load">刷新占用</el-button></div>
+    <nav class="storage-section-nav" aria-label="保存设置分区">
+      <button v-for="item in sections" :key="item.id" type="button" :class="{active:activeSection===item.id}" @click="jumpTo(item.id)">{{ item.label }}</button>
+      <el-button class="usage-refresh" :loading="loading" :disabled="running" @click="load">刷新占用</el-button>
+    </nav>
+    <div class="storage-heading"><div><component :is="standalone ? 'h1' : 'h2'" id="mail-storage-title">{{ standalone ? '存储概览' : '邮件存储' }}</component></div></div>
     <el-alert v-if="error" :title="error" type="error" :closable="false" />
-    <div v-if="diagnostics" class="storage-diagnostics">
-      <p><strong>当前实际数据目录</strong></p><p class="storage-path">{{ diagnostics.data_directory }}</p>
-      <p><strong>队列故障日志路径</strong></p><p class="storage-path">{{ diagnostics.queue_log_path }}</p>
-      <p class="storage-note">{{ diagnostics.queue_log_exists ? '故障日志文件已存在。' : '尚未生成队列故障日志；不代表程序从未发生异常。' }}</p>
-      <el-alert v-if="diagnostics.write_error || diagnostics.queue_log_write_error" type="error" :closable="false" :title="'日志写入失败，请检查目录权限和磁盘空间。'" />
-      <p v-if="diagnostics.write_error || diagnostics.queue_log_write_error">{{ diagnostics.write_error || diagnostics.queue_log_write_error }}</p>
-      <p class="storage-note">备份或发送数据库前，请关闭程序并复制完整数据目录，不要只复制单个数据库文件。</p>
-    </div>
     <template v-if="stats">
       <el-alert v-if="stats.blocked_reason || stats.warning" :title="stats.blocked_reason || '邮件存储已使用超过 80%，请关注容量。'" type="warning" :closable="false" />
-      <div class="storage-metrics">
-        <div><span>本地邮件</span><strong>{{ stats.mail_count.toLocaleString() }} 封</strong></div>
-        <div><span>邮件总占用（含预览和清理备份）</span><strong>{{ bytes(stats.used_bytes) }}</strong></div>
-        <div><span>原始附件 · {{ stats.attachment_count.toLocaleString() }} 个来源</span><strong>{{ bytes(stats.attachment_bytes) }}</strong></div>
-        <div><span>识别结果与历史预览</span><strong>{{ bytes(stats.recognition_bytes) }}</strong></div>
-        <div><span>临时预览缓存（最多 {{ stats.settings.preview_cache_mb }} MB）</span><strong>{{ bytes(stats.preview_cache_bytes) }}</strong></div>
-        <div><span>邮件清理恢复备份</span><strong>{{ bytes(stats.cleanup_backup_bytes || 0) }}</strong></div>
-        <div><span>磁盘剩余空间</span><strong>{{ bytes(stats.free_bytes) }}</strong></div>
-        <div><span>数据库文件占用</span><strong>{{ bytes(stats.database_bytes) }}</strong></div>
-        <div><span>等待识别</span><strong>{{ pending.toLocaleString() }} 封</strong></div>
-      </div>
-      <el-progress :percentage="Math.min(100, Math.round(stats.used_bytes / (stats.settings.max_gb * 1024 ** 3) * 100))" :status="stats.blocked_reason ? 'exception' : undefined" />
-      <el-form label-position="top" class="storage-fields" :disabled="saving || running">
-        <el-form-item label="邮件容量上限（GB）"><el-input-number v-model="form.max_gb" :min="1" :max="1000" controls-position="right" /></el-form-item>
-        <el-form-item label="至少保留磁盘空间（GB）"><el-input-number v-model="form.min_free_gb" :min="1" :max="100" controls-position="right" /></el-form-item>
-        <el-form-item label="识别积压暂停线（封）"><el-input-number v-model="form.queue_limit" :min="100" :max="5000" :step="100" controls-position="right" /></el-form-item>
-        <el-form-item label="临时预览缓存上限（MB）"><el-input-number v-model="form.preview_cache_mb" :min="32" :max="2048" :step="32" controls-position="right" /></el-form-item>
-      </el-form>
-      <p class="storage-note">相同原件共用存储，预览在查看时生成，加密缓存最多保留 7 天并按容量淘汰。不删除邮件和原始凭证。</p>
-      <el-button type="primary" :loading="saving" :disabled="running" @click="save">保存邮件规则</el-button>
-      <div class="storage-maintenance">
-        <h3>历史数据优化与空间回收</h3>
-        <p class="storage-note">先关闭自动读取，再预览。优化会暂缓识别队列，等待正在识别的附件完成；结束后恢复队列。优化只移除可重建的预览与重复存储，保留原件、识别文字及已确认关联。</p>
+      <section id="storage-overview" class="storage-overview storage-section">
+        <div class="overview-primary">
+          <div class="overview-usage"><span class="metric-label">邮件总占用（含预览和清理备份）</span><div class="usage-value"><strong>{{ bytes(stats.used_bytes) }}</strong><span>/ {{ stats.settings.max_gb }} GB</span><small>{{ usagePercent }}%</small></div><el-progress :percentage="usagePercent" :show-text="false" :stroke-width="10" :status="stats.blocked_reason ? 'exception' : undefined" /></div>
+          <div class="overview-stat"><span class="metric-label">磁盘剩余空间</span><strong>{{ bytes(stats.free_bytes) }}</strong></div>
+          <div class="overview-stat"><span class="metric-label">等待识别</span><strong>{{ pending.toLocaleString() }} <small>封</small></strong><span class="metric-caption">识别积压暂停线 {{ stats.settings.queue_limit }}</span></div>
+        </div>
+        <div class="storage-metrics">
+          <div><span>本地邮件</span><strong>{{ stats.mail_count.toLocaleString() }} <small>封</small></strong></div>
+          <div><span>原始附件</span><strong>{{ bytes(stats.attachment_bytes) }}</strong><small>{{ stats.attachment_count.toLocaleString() }} 个来源</small></div>
+          <div><span>识别结果与历史预览</span><strong>{{ bytes(stats.recognition_bytes) }}</strong></div>
+          <div><span>临时预览缓存</span><strong>{{ bytes(stats.preview_cache_bytes) }}</strong><small>上限 {{ stats.settings.preview_cache_mb }} MB</small></div>
+          <div><span>邮件清理恢复备份</span><strong>{{ bytes(stats.cleanup_backup_bytes || 0) }}</strong></div>
+          <div><span>数据库文件占用</span><strong>{{ bytes(stats.database_bytes) }}</strong></div>
+        </div>
+      </section>
+      <section id="storage-rules" class="storage-section storage-rules">
+        <h3>邮件保存规则</h3>
+        <p class="storage-note">设置容量与识别积压限制，达到阈值后暂缓新增读取。</p>
+        <div class="rules-surface">
+          <el-form label-position="top" class="storage-fields" :disabled="saving || running">
+            <el-form-item label="邮件容量上限（GB）"><el-input-number v-model="form.max_gb" :min="1" :max="1000" controls-position="right" /></el-form-item>
+            <el-form-item label="识别积压暂停线（封）"><el-input-number v-model="form.queue_limit" :min="100" :max="5000" :step="100" controls-position="right" /></el-form-item>
+            <el-form-item label="至少保留磁盘空间（GB）"><el-input-number v-model="form.min_free_gb" :min="1" :max="100" controls-position="right" /></el-form-item>
+            <el-form-item label="临时预览缓存上限（MB）"><el-input-number v-model="form.preview_cache_mb" :min="32" :max="2048" :step="32" controls-position="right" /></el-form-item>
+          </el-form>
+          <el-button class="rules-save" type="primary" :loading="saving" :disabled="running" @click="save">保存邮件规则</el-button>
+        </div>
+        <p class="storage-note rules-caption">相同原件共用存储，预览在查看时生成，加密缓存最多保留 7 天并按容量淘汰。不删除邮件和原始凭证。</p>
+      </section>
+      <div id="storage-maintenance" class="storage-maintenance storage-section">
+        <h3>存储优化与空间回收</h3>
+        <p class="storage-note">先关闭自动读取并预览；优化保留原件、识别文字及已确认关联。</p>
+        <details class="operation-notes"><summary>操作说明</summary><p class="storage-note">先关闭自动读取，再预览。优化会暂缓识别队列，等待正在识别的附件完成；结束后恢复队列。优化只移除可重建的预览与重复存储，保留原件、识别文字及已确认关联。</p></details>
         <div class="storage-actions">
           <el-button :disabled="running || saving" @click="startPreview">预览存储优化</el-button>
           <el-checkbox v-model="compact" :disabled="running">优化后整理数据库，释放磁盘空间</el-checkbox>
@@ -56,9 +62,10 @@
         </div>
         <details v-if="history.length"><summary>最近优化记录</summary><p v-for="item in history" :key="item.id">{{ date(item.finished_at) }} · {{ item.mode === 'preview' ? '预览' : '优化' }} · {{ item.status === 'completed' ? '完成' : '未完成' }}<span v-if="item.mode === 'optimize' && item.result"> · 文件减少 {{ bytes(Number(item.result.database_released_bytes || 0)) }}</span></p></details>
       </div>
-      <div class="storage-maintenance">
+      <div class="storage-maintenance storage-section cleanup-section">
         <h3>谨慎清理无付款线索的邮件</h3>
-        <p class="storage-note">未匹配邮件仍可能用于未来对账。这里只列出完整读取、无附件、无付款及业务线索的候选；有附件、异常或不确定内容的保留。请逐封核对，默认不选。附件空间请使用上方去重优化。</p>
+        <p class="storage-note">仅预览无附件、无付款及业务线索的邮件，逐封核对后清理；默认不选。</p>
+        <details class="operation-notes"><summary>操作说明</summary><p class="storage-note">未匹配邮件仍可能用于未来对账。这里只列出完整读取、无附件、无付款及业务线索的候选；有附件、异常或不确定内容的保留。请逐封核对，默认不选。附件空间请使用上方去重优化。</p></details>
         <el-button :disabled="running || saving" @click="cleanupPreview">预览邮件清理</el-button>
         <template v-if="job.mode === 'cleanup_preview' && job.status === 'completed'">
           <p>候选 {{ candidates.length }} 封（每批最多200封）；保留 {{ count('protected') }} 封，检查异常保留 {{ count('errors') }} 封。候选也不代表确定无用。</p>
@@ -74,26 +81,43 @@
           <span>{{ date(item.at) }} · 加密恢复备份 {{ bytes(item.bytes) }}</span>
           <el-button :disabled="running" @click="restoreCleanup(item.backup_id)">从加密备份恢复</el-button>
         </div>
-        <p class="storage-note">Outlook原邮件、所有附件、已确认关联和读取进度保留。清理备份随数据目录保存且不自动删除；重新扫描可能再次读入。空间收益取决于候选数量，优先使用附件去重。</p>
+        <p class="storage-note">Outlook 原邮件、所有附件、已确认关联和读取进度保留。清理备份随数据目录保存且不自动删除；重新扫描可能再次读入。空间收益取决于候选数量，优先使用附件去重。</p>
       </div>
-      <details><summary>数据位置与升级说明</summary><p class="storage-path">{{ stats.data_directory }}</p><p>数据独立于程序解压目录。同一电脑、同一用户关闭旧程序后打开新版，可沿用邮件、账号及读取进度。备份应在关闭程序后复制完整数据目录，包含密钥文件。</p><p>数据库内部可复用空间 {{ bytes(stats.reusable_bytes) }}，已计入数据库文件占用。清理后需要整理数据库，文件才会缩小；空间不足时会跳过整理并提示。原始附件统计按实际加密存储计算，共享后可小于各邮件附件大小之和。</p></details>
+      <details class="upgrade-notes"><summary>数据位置与升级说明</summary><p class="storage-path">{{ stats.data_directory }}</p><p>数据独立于程序解压目录。同一电脑、同一用户关闭旧程序后打开新版，可沿用邮件、账号及读取进度。备份应在关闭程序后复制完整数据目录，包含密钥文件。</p><p>数据库内部可复用空间 {{ bytes(stats.reusable_bytes) }}，已计入数据库文件占用。清理后需要整理数据库，文件才会缩小；空间不足时会跳过整理并提示。原始附件统计按实际加密存储计算，共享后可小于各邮件附件大小之和。</p></details>
     </template>
+    <section v-if="diagnostics" id="storage-diagnostics" class="storage-diagnostics storage-section">
+      <h3>诊断与数据位置</h3>
+      <p class="storage-note">查看当前程序使用的位置和日志状态。</p>
+      <div class="diagnostic-paths">
+      <p><strong>当前实际数据目录</strong></p><p class="storage-path">{{ diagnostics.data_directory }}</p>
+      <p><strong>队列故障日志路径</strong></p><p class="storage-path">{{ diagnostics.queue_log_path }}</p>
+      </div>
+      <p class="storage-note">{{ diagnostics.queue_log_exists ? '故障日志文件已存在。' : '尚未生成队列故障日志；不代表程序从未发生异常。' }}</p>
+      <el-alert v-if="diagnostics.write_error || diagnostics.queue_log_write_error" type="error" :closable="false" :title="'日志写入失败，请检查目录权限和磁盘空间。'" />
+      <p v-if="diagnostics.write_error || diagnostics.queue_log_write_error">{{ diagnostics.write_error || diagnostics.queue_log_write_error }}</p>
+      <p class="storage-note">备份或发送数据库前，请关闭程序并复制完整数据目录，不要只复制单个数据库文件。</p>
+    </section>
   </section>
 </template>
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount, ref, computed } from 'vue'
 import axios from 'axios'
 import { ElMessage, ElMessageBox } from 'element-plus'
+defineProps<{standalone?:boolean}>()
 type Rules={max_gb:number;min_free_gb:number;queue_limit:number;preview_cache_mb:number}
 type Stats={settings:Rules;mail_count:number;attachment_count:number;used_bytes:number;database_bytes:number;attachment_bytes:number;recognition_bytes:number;preview_cache_bytes:number;cleanup_backup_bytes?:number;free_bytes:number;reusable_bytes:number;data_directory:string;warning:boolean;blocked_reason:string}
 type Job={id?:string;mode?:string;status?:string;phase?:string;processed?:number;total?:number;message?:string;finished_at?:string;result?:Record<string,any>}
 type Diagnostics={data_directory:string;queue_log_path:string;queue_log_exists:boolean;write_error:string;queue_log_write_error:string}
+const sections=[{id:'storage-overview',label:'容量概览'},{id:'storage-rules',label:'保存规则'},{id:'storage-maintenance',label:'优化与清理'},{id:'storage-diagnostics',label:'诊断与路径'}]
+const activeSection=ref('storage-overview')
+function jumpTo(id:string){activeSection.value=id;document.getElementById(id)?.scrollIntoView({behavior:'smooth',block:'start'})}
 const diagnostics=ref<Diagnostics|null>(null)
 const stats=ref<Stats|null>(null),pending=ref(0),loading=ref(false),saving=ref(false),error=ref('')
 const job=ref<Job>({}),history=ref<Job[]>([]),compact=ref(true)
 const selected=ref<string[]>([])
 const candidates=computed<Array<{id:string;subject:string;sender:string;body:string}>>(()=>job.value.result?.candidates || [])
 const cleanupBackups=ref<Array<{backup_id:string;bytes:number;at:string}>>([])
+const usagePercent=computed(()=>stats.value?Math.min(100,Math.round(stats.value.used_bytes/(stats.value.settings.max_gb*1024**3)*100)):0)
 const running=computed(()=>job.value.status==='running')
 const form=ref<Rules>({max_gb:10,min_free_gb:5,queue_limit:500,preview_cache_mb:256})
 const client=axios.create({baseURL:'/api/mail',headers:{'X-Finance-Local':'1'},timeout:30000})
@@ -163,12 +187,16 @@ onMounted(load)
 onBeforeUnmount(()=>{alive=false;clearTimeout(timer)})
 </script>
 <style scoped>
-.storage-diagnostics{margin:16px 0;padding:12px 16px;background:var(--el-fill-color-light);border-radius:8px}.storage-diagnostics p{margin:6px 0}.storage-diagnostics .storage-path{overflow-wrap:anywhere;user-select:text}
-.mail-storage{margin-bottom:40px;padding-bottom:32px;border-bottom:1px solid var(--el-border-color-light)}
-.storage-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:20px}
-.storage-heading h2{margin:0}.storage-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:24px;margin:24px 0}
-.storage-metrics span{display:block;color:var(--el-text-color-secondary);font-size:14px;margin-bottom:8px}.storage-metrics strong{font-size:22px;font-weight:600}
-.storage-fields{display:flex;flex-wrap:wrap;gap:24px;margin-top:24px}.storage-note,details{font-size:14px;color:var(--el-text-color-secondary);line-height:1.7}.storage-note{margin:0 0 20px}details{margin-top:20px}.storage-path{overflow-wrap:anywhere}summary{cursor:pointer}
-.storage-maintenance{margin-top:28px;border-top:1px solid var(--el-border-color-light);padding-top:20px}.storage-actions{display:flex;flex-wrap:wrap;align-items:center;gap:16px}.job-progress{margin-top:20px;line-height:1.7}.cleanup-body{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}.cleanup-list details{margin:4px 0 16px 24px}.cleanup-list{max-height:320px;overflow:auto;margin:16px 0}.cleanup-list :deep(.el-checkbox){height:auto;white-space:normal;overflow-wrap:anywhere}.job-progress :deep(.el-progress){margin-top:12px}
-@media(max-width:900px){.storage-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.storage-fields{display:block}}
+.mail-storage{--section-gap:28px;min-width:0;margin-bottom:32px;color:var(--el-text-color-primary);font-size:14px}
+.storage-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:12px}.storage-heading :is(h1,h2){font-size:22px;line-height:1.4}.storage-heading .storage-note{margin:6px 0 0}.storage-heading>.el-button{flex-shrink:0}
+.storage-section-nav{display:flex;gap:28px;border-bottom:1px solid var(--el-border-color-light);margin-bottom:20px;overflow-x:auto;align-items:center}.storage-section-nav>button:not(.el-button){background:none;border:0;border-bottom:2px solid transparent;padding:0 0 13px;color:var(--el-text-color-regular);font-size:14px;white-space:nowrap;cursor:pointer}.storage-section-nav>button.active{border-bottom-color:var(--el-color-primary);color:var(--el-color-primary);font-weight:600}.storage-section-nav .usage-refresh{margin-left:auto;flex-shrink:0;align-self:flex-start;margin-bottom:10px}.storage-section-nav button:focus-visible{outline:2px solid var(--el-color-primary);outline-offset:-2px}
+.storage-section{scroll-margin-top:24px}.storage-section h3{font-size:18px;font-weight:600;line-height:1.5;margin:0 0 6px}.storage-note{color:var(--el-text-color-secondary);font-size:14px;line-height:1.7;margin:0 0 16px}
+.overview-primary{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr) minmax(0,1fr);gap:28px;align-items:start;margin:12px 0 24px}.metric-label{display:block;color:var(--el-text-color-secondary);font-size:14px;line-height:1.5;margin-bottom:10px}.usage-value{display:flex;align-items:baseline;flex-wrap:wrap;gap:10px;margin-bottom:14px}.usage-value strong{font-size:30px;font-weight:600;letter-spacing:-.6px}.usage-value>span{font-size:22px}.usage-value small{color:var(--el-text-color-secondary);font-size:14px}.overview-stat{border-left:1px solid var(--el-border-color-light);padding-left:28px;min-height:94px}.overview-stat>strong{display:block;font-size:26px;font-weight:600;line-height:1.4}.overview-stat small{font-size:15px;font-weight:400}.metric-caption{display:block;color:var(--el-text-color-secondary);font-size:13px;margin-top:6px}
+.storage-metrics{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));background:var(--el-fill-color-light);padding:20px 0;border-radius:6px;margin:0 0 28px}.storage-metrics>div{padding:0 18px;border-left:1px solid var(--el-border-color-light);min-width:0}.storage-metrics>div:first-child{border-left:0}.storage-metrics span{display:block;color:var(--el-text-color-secondary);font-size:13px;line-height:1.5;margin-bottom:8px}.storage-metrics strong{display:block;font-size:20px;font-weight:600;line-height:1.5}.storage-metrics small{display:block;font-size:12px;color:var(--el-text-color-secondary);font-weight:400;margin-top:4px}.storage-metrics strong small{display:inline;font-size:13px}
+.storage-rules{margin-top:var(--section-gap)}.rules-surface{display:flex;align-items:center;gap:28px;background:var(--el-fill-color-light);border-radius:6px;padding:20px 24px}.storage-fields{flex:1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 32px;min-width:0}.storage-fields :deep(.el-form-item){margin:0;min-width:0;display:grid;grid-template-columns:minmax(0,1.25fr) minmax(100px,1fr);gap:12px;align-items:center}.storage-fields :deep(.el-form-item__label){height:auto;line-height:1.5;margin-bottom:0;font-size:14px}.storage-fields :deep(.el-form-item__content){min-width:0}.storage-fields :deep(.el-input-number){width:100%;max-width:240px}.rules-save{min-width:160px;max-width:220px;white-space:normal;height:auto;min-height:38px;padding:10px 18px;line-height:1.5}.rules-caption{font-size:13px;margin:12px 0 0}
+.storage-maintenance{margin-top:var(--section-gap);border-top:1px solid var(--el-border-color-light);padding-top:24px}.storage-actions{display:flex;flex-wrap:wrap;align-items:center;gap:12px}.storage-actions :deep(.el-button){margin-left:0}.storage-actions :deep(.el-checkbox){white-space:normal;height:auto;min-height:32px}.storage-actions :deep(.el-checkbox__label){white-space:normal;line-height:1.5}.storage-maintenance>.storage-note{max-width:1100px}.storage-maintenance>details:not(.operation-notes){border-top:1px solid var(--el-border-color-lighter);padding-top:12px}
+.operation-notes{margin:0 0 12px;font-size:13px;color:var(--el-text-color-secondary)}.operation-notes summary{width:fit-content}.operation-notes .storage-note{margin:8px 0 0}.job-progress{margin-top:20px;line-height:1.7;background:var(--el-fill-color-light);padding:16px;border-radius:6px}.job-progress :deep(.el-progress){margin-top:12px}.cleanup-body{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}.cleanup-list details{margin:4px 0 16px 24px}.cleanup-list{max-height:320px;overflow:auto;margin:16px 0}.cleanup-list :deep(.el-checkbox){height:auto;white-space:normal;overflow-wrap:anywhere}.cleanup-section>.storage-note:last-child{margin:12px 0 0;font-size:13px}
+.storage-diagnostics{border-top:1px solid var(--el-border-color-light);padding-top:24px;margin-top:28px}.diagnostic-paths{display:grid;grid-template-columns:190px minmax(0,1fr);gap:10px 18px;margin-bottom:14px}.diagnostic-paths p{margin:0;line-height:1.6}.diagnostic-paths p:nth-child(odd){font-size:13px;color:var(--el-text-color-secondary);padding:8px 0}.storage-path{overflow-wrap:anywhere;user-select:text;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px;background:var(--el-fill-color-light);padding:8px 12px;border-radius:4px}.storage-diagnostics>.storage-note{font-size:13px;margin:10px 0}.storage-diagnostics :deep(.el-alert){margin:12px 0}.upgrade-notes{margin-top:20px;font-size:13px;line-height:1.7;color:var(--el-text-color-secondary)}summary{cursor:pointer}details{font-size:14px;line-height:1.7;margin-top:16px}
+@media(max-width:1200px){.storage-metrics{grid-template-columns:repeat(3,minmax(0,1fr));gap:20px 0}.storage-metrics>div:nth-child(4){border-left:0}.rules-surface{align-items:stretch;flex-direction:column;gap:18px}.rules-save{align-self:flex-end}}
+@media(max-width:680px){.storage-heading :is(h1,h2){font-size:20px}.storage-section-nav{gap:20px;flex-wrap:wrap}.storage-section-nav .usage-refresh{margin-left:0}.storage-section-nav>button:not(.el-button){padding-bottom:8px}.overview-primary{grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}.overview-usage{grid-column:1/-1}.overview-stat{padding-left:0;border:0;min-height:0}.overview-stat>strong{font-size:22px}.storage-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.storage-metrics>div{padding:0 12px}.storage-metrics>div:nth-child(odd){border-left:0}.storage-metrics>div:nth-child(4){border-left:1px solid var(--el-border-color-light)}.storage-fields{grid-template-columns:1fr;gap:18px}.storage-fields :deep(.el-form-item){display:block}.storage-fields :deep(.el-form-item__label){margin-bottom:8px}.rules-surface{padding:18px}.storage-fields :deep(.el-input-number){max-width:none}.rules-save{max-width:none;align-self:stretch;margin:0}.diagnostic-paths{grid-template-columns:1fr;gap:4px}.diagnostic-paths p:nth-child(odd){padding:8px 0 0}.storage-maintenance .el-button{max-width:100%;white-space:normal;height:auto;min-height:34px;line-height:1.5}.storage-actions{align-items:flex-start}.storage-actions>.el-checkbox{width:100%}}
 </style>

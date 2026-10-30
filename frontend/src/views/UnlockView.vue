@@ -108,7 +108,7 @@
     </el-dialog>
     <section v-if="view === 'retention'" class="management-section retention-settings">
       <MailStorageSettings />
-      <h2>解锁记录保存</h2>
+      <section class="retention-module"><h2>解锁记录保存</h2>
       <el-form label-position="top" :disabled="retentionSaving" class="retention-fields">
         <el-form-item label="截图保留天数"><el-input-number v-model="retentionForm.screenshot_days" :min="1" :max="36500" controls-position="right"/></el-form-item>
         <el-form-item label="任务结果保留天数"><el-input-number v-model="retentionForm.record_days" :min="1" :max="36500" controls-position="right"/></el-form-item>
@@ -116,7 +116,8 @@
       </el-form>
       <el-alert type="info" :closable="false" title="运行中、暂停中及待核实记录不会自动清理；防重复凭据始终单独保留。" description="自动清理在打开页面、查看历史或新建任务时检查，每 24 小时最多一次；有任务正在执行时延后。清理不会修改 iLog。"/>
       <div class="management-footer"><el-button type="primary" :loading="retentionSaving" @click="saveRetention">保存规则</el-button></div>
-      <div class="retention-cleanup"><h2>过期数据清理</h2><el-button :disabled="retentionSaving" @click="cleanupExpired">预览并清理过期数据</el-button></div>
+      <div class="retention-cleanup"><div><h2>过期数据清理</h2></div><el-button :disabled="retentionSaving" @click="cleanupExpired">预览并清理过期数据</el-button></div>
+      </section>
     </section>
     <el-dialog v-model="reviewOpen" class="bill-review-dialog" title="单号校验与二次确认" width="min(900px, 94vw)" top="4vh">
       <el-descriptions :column="1" border><el-descriptions-item label="业务账号">{{ selectedAccount?.name }}</el-descriptions-item><el-descriptions-item label="费用解锁（小锁）">{{ parsed.fee.length }} 条</el-descriptions-item><el-descriptions-item label="订单解锁（大锁）">{{ parsed.order.length }} 条</el-descriptions-item></el-descriptions>

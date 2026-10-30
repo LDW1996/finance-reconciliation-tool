@@ -279,3 +279,14 @@ dd { margin: 8px 0 0; font-weight: 600; line-height: 1.6; overflow-wrap: anywher
 @media (min-width: 1500px) { .unlock-input-panel textarea { min-height: 210px; } }
 @media (max-width: 1000px) { .product-bar { gap: 20px; padding: 0 20px; } .product-brand { font-size: 18px; } .product-bar nav { gap: 4px; } .product-bar nav button { padding: 13px 14px; } .product-local { display: none; } .unlock-shell { padding: 24px 20px; } .unlock-layout { grid-template-columns: minmax(260px, 0.9fr) minmax(0, 1.3fr); gap: 16px; } .unlock-progress-panel, .unlock-results-panel, .unlock-input-panel { padding: 16px; } }
 @media (max-width: 720px) { .product-bar { padding: 16px; gap: 14px; flex-wrap: wrap; } .product-brand { width: 100%; } .product-bar nav { width: 100%; } .product-bar nav button { flex: 1; padding: 11px 10px; font-size: 13px; } .unlock-shell { padding: 20px 14px; } .unlock-heading { align-items: flex-start; gap: 12px; flex-direction: column; } .unlock-heading h1 { font-size: 26px; } .unlock-layout { grid-template-columns: 1fr; } .unlock-account-strip { gap: 10px; } .account-caption { display: none; } .unlock-account-strip > .el-button { margin-left: 0; } .unlock-input-panel textarea { min-height: 140px; } .unlock-results-footer > div { flex-wrap: wrap; } .account-page { padding: 14px; } .el-dialog { max-width: calc(100vw - 28px); } }
+
+/* Retention is a single settings surface; mail and iLog keep separate saves. */
+.retention-module{border-top:1px solid var(--border);padding-top:28px;margin-top:36px}
+.retention-module>h2{font-size:20px;margin-bottom:20px}
+.retention-module .retention-fields{grid-template-columns:repeat(3,minmax(0,1fr));gap:24px;background:var(--el-fill-color-light);padding:20px 24px;border-radius:6px}
+.retention-module .retention-fields .el-form-item:last-child{grid-column:auto}
+.retention-module .retention-fields .el-form-item__label{height:auto;line-height:1.5}
+.retention-module .retention-cleanup{display:flex;align-items:center;justify-content:space-between;gap:20px;margin-top:24px;padding-top:24px}
+.retention-module .retention-cleanup h2{margin:0}
+.retention-module .management-footer{justify-content:flex-end}
+@media(max-width:900px){.retention-module .retention-fields{grid-template-columns:1fr}.retention-module .retention-cleanup{align-items:flex-start;flex-direction:column}}
