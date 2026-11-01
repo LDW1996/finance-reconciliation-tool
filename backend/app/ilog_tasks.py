@@ -1,3 +1,5 @@
+from threading import RLock
+platform_transition_lock = RLock()
 """Persistent sequential tasks. No automatic retry of uncertain operations."""
 
 from contextlib import contextmanager
@@ -58,12 +60,13 @@ def worker_lock(directory, blocking=False):
 
 
 class TaskManager:
-    def __init__(self, directory=None, runner=None, auto_start=True):
+    def __init__(self, directory=None, runner=None, auto_start=True, permission_check=None):
         self.directory = Path(directory) if directory else account_data_dir() / 'ilog-tasks'
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.path = self.directory / 'tasks.sqlite3'
         self.runner = runner
         self.auto_start = auto_start
+        self.permission_check=permission_check
         with self.db() as db:
             db.execute('CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, request_key TEXT UNIQUE, payload TEXT, state TEXT, data TEXT)')
             db.execute('CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY,value TEXT)')
@@ -204,16 +207,20 @@ class TaskManager:
         with worker_lock(self.directory, blocking=True) as acquired:
             if not acquired: return
             while True:
-                with self.db() as db:
-                    db.execute('BEGIN IMMEDIATE')
-                    data = json.loads(db.execute('SELECT data FROM tasks WHERE id=?',(task_id,)).fetchone()[0])
-                    if data['state']!='running': return
-                    index = next((i for i,r in enumerate(data['rows']) if r['status']=='waiting'),None)
-                    if index is None:
-                        data['state']='completed'; self.save(db,data); return
-                    item = data['rows'][index]
-                    item.update(status='processing',message='正在查询、执行并复查')
-                    self.save(db,data)
+                with platform_transition_lock:
+                    if self.permission_check is not None and not self.permission_check():
+                        self.control(task_id,'pause')
+                        return
+                    with self.db() as db:
+                        db.execute('BEGIN IMMEDIATE')
+                        data = json.loads(db.execute('SELECT data FROM tasks WHERE id=?',(task_id,)).fetchone()[0])
+                        if data['state']!='running': return
+                        index = next((i for i,r in enumerate(data['rows']) if r['status']=='waiting'),None)
+                        if index is None:
+                            data['state']='completed'; self.save(db,data); return
+                        item = data['rows'][index]
+                        item.update(status='processing',message='正在查询、执行并复查')
+                        self.save(db,data)
                 attempts=[]
                 actual_account, actual_name = data['account'], data['accountName']
                 candidates=[(actual_account,actual_name)]
@@ -305,9 +312,10 @@ class TaskManager:
 
 
 _manager = None
+_platform_permission = None
 _manager_lock = threading.Lock()
 def manager():
     global _manager
     with _manager_lock:
-        if _manager is None: _manager = TaskManager()
+        if _manager is None: _manager = TaskManager(permission_check=_platform_permission)
     return _manager

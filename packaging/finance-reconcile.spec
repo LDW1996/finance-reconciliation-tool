@@ -10,6 +10,7 @@ sys.path.insert(0,str(ROOT / "packaging"))
 from bundle_assets import validate_runtime_assets, write_bundle_report, NUMPY_RUNTIME_IMPORTS
 
 datas = [
+    (str(ROOT / "backend" / "app" / "platform_accounts.json"), "."),
     (str(ROOT / "frontend" / "dist"), "frontend_dist"),
 ]
 binaries = []

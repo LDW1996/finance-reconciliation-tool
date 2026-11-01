@@ -1,10 +1,11 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import { runtimePlatformLocale } from './tooling/runtimePlatformLocale'
 import { mailEnglish } from './tooling/mailEnglish'
 import { fileURLToPath } from 'node:url'
 
 export default defineConfig({
-  plugins: [mailEnglish(), vue()],
+  plugins: [mailEnglish(), runtimePlatformLocale(), vue()],
   resolve: { alias: process.env.VITE_EDITION === 'mail_en' ? [{ find: /^\.\/App\.vue$/, replacement: fileURLToPath(new URL('./src/MailEnglishApp.vue', import.meta.url)) }] : process.env.VITE_EDITION === 'excel' ? [{ find: /^\.\/App\.vue$/, replacement: fileURLToPath(new URL('./src/ExcelApp.vue', import.meta.url)) }] : [] },
   server: {
     proxy: {

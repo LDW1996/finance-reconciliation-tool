@@ -240,6 +240,18 @@ from .excel_routes import router as excel_router
 app.include_router(excel_router)
 
 
+# The public executable has one authenticated entry point. Legacy isolated apps
+# remain development fixtures and are not included in the unified release.
+from .platform_auth_routes import install_platform_auth
+from .platform_runtime import install_runtime, transition_guard, on_login
+platform_auth=install_platform_auth(app,transition_guard=transition_guard,on_login=on_login)
+install_runtime(platform_auth)
+
+# Outside auth middleware so login/permission diagnostics follow UI language too.
+from .platform_locale import install_platform_locale
+install_platform_locale(app)
+
+
 frontend_dir = bundled_frontend_dir()
 if frontend_dir.exists():
     assets_dir = frontend_dir / "assets"

@@ -208,17 +208,20 @@ import {
   type AnalyzeSummary,
   type InspectReport,
 } from '../services/api'
+import { platformLanguage } from '../platformLocale'
 import { localeOptions, translate, type Locale } from '../i18n'
 
 const supportedLocales: Locale[] = ['zh-CN', 'en', 'id']
 const storedLocale = localStorage.getItem('finance-reconcile-locale') as Locale | null
-const language = ref<Locale>(storedLocale && supportedLocales.includes(storedLocale) ? storedLocale : 'zh-CN')
+const language = ref<Locale>(import.meta.env.VITE_EDITION === 'excel' && storedLocale && supportedLocales.includes(storedLocale) ? storedLocale : platformLanguage.value)
+watch(platformLanguage, value => { language.value = value })
 const elementLocale = computed(() => ({ 'zh-CN': zhCn, en, id }[language.value]))
 const t = (key: string) => translate(language.value, key)
 
 watch(language, (locale) => {
   localStorage.setItem('finance-reconcile-locale', locale)
-  document.documentElement.lang = locale === 'zh-CN' ? 'zh-CN' : locale
+  if (import.meta.env.VITE_EDITION === 'excel') document.documentElement.lang = locale === 'zh-CN' ? 'zh-CN' : locale
+  else if (locale !== 'id' && platformLanguage.value !== locale) { localStorage.setItem('finance-platform-language', locale); window.dispatchEvent(new Event('platform-language-change')) }
 }, { immediate: true })
 
 const workbook = ref<File | null>(null)

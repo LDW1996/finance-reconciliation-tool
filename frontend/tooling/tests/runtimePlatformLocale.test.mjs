@@ -1,0 +1,22 @@
+import { writeFileSync, unlinkSync } from 'node:fs'
+import assert from 'node:assert/strict'
+import { build } from 'esbuild'
+const output = await build({entryPoints:['tooling/runtimePlatformLocale.ts'],bundle:true,platform:'node',format:'esm',write:false,packages:'external'})
+const temporary = new URL('./.runtime-locale-test.mjs', import.meta.url)
+writeFileSync(temporary,output.outputFiles[0].text)
+const {localizeOutputExpression,runtimePlatformLocale}=await import(temporary.href)
+unlinkSync(temporary)
+assert.equal(localizeOutputExpression('record.customer_name'),'record.customer_name')
+assert.equal(localizeOutputExpression("record.status === '中文状态' ? '等待' : record.subject"),"record.status === '中文状态' ? $platformText('等待') : record.subject")
+assert.equal(localizeOutputExpression("record['客户名称']"),"record['客户名称']")
+assert.equal(localizeOutputExpression("{ '中文键': '显示标签' }[state]"),"{ '中文键': $platformText('显示标签') }[state]")
+const plugin=runtimePlatformLocale()
+const result=plugin.transform('<template><div title="标题">正文 {{ record.subject }}</div><input v-model="form.name" /></template><script setup>const status="等待"; const items=[{page:"mail",label:"邮件"}]; ElMessage.success("已保存")</script>','/src/Test.vue')
+assert.match(result.code,/record.subject/)
+assert.match(result.code,/const status="等待"/)
+assert.match(result.code,/ElMessage.success\(__platformText\("已保存"\)\)/)
+assert.match(result.code,/get label\(\) \{ return __platformText\("邮件"\) \}/)
+assert.match(result.code,/page:"mail"/)
+assert.match(result.code,/v-model="form.name"/)
+assert.equal(localizeOutputExpression('`标题 ${record.subject}`'), '`' + '${$platformText("标题 ")}' + '${record.subject}`')
+console.log('Runtime locale source isolation tests passed')

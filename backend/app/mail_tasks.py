@@ -13,7 +13,7 @@ from time import sleep
 from datetime import date
 import sys
 from datetime import datetime, timedelta, timezone
-from threading import Lock, Thread, Timer
+from threading import Lock, RLock, Thread, Timer
 from time import perf_counter, sleep
 from uuid import uuid4
 from .mail_storage import MailStorage, AnalysisQueue
@@ -119,9 +119,10 @@ class MailRestoreRequest(BaseModel):
 
 
 class MailManager:
-    def __init__(self, store, reader=read_outlook, timer_factory=Timer, analyzer=analyze_attachment, paged_reader=None, analysis_workers=None, analysis_retry_limit=3, retry_wait=sleep):
+    def __init__(self, store, reader=read_outlook, timer_factory=Timer, analyzer=analyze_attachment, paged_reader=None, analysis_workers=None, analysis_retry_limit=3, retry_wait=sleep, permission_check=None):
+        self.permission_check=permission_check;self.platform_suspended=False;self._platform_restore_enabled=False
         self.store=store; self.reader=reader; self.timer_factory=timer_factory
-        self.lock=Lock(); self.timer=None; self.generation=0; self.selection=None
+        self.lock=RLock(); self.timer=None; self.generation=0; self.selection=None
         self.queue_resume_scheduled=False
         self.analysis_retry_limit=max(0,min(3,analysis_retry_limit));self.retry_wait=retry_wait
         self.storage=MailStorage(store)
@@ -141,11 +142,40 @@ class MailManager:
         saved=self.store.get_state('poll_settings',{})
         self.state.update({k:v for k,v in saved.items() if k in ('seconds','store','folder','days','limit','resume_on_start','folders','include_children','start_date','end_date')})
         self.analysis_queue.extend((identity,False) for identity in self.store.recoverable_mail_ids())
-        if self.analysis_queue:
+        if self.analysis_queue and self.platform_permitted():
             self.analysis_busy=True
             Thread(target=self._analyze_queue,daemon=True).start()
-        if saved.get('enabled') and saved.get('resume_on_start') and sys.platform=='win32':
+        if self.platform_permitted() and saved.get('enabled') and saved.get('resume_on_start') and sys.platform=='win32':
             self.configure(True,saved['store'],saved['folder'],saved['days'],saved['limit'],saved['seconds'],True,**{k:saved.get(k) for k in ('folders','include_children','start_date','end_date')})
+
+    def platform_permitted(self):
+        return not self.platform_suspended and (self.permission_check is None or self.permission_check())
+
+    def suspend_platform(self):
+        # Never change durable polling choices or scan/OCR checkpoints on logout.
+        with self.lock:
+            if self.state['busy'] or self.maintenance_active or self.analysis_busy:return False
+            if not self.platform_suspended:
+                self._platform_restore_enabled=self.state['enabled']
+            self.platform_suspended=True
+            self.generation+=1
+            if self.timer:self.timer.cancel()
+            self.state.update(enabled=False,next_run=None)
+            return not self.analysis_busy
+
+    def resume_platform(self):
+        with self.lock:
+            self.platform_suspended=False
+            if not self.platform_permitted():return
+            restore=self._platform_restore_enabled or self.state['enabled']
+            self._platform_restore_enabled=False
+            if self.analysis_queue and not self.analysis_busy and not self.state['analysis_halted']:
+                self.analysis_busy=True
+                Thread(target=self._analyze_queue,daemon=True).start()
+        if restore:
+            saved=self.store.get_state('poll_settings',{})
+            if saved.get('enabled'):
+                self.configure(True,saved['store'],saved['folder'],saved['days'],saved['limit'],saved['seconds'],saved.get('resume_on_start',False),**{k:saved.get(k) for k in ('folders','include_children','start_date','end_date')})
 
     def status(self):
         with self.lock:
@@ -251,7 +281,7 @@ class MailManager:
             final_error=None
             with self.lock:
                 self.analysis_busy=False
-                if not self.state['analysis_halted'] and not self.maintenance_active:
+                if self.platform_permitted() and not self.state['analysis_halted'] and not self.maintenance_active:
                     try:restart=bool(self.analysis_current or self.analysis_queue)
                     except Exception as error:
                         final_error=AnalysisFailure(error,'检查剩余识别队列')
@@ -286,7 +316,7 @@ class MailManager:
                         if reason:
                             self.state['analysis_error']=reason
                             stopping=True
-                        while not stopping and not self.maintenance_active and self.analysis_queue and len(pending)<self.analysis_workers:
+                        while self.platform_permitted() and not stopping and not self.maintenance_active and self.analysis_queue and len(pending)<self.analysis_workers:
                             phase='领取识别任务'
                             identity,retry=self.analysis_queue.popleft()
                             self.analysis_current.add(identity)
@@ -349,7 +379,7 @@ class MailManager:
 
     def _resume_after_backpressure(self):
         with self.lock:
-            if (not self.state['enabled'] or self.state['busy'] or not self.state['queue_paused']
+            if (not self.platform_permitted() or not self.state['enabled'] or self.state['busy'] or not self.state['queue_paused']
                     or self.queue_resume_scheduled or not self.selection or self.state.get('analysis_error') or self.maintenance_active):
                 return
             low_water=max(1,self.storage.settings()['queue_limit']//2)
@@ -434,6 +464,7 @@ class MailManager:
 
     def start(self, store, folder, days, limit, generation=None, **options):
         with self.lock:
+            if not self.platform_permitted():return
             if self.maintenance_active:raise ValueError('存储优化进行中，请稍后读取。')
             if generation is not None and (generation!=self.generation or not self.state['enabled']): return
             if self.state['busy']: raise ValueError('邮件正在读取，请等待完成后再操作。')
@@ -505,7 +536,7 @@ class MailManager:
                 self.state['enabled']=False
                 saved=self.store.get_state('poll_settings',{})
                 self.store.set_state('poll_settings',{**saved,'enabled':False})
-            if self.state['enabled']:
+            if self.platform_permitted() and self.state['enabled']:
                 generation=self.generation
                 delay=2 if self.paged_reader and self.state['partial'] and not self.state['error'] else self.state['seconds']
                 self.state['next_run']=(datetime.now(timezone.utc)+timedelta(seconds=delay)).isoformat()
@@ -601,13 +632,14 @@ class MailManager:
 
 
 _manager=None
+_platform_permission=None
 _manager_lock=Lock()
 
 
 def manager():
     global _manager
     with _manager_lock:
-        if _manager is None: _manager=MailManager(MailStore(data_path()))
+        if _manager is None: _manager=MailManager(MailStore(data_path()),permission_check=_platform_permission)
         return _manager
 
 

@@ -1,7 +1,7 @@
 <template>
   <main class="unlock-shell">
     <header class="unlock-heading">
-      <h1>{{ {accounts:'账号管理',history:'解锁历史',retention:'保存设置',unlock:'批量解锁'}[view] }}</h1>
+      <h1>{{ {accounts:'iLog业务账号',history:'解锁历史',retention:'保存设置',unlock:'批量解锁'}[view] }}</h1>
       <el-button v-if="view === 'accounts'" type="primary" :icon="Plus" :disabled="busy" @click="openAccount()">添加账号</el-button>
       <el-button v-if="view === 'history'" :icon="RefreshRight" :loading="historyLoading" @click="loadHistory">刷新</el-button>
       <el-tag v-if="view === 'unlock' && !runtimeAvailable" type="warning">执行环境未就绪</el-tag>

@@ -1,4 +1,4 @@
-name: Build English Mail Reconciliation
+name: Build Financial Platform
 
 on:
   workflow_dispatch:
@@ -6,7 +6,25 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/build-mail-english.yml'
-      - 'backend/launcher_mail.py'
+      - 'backend/launcher.py'
+      - 'backend/app/main.py'
+      - 'backend/app/ilog*.py'
+      - '.github/workflows/build-windows-exe.yml'
+      - 'packaging/finance-reconcile.spec'
+      - 'packaging/smoke_windows_exe.py'
+      - 'frontend/src/views/ReconciliationView.vue'
+      - 'frontend/src/views/UnlockView.vue'
+      - 'backend/app/platform*.py'
+      - 'backend/app/platform_accounts.json'
+      - 'frontend/src/platformLocale.ts'
+      - 'frontend/src/services/platform*.ts'
+      - 'frontend/src/components/Platform*.vue'
+      - 'frontend/src/components/IlogRetentionSettings.vue'
+      - 'frontend/src/App.vue'
+      - 'frontend/src/main.ts'
+      - 'frontend/tooling/runtimePlatformLocale.ts'
+      - 'frontend/tooling/platformEnglish.json'
+      - 'frontend/tooling/excelEnglish.json'
       - 'backend/app/mail*.py'
       - 'backend/app/customer*.py'
       - 'backend/app/google_sheets.py'
@@ -32,6 +50,7 @@ permissions:
 jobs:
   build:
     uses: ./.github/workflows/build-windows-exe.yml
+    secrets: inherit
     with:
-      edition: mail_en
+      edition: full
       fast_build: false

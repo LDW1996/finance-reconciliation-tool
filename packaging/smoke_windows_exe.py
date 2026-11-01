@@ -16,6 +16,17 @@ import pandas as pd
 from openpyxl import load_workbook
 
 
+SESSION = None
+
+def api_get(*args, **kwargs):
+    return (SESSION or httpx).get(*args, **kwargs)
+
+def api_post(*args, **kwargs):
+    return (SESSION or httpx).post(*args, **kwargs)
+
+def api_delete(*args, **kwargs):
+    return (SESSION or httpx).delete(*args, **kwargs)
+
 APP_URL = "http://127.0.0.1:8765"
 
 
@@ -27,7 +38,7 @@ def wait_for_health(timeout_seconds: int = 45, process=None, startup_log=None) -
             detail=Path(startup_log).read_text(encoding='utf-8',errors='replace')[-24000:] if startup_log and Path(startup_log).exists() else 'No startup log was produced.'
             raise RuntimeError(f'EXE exited before health check, code={process.poll()}:\n{detail}')
         try:
-            response = httpx.get(f"{APP_URL}/api/health", timeout=2)
+            response = api_get(f"{APP_URL}/api/health", timeout=2)
             if response.status_code == 200 and response.json().get("status") == "ok":
                 return
         except Exception as exc:
@@ -49,14 +60,14 @@ def make_sample_workbook(path: Path) -> None:
 
 
 def assert_frontend_served() -> None:
-    response = httpx.get(APP_URL, timeout=10)
+    response = api_get(APP_URL, timeout=10)
     response.raise_for_status()
     if '<div id="app"></div>' not in response.text:
         raise AssertionError("Frontend index.html was not served by the EXE")
     asset = re.search(r'src="(/assets/[^"]+\.js)"', response.text)
     if not asset:
         raise AssertionError("Frontend JavaScript asset was not linked")
-    script = httpx.get(f"{APP_URL}{asset.group(1)}", timeout=10)
+    script = api_get(f"{APP_URL}{asset.group(1)}", timeout=10)
     script.raise_for_status()
     if "原表标色" not in script.text:
         raise AssertionError("The EXE contains an outdated frontend build")
@@ -67,7 +78,7 @@ def assert_frontend_served() -> None:
 
 def assert_excel_flow(sample_path: Path) -> None:
     with sample_path.open("rb") as file_obj:
-        response = httpx.post(
+        response = api_post(
             f"{APP_URL}/api/inspect-combined",
             files={"workbook": (sample_path.name, file_obj, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
             data={"match_field": "分配", "amount_field": "原币金额"},
@@ -81,7 +92,7 @@ def assert_excel_flow(sample_path: Path) -> None:
         raise AssertionError(f"Unexpected company codes: {report}")
 
     with sample_path.open("rb") as file_obj:
-        response = httpx.post(
+        response = api_post(
             f"{APP_URL}/api/analyze-combined",
             files={"workbook": (sample_path.name, file_obj, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
             data={"match_field": "分配", "amount_field": "原币金额"},
@@ -97,7 +108,7 @@ def assert_excel_flow(sample_path: Path) -> None:
         raise AssertionError(f"Detailed export has unexpected sheets: {detailed.sheetnames}")
 
     with sample_path.open("rb") as file_obj:
-        marked_response = httpx.post(
+        marked_response = api_post(
             f"{APP_URL}/api/analyze-combined",
             files={"workbook": (sample_path.name, file_obj, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
             data={"output_mode": "marked", "tolerance": "100"},
@@ -112,16 +123,16 @@ def assert_excel_flow(sample_path: Path) -> None:
 def assert_ilog_local_services() -> None:
     # Never log in to iLog or submit business operations in CI.
     for endpoint in ('/api/ilog/runtime','/api/ilog/retention','/api/ilog/tasks?limit=20&offset=0'):
-        response=httpx.get(APP_URL+endpoint,timeout=10)
+        response=api_get(APP_URL+endpoint,timeout=10)
         response.raise_for_status()
     headers={'X-Finance-Local':'1'}
-    created=httpx.post(APP_URL+'/api/ilog/accounts',json={
+    created=api_post(APP_URL+'/api/ilog/accounts',json={
         'name':'Smoke test','username':'smoke-test-only','password':'not-a-real-password'},headers=headers,timeout=10)
     created.raise_for_status()
     account=created.json()
     if not account.get('hasPassword') or 'not-a-real-password' in created.text:
         raise AssertionError('Account storage or secret redaction failed')
-    response=httpx.delete(APP_URL+'/api/ilog/accounts/'+account['id'],headers=headers,timeout=10)
+    response=api_delete(APP_URL+'/api/ilog/accounts/'+account['id'],headers=headers,timeout=10)
     response.raise_for_status()
 
 
@@ -130,7 +141,7 @@ def poll_json(path, deadline):
     last_error=None
     while time.monotonic()<deadline:
         try:
-            response=httpx.get(APP_URL+path,headers={'X-Finance-Local':'1'},
+            response=api_get(APP_URL+path,headers={'X-Finance-Local':'1'},
                                timeout=max(.1,min(10,deadline-time.monotonic())))
             response.raise_for_status()
             return response.json()
@@ -145,12 +156,12 @@ def assert_mail_local_services() -> dict:
     # Check bundling only; CI must not connect to Outlook or any real mailbox.
     headers={'X-Finance-Local':'1'}
     for endpoint in ('/api/mail/status','/api/mail/messages'):
-        response=httpx.get(APP_URL+endpoint,headers=headers,timeout=10)
+        response=api_get(APP_URL+endpoint,headers=headers,timeout=10)
         response.raise_for_status()
     if not isinstance(response.json(),list):
         raise AssertionError('Mail record storage is not available')
     for endpoint in ('/api/mail/online/config','/api/mail/online/history'):
-        response=httpx.get(APP_URL+endpoint,headers=headers,timeout=10)
+        response=api_get(APP_URL+endpoint,headers=headers,timeout=10)
         response.raise_for_status()
         if not isinstance(response.json(),dict):raise AssertionError('Online ledger local storage is not available')
     image=Image.new('RGB',(1400,320),'white')
@@ -163,7 +174,7 @@ def assert_mail_local_services() -> dict:
     mail=EmailMessage();mail['Subject']='Synthetic offline OCR smoke test';mail.set_content('Test only')
     mail.add_attachment(png.getvalue(),maintype='image',subtype='png',filename='test.png')
     mail.add_attachment(pdf.getvalue(),maintype='application',subtype='pdf',filename='test.pdf')
-    response=httpx.post(APP_URL+'/api/mail/import',headers=headers,files={'mail':('smoke.eml',mail.as_bytes())},timeout=30)
+    response=api_post(APP_URL+'/api/mail/import',headers=headers,files={'mail':('smoke.eml',mail.as_bytes())},timeout=30)
     response.raise_for_status()
     identity=response.json()['id']
     deadline=time.monotonic()+90
@@ -182,7 +193,7 @@ def assert_mail_local_services() -> dict:
     duplicate=EmailMessage();duplicate['Subject']='Forwarded synthetic evidence';duplicate.set_content('Independent mail, same attachments')
     duplicate.add_attachment(png.getvalue(),maintype='image',subtype='png',filename='forwarded.png')
     duplicate.add_attachment(pdf.getvalue(),maintype='application',subtype='pdf',filename='forwarded.pdf')
-    response=httpx.post(APP_URL+'/api/mail/import',headers=headers,files={'mail':('copy.eml',duplicate.as_bytes())},timeout=30)
+    response=api_post(APP_URL+'/api/mail/import',headers=headers,files={'mail':('copy.eml',duplicate.as_bytes())},timeout=30)
     response.raise_for_status()
     after=wait_for_mail_analysis()
     previous=before['performance']['counters'];current=after['performance']['counters']
@@ -190,7 +201,7 @@ def assert_mail_local_services() -> dict:
         raise AssertionError('Frozen duplicate attachments were not reused without new analysis')
     if current['ocr_pages']<2 or after['performance']['seconds']['analysis_seconds']<=0:
         raise AssertionError('Frozen performance recorder missed real OCR work')
-    original=httpx.get(APP_URL+'/api/mail/messages/'+identity,headers=headers,timeout=10)
+    original=api_get(APP_URL+'/api/mail/messages/'+identity,headers=headers,timeout=10)
     original.raise_for_status()
     return dict(mail=original.json(),performance=after['performance'])
 
@@ -211,7 +222,7 @@ def wait_for_mail_analysis():
 
 def assert_mail_restart_preserved(expected):
     status=wait_for_mail_analysis()
-    response=httpx.get(APP_URL+'/api/mail/messages/'+expected['id'],headers={'X-Finance-Local':'1'},timeout=10)
+    response=api_get(APP_URL+'/api/mail/messages/'+expected['id'],headers={'X-Finance-Local':'1'},timeout=10)
     response.raise_for_status()
     if response.json()!=expected:
         raise AssertionError('Restart changed stored mail, recognition results or payment evidence')
@@ -278,14 +289,33 @@ def assert_excel_isolation() -> None:
             if response.status_code!=404:raise AssertionError('Excel edition exposes forbidden API: '+path)
 
 
+def platform_login(accounts, role):
+    response = SESSION.post(APP_URL+'/api/platform/login', json={'username':role,'password':accounts[role]})
+    if response.status_code != 200 or response.json().get('role') != role:
+        raise AssertionError('Platform login failed for role '+role)
+
+
+def assert_platform_roles(accounts):
+    assert SESSION.get(APP_URL+'/api/ilog/accounts').status_code == 401
+    for role in ('excel','mail','ilog','full'):
+        platform_login(accounts, role)
+        for capability, path in [('excel','/api/inspect-combined'),('mail','/api/mail/messages'),('ilog','/api/ilog/accounts')]:
+            response = SESSION.post(APP_URL+path) if capability == 'excel' else SESSION.get(APP_URL+path)
+            expected = (422 if capability == 'excel' else 200) if role in (capability,'full') else 403
+            if response.status_code != expected:
+                raise AssertionError('Platform role boundary failed: '+role+' '+capability)
+    # The last role is full, so existing offline business probes use real authorization.
+
+
 def main() -> int:
+    global SESSION
     excel_only='--excel-only' in sys.argv
     exe_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("dist") / "财务综合业务平台.exe"
     if not exe_path.exists():
         raise FileNotFoundError(exe_path)
 
     try:
-        httpx.get(f"{APP_URL}/api/health", timeout=2)
+        api_get(f"{APP_URL}/api/health", timeout=2)
     except httpx.RequestError:
         pass
     else:
@@ -313,6 +343,15 @@ def main() -> int:
     try:
         wait_for_health(process=process,startup_log=startup_log)
         assert_frontend_served()
+        if not excel_only:
+            try:
+                accounts=json.loads(os.environ.get("PLATFORM_SMOKE_ACCOUNTS", ""))
+                if set(accounts) != {"excel","mail","ilog","full"} or not all(isinstance(v,str) and v for v in accounts.values()):
+                    raise ValueError()
+            except (ValueError, TypeError):
+                raise RuntimeError("PLATFORM_SMOKE_ACCOUNTS must provide the four build account passwords") from None
+            SESSION=httpx.Client(headers={"X-Finance-Local":"1"})
+            assert_platform_roles(accounts)
         if excel_only:
             assert_excel_isolation()
         else:
@@ -324,6 +363,9 @@ def main() -> int:
             stop_process_tree(process)
             process=subprocess.Popen([str(exe_path)],env=app_env)
             wait_for_health(process=process,startup_log=startup_log)
+            if SESSION.get(APP_URL+"/api/platform/session").status_code != 401:
+                raise AssertionError("Restart retained platform session")
+            platform_login(accounts,"full")
             assert_mail_restart_preserved(sample['mail'])
             if key.read_bytes()!=key_before:
                 raise AssertionError('Restart replaced the original mail encryption key')
@@ -335,6 +377,9 @@ def main() -> int:
     finally:
         stop_process_tree(process)
         sandbox.cleanup()
+        if SESSION is not None:
+            SESSION.close()
+            SESSION=None
     return 0
 
 
