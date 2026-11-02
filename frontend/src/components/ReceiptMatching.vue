@@ -32,7 +32,8 @@
       </el-table>
     </el-dialog>
     <section class="review-workspace" aria-label="收款查询与列表">
-      <div class="writeback-actions actions"><el-button :loading="operation === 'online-write'" :disabled="busy || stale || !onlineConfig?.configured || !result?.ledger?.online" @click="writeOnline">回写已确认关联</el-button><el-button :disabled="busy" @click="openHistory">同步记录</el-button></div>
+      <div class="writeback-actions actions"><el-button :icon="Download" :loading="operation === 'cashier-export'" :disabled="busy || !result?.ledger" @click="exportCashierPackage">导出出纳核对包</el-button><el-button :loading="operation === 'online-write'" :disabled="busy || stale || !onlineConfig?.configured || !result?.ledger?.online" @click="writeOnline">回写已确认关联</el-button><el-button :disabled="busy" @click="openHistory">同步记录</el-button></div>
+      <p class="source">核对包包含全部已导入流水、前三条候选及已确认凭证，独立列出待核对记录；解压后查看，不会确认关联或回写流水。附件上限512MB。</p>
       <template v-if="writebackResult">
         <p class="summary" role="status">已写入 {{ writebackResult.written }} · 无变化 {{ writebackResult.unchanged }} · 失败 {{ writebackResult.failed }} · 待核实 {{ writebackResult.uncertain }}</p>
         <el-alert v-if="writebackResult.uncertain" title="部分写入结果待核实，请先读取在线流水并查看同步记录，再决定是否重试。" type="warning" :closable="false" />
@@ -324,6 +325,17 @@ async function review(state: ReviewState, candidate?: MatchingCandidate) {
     if (!alive || token !== sequence) return
     stale.value = true; pendingRefresh = true; error.value = ''
     ElMessage.success(state === 'confirmed' ? '已确认关联' : state === 'rejected' ? '已标记暂不关联' : '已重置核对')
+  })
+}
+async function exportCashierPackage() {
+  await run('cashier-export', async (signal, token) => {
+    const blob = await mailMatchingApi.cashierPackage(dayWindow.value, signal)
+    if (!alive || token !== sequence) return
+    const url = URL.createObjectURL(blob), link = document.createElement('a')
+    link.href = url; link.download = 'cashier-review.zip'; link.click()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+    error.value = ''
+    ElMessage.success('核对包已导出，请完整解压后打开Excel查看')
   })
 }
 async function exportFile() {

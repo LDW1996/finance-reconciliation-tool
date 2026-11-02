@@ -39,3 +39,43 @@ final result: passed
 - This is frontend layout work. No Windows executable was rebuilt or validated in this pass.
 - Destructive cleanup and restore against real user data were not run; their existing handlers and safeguards remain unchanged.
 - P3: shorter optional English labels could make the six-column metadata strip denser, but current full labels are readable and do not clip.
+
+---
+
+# Login redesign — 2026-11-02
+
+- Source truth: `/Users/hujiarong/.codex/generated_images/01a18167-8b7b-7ab3-9365-6fe86ad1135e/exec-032ed8ce-205c-4b6b-8a88-d552e0fe05a5.png` (first displayed, selected concept).
+- Implementation: `http://localhost:8772/`, isolated `build/login-preview-data`.
+- Source dimensions: 1487 × 1058. Desktop CSS viewport 1487 × 1058, DPR 1; full-page capture 1487 × 1058. The initial viewport-only screenshot was clipped by browser capture and was excluded from comparison. No stretching used in final evidence.
+- Full-view comparison: `build/login-qa/comparison-final.png`; implementation: `build/login-qa/desktop-zh-final.png`, final handoff: `build/login-qa/desktop-handoff.png`.
+- Additional captures: `build/login-qa/desktop-en.png`, `build/login-qa/mobile-en.png` (390 px wide, naturally scrolling full-page error state).
+- Focused separate crops not needed: the combined full view clearly exposes brand, form and footer regions; DOM measurements were used to check exact form boundaries and overflow.
+- Iteration 1: form started too low and heading/field spacing differed from selected reference. Result blocked for layout adjustment. Increased heading scale, aligned the form horizontally and vertically, adjusted field rhythm.
+- Iteration 2: combined source/render capture confirms the selected half-width navy photograph/white form composition, aligned title/fields/button and footer. No actionable P0/P1/P2 visual issue remains. P3: generated paper still-life differs slightly in crop/lighting from the mock; all UI text remains live, not flattened into the image.
+- Interaction checks: Chinese/English toggles; language preserved on successful login into workspace; required fields; password show/hide; generic wrong-credential feedback in English; real mail-role login; logout back to clean login; no horizontal overflow at 390 px.
+- Console errors checked after the interactions: none.
+- Build and language source-isolation checks pass. Auth/permissions/runtime regression tests: 15 passed. No backend authorization or mail data migration changed for the login redesign.
+
+final result: passed
+
+---
+
+# Unified platform header cleanup — 2026-11-02
+
+Source issue: user screenshot `/var/folders/2g/1vxq42vj6035d64_rqy2_jkc0000gn/T/codex-clipboard-fbb629ce-a05e-40a9-8aea-335dab266e86.png` showed equal visual weight for brand/nav/account, duplicated `excel · excel`, left-clustered logout and oversized active navigation. This was treated as a scoped header correction, preserving page content and all existing destinations.
+
+- Brand left, compact module navigation middle, account/exit right; identity appears once.
+- Desktop evidence: `build/header-qa/full-zh.png`, focused `build/header-qa/full-header.png`. English and all role evidence: `build/header-qa/full-en.png`, `excel-en.png`, `mail-en.png`, `ilog-en.png`.
+- Responsive evidence: `build/header-qa/mobile-en.png`, focused `mobile-header.png`, 390 × 844 CSS viewport. Navigation scrolls within its own second row; account and exit stay in the first row.
+- At 1440 px full-English navigation, measured nav scrollWidth equals clientWidth after English-label spacing fix; document has no horizontal overflow at desktop.
+- Real logins verified excel/mail/ilog/full each show only their own permitted links. Selected-page semantics retained with `aria-current`; keyboard focus outlines retained.
+- No language switch is repeated inside the platform. Login preference still controls the complete interface. User guide corrected accordingly.
+- Production build, locale source-isolation and whitespace validation pass. No business state or authorization policy changes.
+
+final result: passed
+
+## Numeric control seam — 2026-11-02
+
+Cause reproduced in the browser: the shared input wrapper was 40 px high, while Element Plus right-hand stepper controls remained fixed at 15 px each, leaving an 8 px dead gap. The old Excel-only override did not cover mail storage, iLog retention or Outlook settings. Promoted the actual-container half-height rule to shared `.el-input-number.is-controls-right` styling.
+
+Browser validation in isolated data: six storage/retention fields, Excel tolerance, and both mail date/batch fields. Desktop controls 40 px with two 19 px halves and zero gap; narrow controls 44 px with two 21 px halves and zero gap. Increase/decrease returned a temporary form value 10 -> 11 -> 10 without saving any settings. Disabled mail controls also retain the correct geometry. Build and whitespace checks pass.

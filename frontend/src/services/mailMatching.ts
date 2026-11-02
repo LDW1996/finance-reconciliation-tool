@@ -129,6 +129,15 @@ export const mailMatchingApi = {
     (await client.get<MatchingResult>('/matching', { params, signal })).data,
   review: async (data: { ledger_id: string; receipt_id: string; payment_id: string | null; state: ReviewState; day_window: number; expected_signature?: string }, signal?: AbortSignal) =>
     (await client.post<{ ok: true }>('/matching/review', data, { signal })).data,
+  cashierPackage: async (day_window: number, signal?: AbortSignal) => {
+    try { return (await client.get<Blob>('/matching/cashier-package', { params: { day_window }, responseType: 'blob', timeout: 600000, signal })).data }
+    catch (error: any) {
+      if (error.response?.data instanceof Blob) {
+        try { error.response.data = JSON.parse(await error.response.data.text()) } catch { /* Retain the original transport failure. */ }
+      }
+      throw error
+    }
+  },
   export: async (params: Pick<MatchingQuery, 'scope' | 'day_window' | 'minimum_score'>, signal?: AbortSignal) =>
     (await client.get<Blob>('/matching/export', { params, responseType: 'blob', signal })).data,
 }

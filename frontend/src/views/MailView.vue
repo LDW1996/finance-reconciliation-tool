@@ -1,7 +1,7 @@
 <template>
   <main class="mail-page">
     <header class="mail-heading">
-      <div><h1>邮件收款匹配</h1><p>{{ status?.enabled ? '自动读取已开启' : '自动读取未开启' }}<span v-if="status?.analysis_busy"> · 正在识别付款附件</span></p></div>
+      <div><ModuleTitle :icon="Message">邮件收款匹配</ModuleTitle><p>{{ status?.enabled ? '自动读取已开启' : '自动读取未开启' }}<span v-if="status?.analysis_busy"> · 正在识别付款附件</span></p></div>
       <div class="mail-actions">
         <input ref="fileInput" type="file" accept=".eml,.msg" class="mail-file-input" @change="importSample" />
         <el-button v-if="section === 'mail'" :icon="Upload" :loading="working === 'import'" :disabled="!!working" @click="fileInput?.click()">导入验证邮件</el-button>
@@ -35,9 +35,16 @@
         </section>
       </div>
       <footer class="mail-setup-footer">
-        <div class="mail-sync-status" role="status"><span class="mail-status-lead"><el-icon><Clock /></el-icon>{{ status?.busy ? '正在读取…' : status?.last_run ? `上次读取 ${formatDate(status.last_run)} · ${status.read} 封 · 新增 ${status.new} 封` : '尚未读取' }}</span><span v-if="status?.next_run">下次 {{ formatDate(status.next_run) }}</span><span v-if="status?.sync_phase">{{ status.sync_phase === 'history' ? '历史补扫' : '增量同步' }} · 已扫描 {{ status.sync_scanned || 0 }} 封{{ status.sync_complete ? (status.errors.length ? ' · 本轮结束，有异常待补扫' : ' · 本轮完成') : '' }}</span><span>本地已保存 {{ savedTotal }} 封<template v-if="status?.analysis_pending"> · 待识别 {{ status.analysis_pending }} 封</template></span><span v-if="status?.folders_total != null">目录进度 {{ status.folders_done || 0 }} / {{ status.folders_total }}</span><span v-if="status?.sync_start">收件范围 {{ formatDate(status.sync_start) }} — {{ formatDate(status.sync_end || '') }}（结束时间不含）</span></div>
+        <div class="mail-sync-status" role="status"><span class="mail-status-lead"><el-icon><Clock /></el-icon>{{ status?.busy ? '正在读取…' : status?.last_run ? `上次读取 ${formatDate(status.last_run)} · ${status.read} 封 · 新增 ${status.new} 封` : '尚未读取' }}</span><span v-if="status?.next_run">下次 {{ formatDate(status.next_run) }}</span><span v-if="status?.sync_phase">{{ status.sync_phase === 'history' ? '历史补扫' : '增量同步' }} · 已扫描 {{ status.sync_scanned || 0 }} 封{{ status.sync_complete ? (status.errors.length ? ' · 本轮结束，有异常待补扫' : ' · 本轮完成') : '' }}</span><span>本地已保存 {{ savedTotal }} 封<template v-if="status?.analysis_pending"> · 待识别 {{ status.analysis_pending }} 封</template></span><span v-if="status?.folders_total != null">已结束目录 {{ status.folders_done || 0 }} / {{ status.folders_total }}</span><span v-if="status?.sync_start">收件范围 {{ formatDate(status.sync_start) }} — {{ formatDate(status.sync_end || '') }}（结束时间不含）</span></div>
         <div class="mail-setup-actions"><el-button :icon="Refresh" :disabled="!status?.outlook_supported || !!working || !!status?.enabled || !!status?.busy || !selectedFolders.length || !rangeValid" @click="scan(true)">重新补扫</el-button><el-button type="primary" :icon="VideoPlay" :loading="status?.busy" :disabled="!status?.outlook_supported || !selectedFolders.length || !rangeValid || !!working || status?.enabled || status?.busy" @click="scan()">读取一批</el-button></div>
       </footer>
+      <el-alert v-if="status?.busy && status.read_progress" :type="status.read_progress.stalled ? 'warning' : 'info'" :closable="false" role="status">
+        <template #title>{{ readPhase(status.read_progress.phase) }}<template v-if="status.read_progress.folder_number"> · 当前第 {{ status.read_progress.folder_number }} / {{ status.read_progress.folders_total }} 个目录：{{ status.read_progress.current_folder }}</template> · 当前阶段已持续 {{ status.read_progress.stage_seconds || 0 }} 秒</template>
+        <template v-if="status.read_progress.stalled">当前阶段已超过 2 分钟，尚未确认扫描完成，可能仍在处理大目录或等待 Outlook。断点保留；请检查 Outlook 是否有弹窗或无响应，不要重复启动读取。</template>
+      </el-alert>
+      <el-alert v-else-if="status?.sync_complete && !status.error" :type="status.errors.length ? 'warning' : 'success'" :closable="false" :title="status.errors.length ? '所选范围本轮已结束，但有目录或邮件异常，请查看读取提示；不能确认全部读取成功。' : '所选日期范围已扫描完成，没有更多邮件可继续读取。'">
+        <template v-if="!status.errors.length">已保存的邮件和识别结果保留，待识别队列仍会继续处理。指定日期模式需调整日期范围才能读取更晚的邮件；最近天数模式会按自动读取设置继续检查。</template>
+      </el-alert>
       <details v-if="status?.performance" class="mail-performance">
         <summary>本次启动 · 识别处理 {{ status.performance.active_analysis ?? status.analysis_active ?? 0 }} / {{ status.analysis_workers ?? '—' }} · 最近60秒处理 {{ status.performance.recent.completed_attachments }} 附件</summary>
         <div class="mail-performance-totals">
@@ -93,14 +100,21 @@
       </section>
     </div>
       </el-tab-pane>
+      <el-tab-pane label="保存设置" name="storage"><MailStorageSettings v-if="section === 'storage'"/></el-tab-pane>
     </el-tabs>
   </main>
 </template>
 
 <script setup lang="ts">
+import ModuleTitle from '../components/ModuleTitle.vue'
+import MailStorageSettings from '../components/MailStorageSettings.vue'
+import { platformText } from '../platformLocale'
+function readPhase(phase?: string) {
+  return platformText(({ starting:'准备读取', connecting:'连接 Outlook', folders:'检查目录范围', opening:'打开目录', filtering:'筛选日期范围', sorting:'Outlook 排序邮件', metadata:'读取邮件索引', attachments:'提取邮件及附件', saving:'保存本批邮件', checkpoint:'保存读取断点' } as Record<string,string>)[phase || ''] || '正在读取')
+}
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Connection, Refresh, Upload, Download, Delete, Search, Clock, VideoPlay } from '@element-plus/icons-vue'
+import { Message, Connection, Refresh, Upload, Download, Delete, Search, Clock, VideoPlay } from '@element-plus/icons-vue'
 import { mailApi, type MailFolder, type MailRow, type MailStatus, type MailRelatedReceipts } from '../services/mail'
 import { downloadBlob } from '../services/api'
 import MailPaymentDetail from '../components/MailPaymentDetail.vue'

@@ -1,0 +1,5 @@
+# Cashier view-only export
+
+Approved scope: export an offline Excel + payment attachments ZIP for cashier review. No import-back, online refresh, confirmation, writeback or scan changes. Default includes all valid imported bank rows, top three candidates and any confirmed candidate. Include a separate attention list, candidate evidence and missing attachment manifest. Candidate scores are not confirmation. Preserve original text as Excel literal cells. Use relative attachment links, safe archive paths, deduplicate attachments, stream the final ZIP from a temporary file, clean it afterwards, and cap total raw attachments at 512 MiB. Do not export keys, configuration, full mail database or unrelated attachments. Use existing request language for Chinese/English output.
+
+Implementation: regression tests -> standalone export builder -> authenticated mail download endpoint -> button and explanation in reconciliation toolbar -> backend tests/frontend build. Existing uncommitted read-status fixes remain separate and intact.

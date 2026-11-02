@@ -135,6 +135,7 @@ class MailManager:
         self.recognition_cache=RecognitionCache(store)
         self.performance=MailPerformance()
         start_cleanup()
+        self.read_progress={}
         self._status_counts={'saved_total':0,'analysis_pending':0};self._status_progress={}
         self.state=dict(busy=False,enabled=False,queue_paused=False,analysis_skipped=0,analysis_halted=False,analysis_recovering=False,seconds=300,last_run=None,next_run=None,error='',errors=[],partial=False,new=0,read=0)
         self.sync=MailSync(store);self.workspace=MailWorkspace(store);self.online=OnlineLedger(self.workspace);self.customer_online=OnlineCustomerMapping(self.workspace)
@@ -177,6 +178,16 @@ class MailManager:
             if saved.get('enabled'):
                 self.configure(True,saved['store'],saved['folder'],saved['days'],saved['limit'],saved['seconds'],saved.get('resume_on_start',False),**{k:saved.get(k) for k in ('folders','include_children','start_date','end_date')})
 
+    def _read_progress(self, phase, fields=None):
+        with self.lock:
+            now=perf_counter()
+            previous=self.read_progress
+            changed=previous.get('phase')!=phase or any(previous.get(k)!=v for k,v in (fields or {}).items())
+            self.read_progress={**previous, **(fields or {}), 'phase':phase,
+                                'updated_at':now if changed else previous.get('updated_at',now)}
+        if changed:
+            diagnostic_record('mail_read_'+phase,folder_number=self.read_progress.get('folder_number',0),folders_total=self.read_progress.get('folders_total',0))
+
     def status(self):
         with self.lock:
             try:
@@ -187,7 +198,10 @@ class MailManager:
             except (sqlite3.Error,OSError) as error:
                 progress=self._status_progress
                 status_diagnostic=describe_failure(error,phase='读取状态',limit=0)
-            return {**deepcopy(self.state),'outlook_supported':sys.platform=='win32','analysis_busy':self.analysis_busy,
+            reading=deepcopy(self.read_progress)
+            reading['stage_seconds']=max(0,int(perf_counter()-reading.pop('updated_at',perf_counter()))) if self.state['busy'] else 0
+            reading['stalled']=bool(self.state['busy'] and reading['stage_seconds']>=120)
+            return {'read_progress':reading,**deepcopy(self.state),'outlook_supported':sys.platform=='win32','analysis_busy':self.analysis_busy,
                     'errors':self.state['errors'] or progress.get('errors',[]),
                     'sync_phase':progress.get('phase'),'sync_complete':progress.get('complete',False),
                     'folders_total':progress.get('folders_total'),'folders_done':progress.get('folders_done'),
@@ -477,6 +491,8 @@ class MailManager:
                 self.state['analysis_halted']=False
                 Thread(target=self._analyze_queue,daemon=True).start()
             self.queue_resume_scheduled=False
+            self.read_progress={}
+            self._read_progress('starting')
             self.state.update(busy=True,error='',next_run=None)
             self.state.update(store=store,folder=folder,days=days,limit=limit,**options)
             saved=self.store.get_state('poll_settings',{})
@@ -485,6 +501,9 @@ class MailManager:
 
     def _run(self, store, folder, days, limit, options=None):
         options=options or {}
+        from .mail_read_progress import sink, report
+        progress_token=sink.set(self._read_progress)
+        diagnostic_record('mail_read_started')
         read_started=None;read_recorded=False
         try:
             if self.state['analysis_halted']:
@@ -516,9 +535,11 @@ class MailManager:
             reason=self.storage.block_reason(reserve_bytes=reserve)
             if reason:raise ValueError(reason)
             save_started=perf_counter()
+            report('saving')
             new=self.store.save(result['rows'])
             for row in result['rows']:
                 if self.store.has_mail(row['id']): self.analyze(row['id'])
+            report('checkpoint')
             if self.paged_reader: self.sync.commit(plan,result)
             self.performance.add_save(perf_counter()-save_started)
             update=dict(error='',errors=result['errors'],partial=result['partial'],new=new,read=result.get('read',len(result['rows'])))
@@ -530,6 +551,8 @@ class MailManager:
                 self.performance.record_read(perf_counter()-read_started,0)
             update=dict(error=str(error) if isinstance(error,ValueError) else
                         describe_failure(error,phase='保存邮件与读取进度' if read_recorded else '读取 Outlook',limit=0)['message'],new=0,read=0,errors=[],partial=False)
+        sink.reset(progress_token)
+        diagnostic_record('mail_read_finished',failed=bool(update['error']),read=update['read'],partial=update['partial'])
         with self.lock:
             self.state.update(**update,busy=False,last_run=datetime.now(timezone.utc).isoformat())
             if options.get('start_date') and not update['partial'] and not update['error']:
@@ -907,6 +930,16 @@ def create_router(require_local):
     def review(body: ReceiptReview):
         try: return manager().workspace.review(body.ledger_id,body.receipt_id,body.payment_id,body.state,body.day_window,body.expected_signature)
         except ValueError as error: raise HTTPException(409,str(error)) from None
+
+    @router.get('/matching/cashier-package')
+    def cashier_package(day_window: int=Query(3,ge=1,le=7)):
+        from .cashier_export import build_cashier_package
+        from starlette.background import BackgroundTask
+        from fastapi.responses import FileResponse
+        try:path=build_cashier_package(manager().workspace,day_window)
+        except ValueError as error:raise HTTPException(400,str(error)) from None
+        return FileResponse(path,media_type='application/zip',filename='cashier-review.zip',
+                            background=BackgroundTask(path.unlink,missing_ok=True))
 
     @router.get('/matching/export')
     def export(scope: str=Query('unidentified',pattern='^(unidentified|unclosed|all)$'),minimum_score: int=Query(0,ge=0,le=100),day_window: int=Query(3,ge=1,le=7)):

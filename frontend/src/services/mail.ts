@@ -47,6 +47,7 @@ export interface MailDiagnostic {
   reason:string;action:string;message:string;at:string;status?:'recovering'|'paused'|'recovered'
 }
 export interface MailStatus {
+  read_progress?: { phase?: string; current_folder?: string; folder_number?: number; folders_total?: number; folders_done?: number; stage_seconds?: number; stalled?: boolean }
   analysis_halted?:boolean;analysis_recovering?:boolean;analysis_recovery?:string
   analysis_diagnostic?:MailDiagnostic;analysis_diagnostics?:MailDiagnostic[];status_diagnostic?:MailDiagnostic|null
   performance?: MailPerformance; analysis_workers?:number; analysis_active?:number; queue_paused?:boolean

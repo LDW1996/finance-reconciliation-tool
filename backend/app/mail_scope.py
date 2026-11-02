@@ -1,5 +1,6 @@
 """Read a selected Outlook/PST scope with one durable, bounded page cursor."""
 from . import outlook_probe as outlook
+from .mail_read_progress import report
 
 MAX_FOLDERS = 5000
 
@@ -38,7 +39,9 @@ def folder_tree(session):
 
 
 def read_scope_page(selections, include_children, start, end, limit, cursor=None, known_unchanged=None):
+    report('connecting')
     with outlook.outlook_session() as session:
+        report('folders')
         if cursor:
             targets=cursor['targets']; position=cursor['position']; page_cursor=cursor.get('page')
             completed=list(cursor.get('completed', [])); errors=list(cursor.get('errors', []))
@@ -69,6 +72,7 @@ def read_scope_page(selections, include_children, start, end, limit, cursor=None
         visited=0
         while position<len(targets) and scanned<limit and visited<50:
             target=targets[position]; visited+=1
+            report('opening', current_folder=target['label'], folder_number=position+1, folders_total=len(targets), folders_done=position)
             try:
                 folder=session.GetFolderFromID(target['folder'],target['store'])
                 result=outlook.scan_folder_page(folder,target['store'],start,end,limit-scanned,page_cursor,**({'known_unchanged':known_unchanged} if known_unchanged else {}))

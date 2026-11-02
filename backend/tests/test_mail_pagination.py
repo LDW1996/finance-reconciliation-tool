@@ -149,3 +149,12 @@ def test_missing_received_time_does_not_break_equal_time_snapshot():
         cursor=page['cursor']
     assert len(set(ids))==20
     assert not errors
+
+
+def test_legacy_indexed_mail_without_summary_is_not_pending(tmp_path):
+    store=MailStore(tmp_path/'mail.sqlite3')
+    store.save([dict(id='legacy',subject='test',body='',received='2026-10-20')])
+    store.set_payments('legacy',[dict(id='p',payer='TEST',date='2026-10-20',amount=10,currency='IDR')])
+    with store.db() as db:db.execute('DELETE FROM mail_payment_summary')
+    assert store.message_page(payment_filter='pending')['total']==0
+    assert store.message_page(payment_filter='payment')['total']==1

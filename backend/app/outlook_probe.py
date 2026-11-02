@@ -1,4 +1,5 @@
 from .diagnostics import record as diagnostic_record
+from .mail_read_progress import report as read_progress
 """Read-only classic Outlook adapter and local mail parsing for connection trials."""
 
 import hashlib
@@ -234,6 +235,14 @@ class MailStore:
                 items=db.execute('SELECT m.payload,s.payload FROM mail m LEFT JOIN mail_payment_summary s ON m.id=s.mail_id ORDER BY m.seen DESC,m.id')
                 for payload,summary_payload in items:
                     summary=self.decode(summary_payload) if summary_payload else {}
+                    if not summary_payload:
+                        # Legacy mail may already have payment results but no
+                        # materialized summary. Use the same fallback as details.
+                        from .mail_insights import mail_summary
+                        legacy=self.decode(payload)
+                        indexed=db.execute('SELECT payload FROM mail_payments WHERE mail_id=?',(legacy['id'],)).fetchone()
+                        legacy['attachment_details']=[self.decode(value) for value, in db.execute('SELECT metadata FROM mail_attachment WHERE mail_id=?',(legacy['id'],))]
+                        summary=mail_summary(legacy,self.decode(indexed[0]) if indexed else [],indexed=indexed is not None)
                     status=summary.get('status','pending')
                     matches=(payment_filter=='all' or (payment_filter=='payment' and status=='ready') or payment_filter==status)
                     if not matches:continue
@@ -501,6 +510,7 @@ def scan_folder_page(folder, store_id, start, end, limit, cursor=None, known_unc
             except Exception as error:errors.append(f'同时间邮件续读失败（{type(error).__name__}），该项已跳过，请检查邮件是否移动或删除并重新补扫。')
         remaining=cursor['pending_ids'][limit:]
         next_cursor={**cursor,'pending_ids':remaining} if remaining else ({'before':cursor['before'],'skip_boundary':True,'seen':[]} if cursor.get('has_older') else None)
+        read_progress('attachments')
         result=_scan_selected_messages(selected,store_id,start,limit,known_unchanged)
         result.update(cursor=next_cursor,partial=next_cursor is not None,errors=errors+result['errors'])
         return result
@@ -509,8 +519,11 @@ def scan_folder_page(folder, store_id, start, end, limit, cursor=None, known_unc
     prop='"http://schemas.microsoft.com/mapi/proptag/0x0E060040"'
     # Widen the server comparison by one second and enforce precise bounds locally.
     query=f"@SQL={prop} >= '{start.strftime('%Y-%m-%d %H:%M:%S')}' AND {prop} <= '{(boundary+timedelta(seconds=1)).strftime('%Y-%m-%d %H:%M:%S')}'"
+    read_progress('filtering')
     items=folder.Items.Restrict(query)
+    read_progress('sorting')
     items.Sort('[ReceivedTime]',True)
+    read_progress('metadata')
     selected=[]; consumed=[]; errors=[]; more=False
     # DASL timestamp comparisons are widened to seconds. In dense imported
     # archives thousands of newer rows can fall in that overlap. Seek past
@@ -546,6 +559,7 @@ def scan_folder_page(folder, store_id, start, end, limit, cursor=None, known_unc
             diagnostic_record('outlook_metadata',error,index=index,store_id=store_id)
             errors.append(f'第 {index} 项元数据读取失败（{type(error).__name__}），请检查 Outlook；可重新补扫。')
     else: more=items.Count>stop
+    read_progress('attachments')
     result=_scan_selected_messages(selected,store_id,start,limit,known_unchanged)
     next_cursor=None
     if more:

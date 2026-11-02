@@ -260,5 +260,17 @@
   "项需人工核实，未自动重提解锁。": " items require manual verification. Unlock was not resubmitted automatically.",
   "项，请返回拆分。": " items. Go back and split the batch.",
   "预览并清理过期数据": "Preview and clean up expired data",
-  "首选账号": "Preferred account"
+  "首选账号": "Preferred account",
+  "让日常财务工作更有序": "Bring clarity to your daily finance work",
+  "欢迎回来": "Welcome back",
+  "登录以进入你的工作空间": "Sign in to your workspace",
+  "请输入账号": "Enter your username",
+  "请输入密码": "Enter your password",
+  "本地工作空间": "Local workspace",
+  "正在登录…": "Signing in…",
+  "显示密码": "Show password",
+  "隐藏密码": "Hide password",
+  "Excel对账": "Excel reconciliation",
+  "iLog批量解锁": "iLog unlock",
+  "iLog业务账号": "iLog accounts"
 }

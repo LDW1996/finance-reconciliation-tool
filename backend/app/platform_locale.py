@@ -5,6 +5,10 @@ from . import mail_english
 from .mail_online import OUTPUT_LANGUAGE
 
 EXACT = {
+    '请先读取或导入银行流水。': 'Read or import bank transactions first.',
+    '流水数量超出导出上限，请拆分流水后重试。': 'Too many transactions to export. Split the ledger and retry.',
+    '核对包附件超过 512 MB，请减少流水范围后重试。': 'Package attachments exceed 512 MB. Import a smaller ledger and retry.',
+    '导出目录磁盘空间不足，请释放空间后重试。': 'Insufficient disk space for export. Free space and retry.',
     '任务不存在': 'Task not found', '截图不存在': 'Screenshot not found',
     '账号不存在，请刷新页面后重试': 'Account not found. Refresh and retry.',
     '请选择已保存密码的业务账号': 'Select a business account with a saved password.',

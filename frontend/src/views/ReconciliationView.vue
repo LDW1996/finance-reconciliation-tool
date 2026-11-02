@@ -3,11 +3,8 @@
   <main class="app-shell">
     <section class="workspace" aria-labelledby="page-title">
       <header class="page-header">
-        <div class="header-title">
-          <el-icon class="brand-icon"><DataAnalysis /></el-icon>
-          <h1 id="page-title">{{ t('title') }}</h1>
-        </div>
-        <div class="header-actions">
+        <ModuleTitle :icon="DataAnalysis" title-id="page-title">{{ t('title') }}</ModuleTitle>
+        <div v-if="standaloneExcel" class="header-actions">
           <el-select
             v-model="language"
             class="language-select"
@@ -194,6 +191,7 @@
 </template>
 
 <script setup lang="ts">
+import ModuleTitle from '../components/ModuleTitle.vue'
 import { computed, ref, watch } from 'vue'
 import { Brush, Checked, Cpu, DataAnalysis, Document, Download, QuestionFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
@@ -212,6 +210,7 @@ import { platformLanguage } from '../platformLocale'
 import { localeOptions, translate, type Locale } from '../i18n'
 
 const supportedLocales: Locale[] = ['zh-CN', 'en', 'id']
+const standaloneExcel = import.meta.env.VITE_EDITION === 'excel'
 const storedLocale = localStorage.getItem('finance-reconcile-locale') as Locale | null
 const language = ref<Locale>(import.meta.env.VITE_EDITION === 'excel' && storedLocale && supportedLocales.includes(storedLocale) ? storedLocale : platformLanguage.value)
 watch(platformLanguage, value => { language.value = value })
