@@ -22,16 +22,21 @@ def without_previews(metadata):
     return result
 
 
-def save_blob(store,db,identity,raw):
+def save_blob(store,db,identity,raw,*,prepared=None):
     if not raw:
         db.execute('DELETE FROM mail_attachment_blob_ref WHERE attachment_id=?',(identity,))
         return b''
-    digest=sha256(raw).hexdigest()
+    digest=prepared['digest'] if prepared is not None else sha256(raw).hexdigest()
     existing=db.execute('SELECT content FROM mail_blob WHERE digest=?',(digest,)).fetchone()
+    if prepared is not None and existing != prepared['existing']:
+        # Another prepared attachment in this transaction may have inserted the
+        # exact same encrypted original. All other changes require revalidation.
+        if not existing or existing[0] != prepared['encrypted']:
+            raise ValueError('共享原件已变化，请重试保存。')
     if existing:
-        if sha256(store.cipher.decrypt(existing[0])).hexdigest()!=digest:raise ValueError('共享原件校验失败，已保留旧原件。')
+        if prepared is None and sha256(store.cipher.decrypt(existing[0])).hexdigest()!=digest:raise ValueError('共享原件校验失败，已保留旧原件。')
     else:
-        db.execute('INSERT INTO mail_blob VALUES(?,?)',(digest,store.cipher.encrypt(raw)))
+        db.execute('INSERT INTO mail_blob VALUES(?,?)',(digest,prepared['encrypted'] if prepared is not None else store.cipher.encrypt(raw)))
     db.execute('INSERT INTO mail_attachment_blob_ref VALUES(?,?) ON CONFLICT(attachment_id) DO UPDATE SET digest=excluded.digest',(identity,digest))
     return b''
 

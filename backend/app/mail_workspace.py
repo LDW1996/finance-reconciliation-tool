@@ -51,7 +51,7 @@ class MailWorkspace:
             db.execute('CREATE TABLE IF NOT EXISTS mail_review (receipt_id TEXT PRIMARY KEY, payload TEXT NOT NULL)')
 
     def _dataset(self):
-        with self.store.db() as db:
+        with self.store.db(write=False) as db:
             row=db.execute('SELECT id,metadata FROM mail_ledger LIMIT 1').fetchone()
             return self.store.decode(row[1]) if row else None
 
@@ -112,7 +112,7 @@ class MailWorkspace:
         return self.customer_mapping()
 
     def _review_map(self):
-        with self.store.db() as db:
+        with self.store.db(write=False) as db:
             return {key:self.store.decode(payload) for key,payload in db.execute('SELECT receipt_id,payload FROM mail_review')}
 
     def _ranked(self,data,scope,day_window,candidate_limit):
@@ -202,7 +202,7 @@ class MailWorkspace:
             data=self._dataset()
             if not data: raise ValueError('请先导入银行流水。')
             result=self.matching(scope=scope,page_size=20000,minimum_score=minimum_score,day_window=day_window)
-            with self.store.db() as db:
+            with self.store.db(write=False) as db:
                 encrypted=db.execute('SELECT content FROM mail_ledger WHERE id=?',(data['id'],)).fetchone()[0]
             raw=self.store.cipher.decrypt(encrypted)
             if data['name'].lower().endswith('.xlsx'):

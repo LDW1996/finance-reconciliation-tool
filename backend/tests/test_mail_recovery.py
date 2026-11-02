@@ -84,7 +84,7 @@ def test_status_stays_readable_when_database_status_query_fails(tmp_path,monkeyp
     store=MailStore(tmp_path/'mail.sqlite3')
     manager=MailManager(store)
     @contextmanager
-    def locked():raise sqlite3.OperationalError('database is locked');yield
+    def locked(**kwargs):raise sqlite3.OperationalError('database is locked');yield
     monkeypatch.setattr(store,'db',locked)
     status=manager.status()
     assert status['status_diagnostic']['kind']=='database_busy'

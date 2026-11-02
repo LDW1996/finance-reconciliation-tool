@@ -40,7 +40,21 @@ def capture_attachment(name, raw=None, size=None):
                 status=status, error=error, raw=raw if status == 'pending' else b'')
 
 
+class UnsafeOCRDimensions(ValueError):
+    """A decoded image has no usable two-dimensional text surface."""
+
+
+def _check_ocr_dimensions(image):
+    # Do not reject by area/aspect ratio: small, single-line text is legitimate.
+    if min(image.size) <= 2:
+        from .diagnostics import record
+        record('ocr_skipped_degenerate_dimensions', width=image.width, height=image.height,
+               pixels=image.width*image.height, reason_degenerate_dimensions=True)
+        raise UnsafeOCRDimensions('degenerate_image_dimensions')
+
+
 def run_ocr(image):
+    _check_ocr_dimensions(image)
     global _engine
     # Each worker owns its engine; retain a lock for direct in-process calls.
     with _inference_lock:
@@ -204,7 +218,12 @@ def _page_result(image, number, native_text=''):
         method = 'pdf_text'
     else:
         try:
+            _check_ocr_dimensions(image)
             lines, method = run_ocr(image), 'ocr'
+        except UnsafeOCRDimensions:
+            return dict(number=number, method='skipped', status='skipped',
+                        reason='degenerate_image_dimensions', width=image.width, height=image.height,
+                        preview='', lines=[], text='', fields=extract_fields([], number))
         except Exception as error:
             from .diagnostics import record
             record('ocr_worker',error,page=number,width=image.width,height=image.height,
@@ -333,6 +352,12 @@ def analyze_attachment(raw, name):
                 finally: image.close()
         except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as error:
             raise ValueError('图片无法打开，可能格式不受支持或已损坏。') from error
+    skipped = [p for p in pages if p.get('status') == 'skipped']
+    for page in skipped:
+        warnings.append(f"第 {page['number']} 页已跳过：图片尺寸 {page['width']}×{page['height']} 像素，短边不超过 2 像素（degenerate_image_dimensions）。")
+    if skipped and len(skipped) == len(pages):
+        return dict(status='skipped', reason='degenerate_image_dimensions', pages=pages,
+                    fields=extract_fields([], 1), warnings=warnings, engine='未运行 OCR（尺寸保护）')
     fields = {key: [item for p in pages for item in p['fields'][key]] for key in ('payer','date','amount','fee','identifiers')}
     for field, label in [('payer','付款人'),('date','付款日期'),('amount','付款金额')]:
         unique = set(f['value'] for f in fields[field])

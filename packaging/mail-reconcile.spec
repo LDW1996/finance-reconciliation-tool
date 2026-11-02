@@ -26,6 +26,7 @@ hiddenimports = [
     
     "app.accounts",
     "app.outlook_probe",
+    "app.mail_database",
     "app.mail_tasks",
     "app.mail_matching",
     "app.mail_insights",

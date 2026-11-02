@@ -57,6 +57,22 @@ def memory_snapshot():
     return snapshot
 
 
+def error_facts(error):
+    if error is None:return dict(error_code=None,winerror=None,failure_reason=None)
+    code=getattr(error,'sqlite_errorcode',None)
+    if code is None:code=getattr(error,'errno',None)
+    if not isinstance(code,int):code=None
+    winerror=getattr(error,'winerror',None)
+    if not isinstance(winerror,int):winerror=None
+    text=str(error).lower()
+    reason=('database_busy' if ('database is locked' in text or 'database is busy' in text or 'writer queue timed out' in text or 'snapshot changed repeatedly' in text or (type(error).__module__=='sqlite3' and code in (5,6))) else
+            'disk_full' if code==28 else 'permission_denied' if isinstance(error,PermissionError) else
+            'file_missing' if isinstance(error,FileNotFoundError) else
+            'memory_exhausted' if isinstance(error,MemoryError) else
+            'thread_start_failed' if 'cannot start new thread' in text else 'unclassified')
+    return dict(error_code=code,winerror=winerror,failure_reason=reason)
+
+
 def record(stage,error=None,**context):
     global _write_error
     try:
@@ -77,7 +93,14 @@ def record(stage,error=None,**context):
             if error and ('onnx' in kind.lower() or 'onnxruntime' in type(error).__module__.lower()):
                 message=str(error).lower()
                 engine_reason=next((label for needle,label in [('allocate','memory_allocation'),('out of memory','memory_allocation'),('invalid dimension','invalid_dimensions'),('invalid rank','invalid_dimensions'),('invalid input','invalid_input'),('no such file','model_file_missing'),('not implemented','unsupported_operator')] if needle in message),'unclassified_engine_error')
-            row=dict(memory=memory_snapshot(),engine_reason=engine_reason,time=datetime.now(timezone.utc).isoformat(),stage=stage,error_type=kind,attribute=attribute,frames=frames,context=safe,suppressed=count)
+            causes=[]
+            cause=getattr(error,'__cause__',None) or getattr(error,'__context__',None)
+            seen_causes=set()
+            while cause is not None and id(cause) not in seen_causes and len(causes)<3:
+                seen_causes.add(id(cause))
+                causes.append(dict(error_type=type(cause).__name__,**error_facts(cause)))
+                cause=cause.__cause__ or cause.__context__
+            row=dict(thread_id=threading.get_ident(),causes=causes,**error_facts(error),memory=memory_snapshot(),engine_reason=engine_reason,time=datetime.now(timezone.utc).isoformat(),stage=stage,error_type=kind,attribute=attribute,frames=frames,context=safe,suppressed=count)
             data=(json.dumps(row,ensure_ascii=False)+'\n').encode()
             files=sorted(path.glob('diagnostic-*.jsonl'))
             target=files[-1] if files and files[-1].stat().st_size+len(data)<=MAX_FILE else path/f'diagnostic-{time.time_ns()}.jsonl'

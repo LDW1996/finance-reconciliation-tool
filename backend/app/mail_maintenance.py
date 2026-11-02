@@ -12,7 +12,7 @@ class MailMaintenance:
     def chunks(self):
         last=''
         while True:
-            with self.store.db() as db:
+            with self.store.db(write=False) as db:
                 rows=db.execute('''SELECT a.id,a.mail_id,a.metadata,LENGTH(a.content),COALESCE(LENGTH(b.content),0)
                     FROM mail_attachment a LEFT JOIN mail_attachment_blob_ref r ON r.attachment_id=a.id
                     LEFT JOIN mail_blob b ON b.digest=r.digest WHERE a.id>? ORDER BY a.id LIMIT 1''',(last,)).fetchall()
@@ -21,11 +21,11 @@ class MailMaintenance:
             last=rows[-1][0]
 
     def count(self):
-        with self.store.db() as db:return db.execute('SELECT COUNT(*) FROM mail_attachment').fetchone()[0]
+        with self.store.db(write=False) as db:return db.execute('SELECT COUNT(*) FROM mail_attachment').fetchone()[0]
 
     def preview(self,progress=lambda **x:None):
         report=dict(attachments=self.count(),preview_pages=0,metadata_bytes=0,duplicate_bytes=0,protected_preview_pages=0,errors=0)
-        with self.store.db() as db:seen={row[0] for row in db.execute('SELECT digest FROM mail_blob')}
+        with self.store.db(write=False) as db:seen={row[0] for row in db.execute('SELECT digest FROM mail_blob')}
         processed=0
         progress(processed=0,total=report['attachments'],phase='检查历史附件')
         for rows in self.chunks():
@@ -50,7 +50,8 @@ class MailMaintenance:
         return report
 
     def optimize(self,compact=True,progress=lambda **x:None):
-        before=self.store.path.stat().st_size
+        from .mail_storage import MailStorage
+        before=MailStorage(self.store).database_bytes()
         report=dict(attachments=self.count(),processed=0,preview_pages=0,protected_preview_pages=0,errors=0,compacted=False)
         progress(processed=0,total=report['attachments'],phase='去重并清理可重建预览')
         for rows in self.chunks():
@@ -92,10 +93,12 @@ class MailMaintenance:
                 report['compact_note']='去重和预览清理已完成，但数据库整理所需临时空间不足；请释放空间后再次优化。'
             else:
                 progress(processed=report['processed'],total=report['attachments'],phase='整理数据库以释放磁盘空间')
-                with sqlite3.connect(self.store.path,timeout=30,isolation_level=None) as db:
+                with self.store.database.writer, sqlite3.connect(self.store.path,timeout=30,isolation_level=None) as db:
+                    db.execute('PRAGMA wal_checkpoint(TRUNCATE)')
                     db.execute('VACUUM')
+                    db.execute('PRAGMA wal_checkpoint(TRUNCATE)')
                     if db.execute('PRAGMA quick_check').fetchone()[0]!='ok':raise RuntimeError('数据库检查未通过，请保留数据并联系维护人员。')
                 report['compacted']=True
-        report['database_released_bytes']=max(0,before-self.store.path.stat().st_size)
+        report['database_released_bytes']=max(0,before-MailStorage(self.store).database_bytes())
         report['note']='邮件、原件、识别文字、付款索引和已确认关联均保留。'
         return report

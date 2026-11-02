@@ -50,7 +50,7 @@ class MailStorage:
 
     def snapshot(self):
         # SQL byte sums are explicit management operations, never every status poll.
-        with self.store.db() as db:
+        with self.store.db(write=False) as db:
             count=db.execute('SELECT COUNT(*) FROM mail').fetchone()[0]
             attachment_count,raw,metadata=db.execute('SELECT COUNT(*),COALESCE(SUM(LENGTH(content)),0),COALESCE(SUM(LENGTH(metadata)),0) FROM mail_attachment').fetchone()
             raw+=db.execute('SELECT COALESCE(SUM(LENGTH(content)),0) FROM mail_blob').fetchone()[0]
@@ -74,7 +74,7 @@ class AnalysisQueue:
             db.execute('UPDATE mail_analysis_queue SET claimed=0')
 
     def __len__(self):
-        with self.store.db() as db:return db.execute('SELECT COUNT(*) FROM mail_analysis_queue WHERE claimed=0').fetchone()[0]
+        with self.store.db(write=False) as db:return db.execute('SELECT COUNT(*) FROM mail_analysis_queue WHERE claimed=0').fetchone()[0]
 
     def append(self,item):
         with self.store.db() as db:

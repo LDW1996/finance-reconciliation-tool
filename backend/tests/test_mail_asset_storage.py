@@ -66,9 +66,10 @@ def test_legacy_optimization_preserves_evidence_reviews_and_reclaims_file(tmp_pa
     maintenance=MailMaintenance(store)
     preview=maintenance.preview()
     assert preview['preview_pages']==2 and preview['duplicate_bytes']>0
-    before=store.path.stat().st_size
+    from app.mail_storage import MailStorage
+    before=MailStorage(store).database_bytes()
     result=maintenance.optimize(compact=True)
-    assert result['compacted'] and store.path.stat().st_size<before
+    assert result['compacted'] and MailStorage(store).database_bytes()<before
     assert store.mail_count()==2
     with store.db() as db:
         assert store.decode(db.execute('SELECT payload FROM mail_review').fetchone()[0])['state']=='confirmed'

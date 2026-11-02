@@ -461,7 +461,8 @@ class MailManager:
                     analysis_seconds=perf_counter()-analysis_started
                 save_started=perf_counter()
                 _analysis_stage.set('保存附件识别结果')
-                self.store.update_attachment(identity,asset['id'],status='done',result=result,error='',
+                self.store.update_attachment(identity,asset['id'],status='skipped' if result.get('status')=='skipped' else 'done',result=result,
+                                             error='；'.join(result.get('warnings',[])) if result.get('status')=='skipped' else '',
                                              recognition_version=RECOGNITION_VERSION)
                 self.recognition_cache.remember(key, asset['id'], result)
                 self.performance.record_attachment(result,reused,analysis_seconds,
@@ -476,28 +477,58 @@ class MailManager:
             self.store.set_payments(identity,payments,mail_summary(updated,payments,indexed=True))
             self.performance.add_save(perf_counter()-save_started)
 
+    def _save_poll_settings(self, settings, merge=False):
+        started=perf_counter()
+        phase='mail_settings_read' if merge else 'mail_settings_write'
+        try:
+            if merge:
+                diagnostic_record(phase)
+                settings={**self.store.get_state('poll_settings',{}),**settings}
+                diagnostic_record(phase+'_done',elapsed_seconds=perf_counter()-started)
+            phase='mail_settings_write'
+            diagnostic_record(phase)
+            self.store.set_state('poll_settings',settings)
+            diagnostic_record(phase+'_done',elapsed_seconds=perf_counter()-started)
+        except Exception as error:
+            diagnostic_record(phase+'_failed',error,elapsed_seconds=perf_counter()-started)
+            raise
+
     def start(self, store, folder, days, limit, generation=None, **options):
         with self.lock:
             if not self.platform_permitted():return
             if self.maintenance_active:raise ValueError('存储优化进行中，请稍后读取。')
             if generation is not None and (generation!=self.generation or not self.state['enabled']): return
             if self.state['busy']: raise ValueError('邮件正在读取，请等待完成后再操作。')
-            if generation is None:
-                self.generation+=1
-                if self.timer: self.timer.cancel()
-            if (self.analysis_current or self.analysis_queue) and not self.analysis_busy and (generation is None or not self.state['analysis_halted']):
-                self.analysis_busy=True
-                self.state['analysis_error']=''
-                self.state['analysis_halted']=False
-                Thread(target=self._analyze_queue,daemon=True).start()
-            self.queue_resume_scheduled=False
             self.read_progress={}
             self._read_progress('starting')
-            self.state.update(busy=True,error='',next_run=None)
-            self.state.update(store=store,folder=folder,days=days,limit=limit,**options)
-            saved=self.store.get_state('poll_settings',{})
-            self.store.set_state('poll_settings',{**saved,'store':store,'folder':folder,'days':days,'limit':limit,**options})
-        Thread(target=self._run,args=(store,folder,days,limit,options),daemon=True).start()
+            phase='settings'
+            try:
+                self._save_poll_settings(dict(store=store,folder=folder,days=days,limit=limit,**options),merge=True)
+                if generation is None:
+                    self.generation+=1
+                    if self.timer:self.timer.cancel()
+                if (self.analysis_current or self.analysis_queue) and not self.analysis_busy and (generation is None or not self.state['analysis_halted']):
+                    phase='analysis_thread'
+                    self.analysis_busy=True
+                    self.state['analysis_error']=''
+                    self.state['analysis_halted']=False
+                    try:Thread(target=self._analyze_queue,daemon=True).start()
+                    except Exception:
+                        self.analysis_busy=False
+                        raise
+                self.queue_resume_scheduled=False
+                self.state.update(busy=True,error='',next_run=None)
+                self.state.update(store=store,folder=folder,days=days,limit=limit,**options)
+                phase='read_thread'
+                diagnostic_record('mail_read_thread_launch')
+                Thread(target=self._run,args=(store,folder,days,limit,options),daemon=True).start()
+            except Exception as error:
+                diagnostic_record('mail_read_start_failed',error,phase=phase)
+                self.state.update(busy=False,enabled=False,next_run=None,error='启动邮件读取失败；请导出日志检查配置保存或线程启动异常后重试。')
+                self._read_progress('startup_failed')
+                self.generation+=1
+                if self.timer:self.timer.cancel()
+                raise
 
     def _run(self, store, folder, days, limit, options=None):
         options=options or {}
@@ -571,13 +602,13 @@ class MailManager:
         with self.lock:
             if self.maintenance_active:raise ValueError('存储优化进行中，请稍后修改自动读取。')
             if enabled and self.state['busy']: raise ValueError('请等待当前读取完成后再开启定时读取。')
+            self._save_poll_settings(dict(enabled=enabled,store=store,folder=folder,days=days,limit=limit,seconds=seconds,resume_on_start=resume_on_start,**options))
             self.generation+=1
             if self.timer: self.timer.cancel()
             self.timer=None; self.selection=(store,folder,days,limit); self.selection_options=options
             self.queue_resume_scheduled=False
             if not enabled:self.state['queue_paused']=False
             self.state.update(enabled=enabled,seconds=seconds,next_run=None,resume_on_start=resume_on_start,store=store,folder=folder,days=days,limit=limit,**options)
-            self.store.set_state('poll_settings',dict(enabled=enabled,store=store,folder=folder,days=days,limit=limit,seconds=seconds,resume_on_start=resume_on_start,**options))
         if enabled: self.start(store,folder,days,limit,**options)
         return self.status()
 

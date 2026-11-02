@@ -100,3 +100,20 @@ def test_diagnostic_status_exposes_actual_store_without_reading_database(tmp_pat
     assert result['queue_log_exists'] is False
     assert result['queue_log_write_error']=='PermissionError'
     assert client.get('/api/mail/diagnostics/status').status_code==403
+
+
+def test_error_codes_and_cause_are_actionable_without_sensitive_text(tmp_path,monkeypatch):
+    import sqlite3
+    monkeypatch.setenv('FINANCE_RECONCILE_DATA_DIR',str(tmp_path))
+    d._seen.clear()
+    try:
+        try:raise OSError(28,'secret attachment path')
+        except OSError as cause:
+            error=sqlite3.OperationalError('database is locked; secret body')
+            error.sqlite_errorcode=5
+            raise error from cause
+    except Exception as error:d.record('settings_failure',error)
+    row=json.loads(next((tmp_path/'logs').glob('*.jsonl')).read_text().splitlines()[-1])
+    assert row['error_code']==5 and row['failure_reason']=='database_busy'
+    assert row['causes'][0]['error_code']==28
+    assert 'secret' not in json.dumps(row)

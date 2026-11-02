@@ -74,7 +74,7 @@ class MailCleanup:
 
     def preview(self, progress=lambda **x: None):
         candidates = []; protected = 0; errors = 0
-        with self.store.db() as db:
+        with self.store.db(write=False) as db:
             total = db.execute('SELECT COUNT(*) FROM mail').fetchone()[0]
             try:protection=self.review_protection(db)
             except Exception:
@@ -108,7 +108,6 @@ class MailCleanup:
         backup_id = uuid4().hex
         self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         with self.store.db() as db:
-            db.execute('BEGIN IMMEDIATE')
             records = []
             protection=self.review_protection(db)
             for identity in sorted(wanted):
@@ -149,7 +148,6 @@ class MailCleanup:
             raise ValueError('恢复备份无法解密或内容不完整，本批未恢复；请保留备份和原密钥。') from error
         restored = 0; conflicts = 0
         with self.store.db() as db:
-            db.execute('BEGIN IMMEDIATE')
             for record in records:
                 identity = record['mail'][0][0]
                 if db.execute('SELECT 1 FROM mail WHERE id=?', (identity,)).fetchone() or any(db.execute('SELECT 1 FROM mail_identity WHERE fingerprint=?', (r[0],)).fetchone() for r in record['mail_identity']):

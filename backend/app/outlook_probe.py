@@ -134,6 +134,8 @@ class MailStore:
             else:
                 with os.fdopen(descriptor,'wb') as handle: handle.write(Fernet.generate_key())
         self.cipher=Fernet(key.read_bytes())
+        from .mail_database import MailDatabase
+        self.database=MailDatabase(self.path)
         with self.db() as db:
             db.execute('CREATE TABLE IF NOT EXISTS mail (id TEXT PRIMARY KEY, payload TEXT NOT NULL, seen TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS mail_attachment (id TEXT PRIMARY KEY, mail_id TEXT NOT NULL, position INTEGER NOT NULL, metadata TEXT NOT NULL, content BLOB NOT NULL)')
@@ -148,73 +150,98 @@ class MailStore:
         try: self.path.chmod(0o600)
         except OSError: pass
     @contextmanager
-    def db(self):
-        connection=sqlite3.connect(self.path, timeout=10)
-        try:
-            with connection: yield connection
-        finally: connection.close()
+    def db(self,write=True):
+        with self.database.connection(write=write) as connection:
+            yield connection
     def save(self, rows):
         from .mail_assets import save_blob, without_previews
         new=0
-        with self.db() as db:
-            for row in rows:
-                assets=row.get('_attachments', [])
-                row={key:value for key,value in row.items() if key not in ('_attachments','attachment_details')}
-                # Keep copies from distinct PST stores in one matching index. Never
-                # merge using amount/business IDs, or incomplete attachment data.
-                origin=dict(folder=row.get('folder',''),store=row.get('outlook_store',''))
-                for key in ('outlook_entry_id','outlook_store_id'):
-                    if row.get(key):origin[key]=row[key]
-                fingerprint=None
-                if row.get('source')=='outlook' and row.get('internet_message_id') and not row.get('truncated') and not row.get('attachment_warning') and len(assets)==len(row.get('attachments',[])) and all(a.get('raw') for a in assets):
-                    facts=[row.get(k,'') for k in ('internet_message_id','sender','subject','body')]
-                    facts.append([(a['name'],hashlib.sha256(a['raw']).hexdigest()) for a in assets])
-                    fingerprint=hashlib.sha256(json.dumps(facts,ensure_ascii=False).encode()).hexdigest()
-                    match=db.execute('SELECT mail_id FROM mail_identity WHERE fingerprint=?',(fingerprint,)).fetchone()
-                    if match:
-                        canonical=db.execute('SELECT payload FROM mail WHERE id=?',(match[0],)).fetchone()
-                        if canonical:
-                            previous=self.decode(canonical[0])
-                            sources=previous.get('sources',[dict(folder=previous.get('folder',''),store=previous.get('outlook_store',''))])
-                            if origin not in sources: sources.append(origin)
-                            previous['sources']=sources
-                            if match[0]==row['id']:
-                                # Same content after a metadata-only revision: keep
-                                # evidence, but advance this origin's read marker.
-                                for key in ('outlook_read_version','outlook_change_key','read_complete'):
-                                    if key in row:previous[key]=row[key]
-                            db.execute('UPDATE mail SET payload=? WHERE id=?',(self.encode(previous),match[0]))
-                            continue
-                row.setdefault('sources',[origin])
-                existed=db.execute('SELECT 1 FROM mail WHERE id=?',(row['id'],)).fetchone()
-                new+=not bool(existed)
-                db.execute('INSERT INTO mail VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload, seen=excluded.seen',
-                           (row['id'],self.cipher.encrypt(json.dumps(row,ensure_ascii=False).encode()).decode(),datetime.now(timezone.utc).isoformat()))
-                if fingerprint:
-                    db.execute('INSERT OR REPLACE INTO mail_identity VALUES(?,?)',(fingerprint,row['id']))
-                for position, asset in enumerate(assets):
-                    raw=asset.get('raw', b'')
-                    digest=hashlib.sha256(raw).hexdigest()
-                    identity=hashlib.sha256(f"{row['id']}|{position}|{asset['name']}|{digest}".encode()).hexdigest()
-                    metadata={key:value for key,value in asset.items() if key!='raw'}
-                    if raw:metadata=without_previews(metadata)
-                    metadata.update(id=identity, sha256=digest)
-                    previous=[(key,self.decode(value)) for key,value in db.execute('SELECT id,metadata FROM mail_attachment WHERE mail_id=? AND position=?',(row['id'],position))]
-                    existing=next(((key,value) for key,value in previous if value['name']==asset['name']),None)
-                    if existing:
-                        key, old=existing
-                        if not raw or old.get('sha256')==digest: continue
-                        metadata['id']=key
-                        db.execute('UPDATE mail_attachment SET metadata=?,content=? WHERE id=?',
-                                   (self.encode(metadata),save_blob(self,db,key,raw),key))
-                        continue
-                    db.execute('INSERT OR IGNORE INTO mail_attachment VALUES(?,?,?,?,?)',
-                               (identity,row['id'],position,self.encode(metadata),save_blob(self,db,identity,raw)))
+        for original in rows:
+            assets=original.get('_attachments', [])
+            row={key:value for key,value in original.items() if key not in ('_attachments','attachment_details')}
+            origin=dict(folder=row.get('folder',''),store=row.get('outlook_store',''))
+            for key in ('outlook_entry_id','outlook_store_id'):
+                if row.get(key): origin[key]=row[key]
+            prepared_assets=[]
+            encrypted_blobs={}
+            for position,asset in enumerate(assets):
+                raw=asset.get('raw',b'')
+                digest=hashlib.sha256(raw).hexdigest()
+                identity=hashlib.sha256(f"{row['id']}|{position}|{asset['name']}|{digest}".encode()).hexdigest()
+                metadata={key:value for key,value in asset.items() if key!='raw'}
+                if raw: metadata=without_previews(metadata)
+                metadata.update(id=identity,sha256=digest)
+                if raw and digest not in encrypted_blobs: encrypted_blobs[digest]=self.cipher.encrypt(raw)
+                encrypted=encrypted_blobs.get(digest,b'')
+                prepared_assets.append((position,asset,raw,digest,identity,metadata,encrypted))
+            fingerprint=None
+            if row.get('source')=='outlook' and row.get('internet_message_id') and not row.get('truncated') and not row.get('attachment_warning') and len(assets)==len(row.get('attachments',[])) and all(a.get('raw') for a in assets):
+                facts=[row.get(k,'') for k in ('internet_message_id','sender','subject','body')]
+                facts.append([(asset['name'],digest) for _,asset,_,digest,_,_,_ in prepared_assets])
+                fingerprint=hashlib.sha256(json.dumps(facts,ensure_ascii=False).encode()).hexdigest()
+            row.setdefault('sources',[origin])
+            payload=self.encode(row)
+
+            def snapshot(db):
+                match=db.execute('SELECT mail_id FROM mail_identity WHERE fingerprint=?',(fingerprint,)).fetchone() if fingerprint else None
+                canonical=db.execute('SELECT payload FROM mail WHERE id=?',(match[0],)).fetchone() if match else None
+                existing=db.execute('SELECT payload FROM mail WHERE id=?',(row['id'],)).fetchone()
+                attachments=db.execute('SELECT id,position,metadata FROM mail_attachment WHERE mail_id=? ORDER BY id',(row['id'],)).fetchall()
+                blobs={digest:db.execute('SELECT content FROM mail_blob WHERE digest=?',(digest,)).fetchone() for _,_,raw,digest,_,_,_ in prepared_assets if raw}
+                return match,canonical,existing,attachments,blobs
+
+            for preparation_attempt in range(8):
+                with self.db(write=False) as db: before=snapshot(db)
+                match,canonical,existing,attachments,blobs=before
+                merged=None
+                if canonical:
+                    previous=self.decode(canonical[0])
+                    sources=previous.get('sources',[dict(folder=previous.get('folder',''),store=previous.get('outlook_store',''))])
+                    if origin not in sources: sources.append(origin)
+                    previous['sources']=sources
+                    if match[0]==row['id']:
+                        for key in ('outlook_read_version','outlook_change_key','read_complete'):
+                            if key in row: previous[key]=row[key]
+                    merged=self.encode(previous)
+                writes=[]
+                if not canonical:
+                    decoded=[(key,position,self.decode(value)) for key,position,value in attachments]
+                    for position,asset,raw,digest,identity,metadata,encrypted in prepared_assets:
+                        old=next(((key,value) for key,pos,value in decoded if pos==position and value['name']==asset['name']),None)
+                        if old and (not raw or old[1].get('sha256')==digest): continue
+                        metadata=dict(metadata)
+                        if old: identity=old[0];metadata['id']=identity
+                        blob=blobs.get(digest)
+                        if raw and blob and hashlib.sha256(self.cipher.decrypt(blob[0])).hexdigest()!=digest:
+                            raise ValueError('共享原件校验失败，已保留旧原件。')
+                        writes.append((identity,position,self.encode(metadata),raw,
+                                       dict(digest=digest,encrypted=encrypted,existing=blob),bool(old)))
+                with self.db() as db:
+                    # Serialize and validate before any mutation; preparation never
+                    # runs while holding the write gate or SQLite write lock.
+                    if not db.in_transaction: db.execute('BEGIN IMMEDIATE')
+                    if snapshot(db)!=before: continue
+                    if canonical:
+                        db.execute('UPDATE mail SET payload=? WHERE id=?',(merged,match[0]))
+                    else:
+                        db.execute('INSERT INTO mail VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload, seen=excluded.seen',
+                                   (row['id'],payload,datetime.now(timezone.utc).isoformat()))
+                        if fingerprint: db.execute('INSERT OR REPLACE INTO mail_identity VALUES(?,?)',(fingerprint,row['id']))
+                        for identity,position,metadata,raw,prepared,updating in writes:
+                            content=save_blob(self,db,identity,raw,prepared=prepared)
+                            if updating:
+                                db.execute('UPDATE mail_attachment SET metadata=?,content=? WHERE id=?',(metadata,content,identity))
+                            else:
+                                db.execute('INSERT OR IGNORE INTO mail_attachment VALUES(?,?,?,?,?)',(identity,row['id'],position,metadata,content))
+                if not canonical: new+=not bool(existing)
+                break
+            else:
+                raise sqlite3.OperationalError('mail save snapshot changed repeatedly; retry the batch')
         return new
     def encode(self, value): return self.cipher.encrypt(json.dumps(value,ensure_ascii=False).encode()).decode()
     def decode(self, value): return json.loads(self.cipher.decrypt(value.encode()).decode('utf-8'))
     def rows(self, include_body=True):
-        with self.db() as db:
+        with self.db(write=False) as db:
             result=[]
             for value, in db.execute('SELECT payload FROM mail ORDER BY seen DESC, id LIMIT 500'):
                 row=self.decode(value)
@@ -223,11 +250,11 @@ class MailStore:
                 result.append(row)
             return result
     def mail_count(self):
-        with self.db() as db:return db.execute('SELECT COUNT(*) FROM mail').fetchone()[0]
+        with self.db(write=False) as db:return db.execute('SELECT COUNT(*) FROM mail').fetchone()[0]
     def message_page(self,page=1,page_size=50,keyword='',payment_filter='all'):
         keyword=keyword.strip().casefold()
         offset=(page-1)*page_size
-        with self.db() as db:
+        with self.db(write=False) as db:
             total_saved=db.execute('SELECT COUNT(*) FROM mail').fetchone()[0]
             if not keyword and payment_filter=='all':
                 items=db.execute('SELECT payload FROM mail ORDER BY seen DESC,id LIMIT ? OFFSET ?',(page_size,offset)).fetchall()
@@ -259,18 +286,18 @@ class MailStore:
             return dict(rows=rows,total=total,total_saved=total_saved,page=page,page_size=page_size)
     def get(self, identity):
         from .mail_assets import without_previews
-        with self.db() as db:
+        with self.db(write=False) as db:
             row=db.execute('SELECT payload FROM mail WHERE id=?',(identity,)).fetchone()
             if not row: return None
             result=self.decode(row[0])
             result['attachment_details']=[without_previews(self.decode(value)) for value, in db.execute('SELECT metadata FROM mail_attachment WHERE mail_id=? ORDER BY position',(identity,))]
             return result
     def has_mail(self,identity):
-        with self.db() as db:return db.execute('SELECT 1 FROM mail WHERE id=?',(identity,)).fetchone() is not None
+        with self.db(write=False) as db:return db.execute('SELECT 1 FROM mail WHERE id=?',(identity,)).fetchone() is not None
     def mail_unchanged(self, identity, revision):
         if not revision:
             return False
-        with self.db() as db:
+        with self.db(write=False) as db:
             row = db.execute('SELECT payload FROM mail WHERE id=?', (identity,)).fetchone()
         if not row:
             return False
@@ -279,7 +306,7 @@ class MailStore:
                 and previous.get('outlook_change_key') == revision)
 
     def attachment(self, mail_id, identity):
-        with self.db() as db:
+        with self.db(write=False) as db:
             row=db.execute('SELECT a.metadata,a.content,b.content FROM mail_attachment a LEFT JOIN mail_attachment_blob_ref r ON r.attachment_id=a.id LEFT JOIN mail_blob b ON b.digest=r.digest WHERE a.mail_id=? AND a.id=?',(mail_id,identity)).fetchone()
             if row is None:return None
             encrypted=row[2] if row[2] is not None else row[1]
@@ -294,12 +321,13 @@ class MailStore:
                 if available:metadata=without_previews(metadata)
                 db.execute('UPDATE mail_attachment SET metadata=? WHERE id=?',(self.encode(metadata),identity))
     def get_state(self, key, default=None):
-        with self.db() as db:
+        with self.db(write=False) as db:
             row=db.execute('SELECT payload FROM mail_state WHERE key=?',(key,)).fetchone()
             return self.decode(row[0]) if row else default
     def set_state(self, key, value):
+        payload=self.encode(value)
         with self.db() as db:
-            db.execute('INSERT INTO mail_state VALUES(?,?) ON CONFLICT(key) DO UPDATE SET payload=excluded.payload',(key,self.encode(value)))
+            db.execute('INSERT INTO mail_state VALUES(?,?) ON CONFLICT(key) DO UPDATE SET payload=excluded.payload',(key,payload))
     def set_payments(self, identity, payments, summary=None):
         with self.db() as db:
             db.execute('INSERT INTO mail_payments VALUES(?,?) ON CONFLICT(mail_id) DO UPDATE SET payload=excluded.payload',(identity,self.encode(payments)))
@@ -308,7 +336,7 @@ class MailStore:
             else:db.execute('DELETE FROM mail_payment_summary WHERE mail_id=?',(identity,))
     def payment_index(self, identities=None):
         from .mail_matching import effective_payment_date
-        with self.db() as db:
+        with self.db(write=False) as db:
             if identities is not None:
                 if not identities:return {}
                 query='SELECT mail_id,payload FROM mail_payments WHERE mail_id IN ('+','.join('?' for _ in identities)+')'
@@ -316,20 +344,21 @@ class MailStore:
             else:rows=db.execute('SELECT mail_id,payload FROM mail_payments')
             return {key:[effective_payment_date(p) for p in self.decode(payload)] for key,payload in rows}
     def payment_summaries(self,identities=None):
-        with self.db() as db:
+        with self.db(write=False) as db:
             if identities is not None:
                 if not identities:return {}
                 rows=db.execute('SELECT mail_id,payload FROM mail_payment_summary WHERE mail_id IN ('+','.join('?' for _ in identities)+')',identities)
             else:rows=db.execute('SELECT mail_id,payload FROM mail_payment_summary')
             return {key:self.decode(payload) for key,payload in rows}
     def set_payment_summary(self,identity,summary):
-        with self.db() as db:db.execute('INSERT INTO mail_payment_summary VALUES(?,?) ON CONFLICT(mail_id) DO UPDATE SET payload=excluded.payload',(identity,self.encode(summary)))
+        payload=self.encode(summary)
+        with self.db() as db:db.execute('INSERT INTO mail_payment_summary VALUES(?,?) ON CONFLICT(mail_id) DO UPDATE SET payload=excluded.payload',(identity,payload))
     def payment_rows(self):
         from .mail_matching import effective_payment_date
-        with self.db() as db:
+        with self.db(write=False) as db:
             return [effective_payment_date(payment) for payload, in db.execute('SELECT payload FROM mail_payments') for payment in self.decode(payload)]
     def recoverable_mail_ids(self):
-        with self.db() as db:
+        with self.db(write=False) as db:
             unindexed=[key for key, in db.execute('SELECT id FROM mail WHERE id NOT IN (SELECT mail_id FROM mail_payments)')]
             pending=[key for key,payload in db.execute('SELECT mail_id,metadata FROM mail_attachment') if self.decode(payload)['status'] in ('pending','running')]
             return list(dict.fromkeys(unindexed+pending))
