@@ -50,3 +50,20 @@ def test_failed_write_rolls_back_and_releases_gate(tmp_path):
     assert store.get_state('rollback') is None
     store.set_state('after',1)
     assert store.get_state('after')==1
+
+
+def test_wal_initialization_explicitly_closes_connection(tmp_path,monkeypatch):
+    from app.mail_database import MailDatabase
+    original=sqlite3.connect;connections=[]
+    class Tracking(sqlite3.Connection):
+        closed=False
+        def close(self):
+            self.closed=True
+            return super().close()
+    def connect(*args,**kwargs):
+        connection=original(*args,**kwargs,factory=Tracking)
+        connections.append(connection)
+        return connection
+    monkeypatch.setattr('app.mail_database.sqlite3.connect',connect)
+    MailDatabase(tmp_path/'init.sqlite3')
+    assert connections and all(c.closed for c in connections)

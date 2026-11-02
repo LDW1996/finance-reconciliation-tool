@@ -1,5 +1,6 @@
 """Idempotent, bounded migration. No mail, payment, review or original is deleted."""
 from hashlib import sha256
+from contextlib import closing
 import shutil
 import sqlite3
 
@@ -93,7 +94,7 @@ class MailMaintenance:
                 report['compact_note']='去重和预览清理已完成，但数据库整理所需临时空间不足；请释放空间后再次优化。'
             else:
                 progress(processed=report['processed'],total=report['attachments'],phase='整理数据库以释放磁盘空间')
-                with self.store.database.writer, sqlite3.connect(self.store.path,timeout=30,isolation_level=None) as db:
+                with self.store.database.writer, closing(sqlite3.connect(self.store.path,timeout=30,isolation_level=None)) as db:
                     db.execute('PRAGMA wal_checkpoint(TRUNCATE)')
                     db.execute('VACUUM')
                     db.execute('PRAGMA wal_checkpoint(TRUNCATE)')

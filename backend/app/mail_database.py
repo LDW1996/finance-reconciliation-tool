@@ -1,5 +1,5 @@
 """Per-database write gate, short explicit transactions and independent WAL reads."""
-from contextlib import contextmanager
+from contextlib import contextmanager, closing
 from pathlib import Path
 from threading import Lock, RLock
 from time import perf_counter
@@ -16,7 +16,7 @@ class MailDatabase:
         key=str(self.path.resolve())
         with _registry_lock:self.writer=_writers.setdefault(key,RLock())
         with self.writer:
-            with sqlite3.connect(self.path,timeout=10) as db:
+            with closing(sqlite3.connect(self.path,timeout=10)) as db:
                 mode=db.execute('PRAGMA journal_mode=WAL').fetchone()[0]
                 if mode.lower()!='wal':raise RuntimeError('邮件数据库无法启用 WAL，请检查数据目录。')
 

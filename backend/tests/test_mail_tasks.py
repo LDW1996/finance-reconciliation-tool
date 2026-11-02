@@ -68,7 +68,7 @@ def test_manual_read_cancels_prior_poll_callback(tmp_path):
 def test_mail_routes_require_local_header_and_allow_sample_import(tmp_path, monkeypatch):
     from app.main import app
     from app import mail_tasks
-    manager=MailManager(MailStore(tmp_path/'mail.sqlite3'))
+    manager=MailManager(MailStore(tmp_path/'mail.sqlite3'),analyzer=lambda *args: {})
     monkeypatch.setattr(mail_tasks,'_manager',manager)
     client=TestClient(app)
     assert client.get('/api/mail/messages').status_code==403
@@ -84,5 +84,10 @@ def test_mail_routes_require_local_header_and_allow_sample_import(tmp_path, monk
     assert detail['body']=='082600028858'
     assert client.post('/api/mail/import',files={'mail':('sample.eml',raw)},headers={**headers,'Origin':'https://evil.example'}).status_code==403
     assert client.post('/api/mail/scan',json={'store':'','folder':'','days':7,'limit':100},headers=headers).status_code==422
+    # Import queues analysis; Windows scheduling must not race the clear guard.
+    deadline=time.monotonic()+10
+    while manager.status()['analysis_busy'] and time.monotonic()<deadline:
+        time.sleep(.01)
+    assert not manager.status()['analysis_busy'], 'Background analysis did not finish'
     assert client.delete('/api/mail/messages',headers=headers).status_code==200
     assert manager.store.rows()==[]
