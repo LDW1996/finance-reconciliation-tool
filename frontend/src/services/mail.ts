@@ -67,6 +67,7 @@ export interface MailStatus {
 export interface MailFolder { id: string; store: string; label: string; name?:string; parent?:string|null; store_label?:string; selectable?:boolean }
 const client = axios.create({ baseURL: '/api/mail', headers: { 'X-Finance-Local': '1' }, timeout: 30000 })
 export const mailApi = {
+  openOriginal: async (id:string) => (await client.post<{opened:boolean;reason?:string;search?:{subject:string;sender:string;received:string}}>('/messages/'+encodeURIComponent(id)+'/open-original')).data,
   preview: async (mailId:string,attachmentId:string,page:number) => (await client.get<Blob>(`/messages/${encodeURIComponent(mailId)}/attachments/${encodeURIComponent(attachmentId)}/preview/${page}`,{responseType:'blob'})).data,
   status: async () => (await client.get<MailStatus>('/status')).data,
   diagnostics: async (days=3) => (await client.get('/diagnostics/export',{params:{days},responseType:'blob'})).data,

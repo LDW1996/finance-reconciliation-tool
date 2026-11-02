@@ -101,7 +101,8 @@ def records(page):
       if(components.length!==1)throw Error('Unexpected order list');
       return components[0].grid.store.getRange().map(r=>({
         id:r.get('jobOrderId'),mbl:r.get('mblNo'),hbl:r.get('hblNo'),
-        booking:r.get('bkNo'),lock:r.get('lockState')}));
+        booking:r.get('bkNo'),lock:r.get('lockState'),
+        ship:r.get('vessName'),voyage:r.get('voyNo')}));
     }''')
 
 
@@ -113,7 +114,7 @@ def record_step(result, report_path, stage):
 
 def compact_success(result):
     if result.get('status') in ('inspected', 'already_unlocked', 'already_fee_unlocked',
-                                'verified_unlocked', 'verified_fee_unlocked'):
+                                'verified_unlocked', 'verified_fee_unlocked', 'voyage_platform_confirmed'):
         for key in ('steps', 'stage', 'selected_ids', 'matched_count', 'confirmation_text',
                     'action', 'response_error_type', 'response_note', 'error_context', 'request_diagnostics',
                     'verification_attempts', 'query_attempts'):
@@ -200,9 +201,17 @@ def search_bill(page, bill, trace=None):
     return records(page)
 
 
-def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed=False, expected_record_ids=None):
-    from playwright.sync_api import sync_playwright
+def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed=False, expected_record_ids=None, screenshot_policy='errors', record_timings=True, session_pool=None, scope='bill', voyage_target=None):
+    from contextlib import nullcontext
+    from .ilog_session import SessionPool
+    from .ilog_metrics import Timings
 
+    if screenshot_policy not in ('errors', 'all', 'none'):
+        raise ValueError('Unknown screenshot policy')
+    if scope not in ('bill', 'voyage'):
+        raise ValueError('Unknown scope')
+    if execute and scope == 'voyage' and voyage_target is None:
+        raise ValueError('Voyage target required')
     bill = validate_bill(bill).upper()
     if kind not in ('fee', 'order'):
         raise ValueError('Unknown lock kind')
@@ -217,6 +226,7 @@ def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed
     result = {'account': account_id, 'bill': bill, 'kind': kind,
               'mode': 'execute' if execute else 'inspect', 'status': 'needs_verification',
               'submitted': False, 'time': datetime.now(timezone.utc).isoformat()}
+    timings = Timings(result, record_timings)
     journal = None
     page = None
     authenticated = False
@@ -240,25 +250,12 @@ def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed
         if response.status >= 400:
             events.append({**request_info(response.request), 'http_status': response.status})
     def step(stage):
+        timings.stage(stage)
         record_step(result, report_path, stage)
-    with sync_playwright() as p:
-        browser = p.chromium.launch(channel=channel, headless=not headed)
+    with (SessionPool() if session_pool is None else nullcontext(session_pool)) as pool:
         try:
-            page = browser.new_page(viewport={'width':1440,'height':1000})
-            page.set_default_timeout(20000)
             step('login')
-            page.goto(URL)
-            language = page.locator('[name=language]')
-            language.wait_for(state='attached')
-            if not language.input_value():
-                language.locator('..').locator('img').click()
-                with page.expect_navigation():
-                    page.get_by_text('简体中文', exact=True).click()
-            page.locator('[name=adminUserName]').fill(account['username'])
-            page.locator('[name=adminUserPassword]').fill(password)
-            page.locator('[name=status]').uncheck()
-            page.get_by_role('button', name='登陆', exact=True).click()
-            page.get_by_text('委托单列表', exact=True).click()
+            page = pool.page(account_id, account, password, channel, headed)
             authenticated = True
             page.on('request', request_started)
             page.on('requestfinished', request_finished)
@@ -272,6 +269,14 @@ def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed
             if expected_record_ids is not None and (len(found)!=len(expected_record_ids) or
                     {str(r['id']) for r in found}!=set(expected_record_ids)):
                 raise RuntimeError('Verification record mismatch')
+            if scope == 'voyage' and found:
+                result.update(matches=found, matched_count=len(found))
+                if execute:
+                    from .ilog_voyage import execute_voyage
+                    execute_voyage(page, found, result, report_path, directory, step, voyage_target)
+                else:
+                    result['status'] = 'inspected'
+                return result
             if len(found)>1:
                 from .ilog_batch import plan_batch, execute_batch
                 try:
@@ -386,20 +391,18 @@ def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed
                     result.update(failed_stage='verify_order_state', error_type='VerificationIncomplete',
                         failure_cause=f"平台返回未充分确认成功，或复查未达到目标状态（HTTP {result.get('http_status', '未知')}，复查状态 {result.get('after', {}).get('lock', '未取得')}）",
                         next_action='先在 iLog 核对锁状态及订单跟踪，不要直接重复解锁')
-            step('capture_result')
-            screenshot = directory / f'{report_path.stem}.png'
-            page.screenshot(path=str(screenshot), full_page=True)
-            screenshot.chmod(0o600)
-            result['screenshot'] = str(screenshot)
-            step('completed')
         except FileExistsError:
             result['status'] = 'blocked_duplicate'
+            result['failed_stage'] = result.get('stage')
+            result['error_type'] = 'FileExistsError'
             result['reason'] = 'Prior submission exists; inspect before deciding whether any further operation is needed'
         except Exception as error:
             result['failed_stage'] = result.get('stage', 'browser_setup')
             result['error_type'] = type(error).__name__
             result['error_context'] = error_context(error)
             known_errors = {
+                '代表提单对应的船名、航次或业务记录已变化，请重新查询核对': '代表提单对应的船名、航次或业务记录已变化；本次未再次提交，请重新查询核对',
+                '航次核对账号或操作类型不一致': '航次核对账号或操作类型与当前任务不一致，已停止提交',
                 'Visible list mismatch': '页面可见记录数量与查询结果不一致，已停止以避免选错订单',
                 'Selection mismatch': '页面实际选中的记录与目标订单不一致，已停止以避免误操作',
                 'Unexpected confirmation': '平台确认窗口的内容与预期不同，未继续确认',
@@ -430,22 +433,43 @@ def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed
                                      if result['submitted'] else '先检查失败截图、登录状态及订单页面，再决定是否重新发起任务')
             result['reason'] = 'Stopped on page or network error; no automatic retry'
         finally:
-            if result['status'] not in ('inspected','already_unlocked','already_fee_unlocked','verified_unlocked','verified_fee_unlocked'):
+            if result['status'] not in ('inspected','already_unlocked','already_fee_unlocked','verified_unlocked','verified_fee_unlocked','voyage_platform_confirmed'):
                 result['request_diagnostics'] = {'failed': events[-20:], 'pending': list(requests.values())[-20:]}
-            if result['status'] in ('needs_verification', 'blocked_duplicate', 'ambiguous') and authenticated and page:
+            success = result['status'] in ('inspected','already_unlocked','already_fee_unlocked','verified_unlocked','verified_fee_unlocked','voyage_platform_confirmed')
+            if page and (screenshot_policy == 'all' or (screenshot_policy == 'errors' and not success)):
+                timings.stage('screenshot')
                 try:
-                    screenshot = directory / f'{report_path.stem}-failure.png'
+                    screenshot = report_path.with_suffix('.png')
                     page.screenshot(path=str(screenshot), full_page=True, timeout=5000)
                     screenshot.chmod(0o600)
                     result['screenshot'] = str(screenshot)
-                except Exception:
-                    result['screenshot_note'] = 'Failure screenshot unavailable'
+                except Exception as error:
+                    result['screenshot_note'] = {'error_type': type(error).__name__, **error_context(error)}
+            # Take diagnostic screenshots before discarding a possibly dirty page.
+            reusable = success or result['status'] in ('not_found', 'ambiguous')
+            invalidate = not reusable or bool(result.get('error_type') or result.get('failed_stage'))
+            try:
+                if page:
+                    for event, handler in (('request', request_started), ('requestfinished', request_finished),
+                                           ('requestfailed', request_failed), ('response', response_received)):
+                        page.remove_listener(event, handler)
+                    page.unroute('**/order_unlock')
+            except Exception as error:
+                invalidate = True
+                result['session_cleanup_note'] = {'error_type': type(error).__name__, **error_context(error)}
+            finally:
+                if invalidate:
+                    pool.invalidate(account_id)
+            timings.stage('save')
             result['report'] = str(report_path)
             compact_success(result)
             private_report(report_path, result)
             if journal:
                 private_report(journal, result)
-            browser.close()
+            timings.finish()
+            private_report(report_path, result)
+            if journal:
+                private_report(journal, result)
     return result
 
 

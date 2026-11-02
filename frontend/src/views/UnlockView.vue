@@ -1,7 +1,7 @@
 <template>
   <main class="unlock-shell">
     <header class="unlock-heading">
-      <h1>{{ {accounts:'iLog业务账号',history:'解锁历史',retention:'保存设置',unlock:'批量解锁'}[view] }}</h1>
+      <h2>{{ {accounts:'iLog业务账号',history:'解锁历史',retention:'保存设置',unlock:'批量解锁'}[view] }}</h2>
       <el-button v-if="view === 'accounts'" type="primary" :icon="Plus" :disabled="busy" @click="openAccount()">添加账号</el-button>
       <el-button v-if="view === 'history'" :icon="RefreshRight" :loading="historyLoading" @click="loadHistory">刷新</el-button>
       <el-tag v-if="view === 'unlock' && !runtimeAvailable" type="warning">执行环境未就绪</el-tag>
@@ -9,6 +9,9 @@
     </header>
 
     <template v-if="view === 'unlock'">
+      <div class="unlock-layout">
+        <aside class="unlock-inputs unlock-workspace-card">
+      <h3 class="workspace-card-title">选择账号</h3>
       <div class="unlock-account-strip">
         <div class="unlock-account-field">
         <div class="unlock-account-label"><span><el-icon><User /></el-icon>首选账号</span></div>
@@ -25,11 +28,10 @@
         <span class="account-caption" :class="{ 'account-warning': fallbackEnabled && !fallbackCandidates.length }">{{ !fallbackEnabled ? '未启用，仅使用首选账号' : fallbackCandidates.length ? '仅首选账号查无订单时使用' : '没有可用备用账号，仅使用首选账号' }}</span>
         </div>
       </div>
-      <div class="unlock-layout">
-        <aside class="unlock-inputs">
-          <section v-for="kind in kinds" :key="kind.key" class="unlock-input-panel">
+      <h3 class="workspace-card-title">解锁范围</h3><div class="scope-options"><label v-for="item in [{value:'bill',label:'按提单'},{value:'voyage',label:'按航次'}]" :key="item.value" :class="{selected:scope===item.value}"><input v-model="scope" type="radio" :value="item.value" :disabled="busy"/><span><strong>{{ item.label }}</strong><small>{{ item.value === 'bill' ? '按输入提单逐一处理' : '输入代表提单，解锁其所在整个航次' }}</small></span></label></div>
+          <div class="bill-input-grid"><section v-for="kind in kinds" :key="kind.key" class="unlock-input-panel">
             <div class="unlock-section-heading"><h2><el-icon><Unlock /></el-icon>{{ kind.title }}</h2><span class="count-pill">{{ parsed[kind.key].length }} 条</span></div>
-            <label :for="`bills-${kind.key}`">每行一个提单号，也支持逗号、空格分隔</label>
+            <label :for="`bills-${kind.key}`">{{ scope === 'voyage' ? '每行输入一个航次的代表提单，支持批量处理' : '每行一个提单号，也支持逗号、空格分隔' }}</label>
             <textarea :id="`bills-${kind.key}`" v-model="input[kind.key]" :disabled="busy" spellcheck="false" :placeholder="kind.placeholder" />
             <div class="input-caption"><span>{{ duplicateCount(kind.key) ? `已合并 ${duplicateCount(kind.key)} 条重复单号` : '自动去空行、合并同类重复单号' }}</span><button :disabled="busy || !input[kind.key]" @click="input[kind.key] = ''">清空</button></div>
             <div v-if="duplicates[kind.key].length" class="duplicate-bills" role="status">
@@ -38,18 +40,18 @@
             </div>
             <el-text v-if="inspections[kind.key].some(r => r.status === 'invalid')" type="danger">有格式异常的单号，请在核对清单中查看并返回修改。</el-text>
           </section>
-          <div class="unlock-input-actions"><el-button class="unlock-start" size="large" type="primary" :disabled="busy || resetting || !taskSyncReady || !reviewRows.length || !selectedAccount" :icon="VideoPlay" @click="openReview">校验单号并核对清单</el-button></div>
+          </div><div class="execution-options"><label>截图方式 <el-radio-group v-model="screenshotPolicy" :disabled="busy" aria-label="截图方式" size="small"><el-radio-button value="errors">仅异常保存</el-radio-button><el-radio-button value="all">每笔保存</el-radio-button><el-radio-button value="none">不保存</el-radio-button></el-radio-group></label><label>分阶段耗时 <el-switch v-model="recordTimings" :disabled="busy"/></label></div><div class="unlock-input-actions"><el-button class="unlock-start" size="large" type="primary" :disabled="busy || resetting || !taskSyncReady || !reviewRows.length || !selectedAccount" :icon="VideoPlay" :loading="previewLoading" @click="scope === 'voyage' ? queryVoyages() : openReview()">{{ scope === 'voyage' ? '查询航次并核对' : '校验单号并核对清单' }}</el-button></div>
           <p v-if="!runtimeAvailable" class="demo-note">{{ runtimeMessage }}</p>
         </aside>
 
-        <section class="unlock-execution">
-          <section class="unlock-progress-panel">
+        <section class="unlock-execution"><section v-if="scope==='voyage'" class="voyage-review" aria-live="polite"><h3>航次核对</h3><el-alert title="本次操作影响整个航次，不仅是输入提单。" type="warning" :closable="false"/><p v-if="!preview">输入代表提单并查询后核对实际账号、船名航次及类型。</p><template v-else><el-alert v-for="(issue,i) in preview.issues" :key="i" :title="issue.bill+' · '+issue.kind+'：'+issue.message" type="error" :closable="false"/><el-select v-model="groupKey" aria-label="选择航次分组"><el-option v-for="g in preview.groups" :key="g.key" :value="g.key" :label="g.account_name+' · '+g.ship+'/'+g.voyage+' · '+(g.kind==='fee'?'费用小锁':'订单大锁')"/></el-select><template v-if="group"><dl><dt>输入代表提单</dt><dd>{{ group.bills?.join('、') || group.bill }}</dd><dt>实际账号</dt><dd>{{ group.account_name }}</dd><dt>船名 / 航次</dt><dd>{{ group.ship || '—' }} / {{ group.voyage || '—' }}</dd><dt>类型</dt><dd>{{ group.kind==='fee'?'费用小锁':'订单大锁' }}</dd><dt>查询匹配条数</dt><dd>{{ group.records.length }} 条（非全航次数）</dd></dl><details><summary>查看查询匹配明细</summary><el-table :data="group.records" max-height="260"><el-table-column v-for="c in ['id','booking','mbl','hbl','lock','ship','voyage']" :key="c" :prop="c" :label="({id:'记录ID',booking:'业务号',mbl:'主提单',hbl:'分提单',lock:'锁状态',ship:'船名',voyage:'航次'} as Record<string,string>)[c]" min-width="120"/></el-table></details></template><p>实际影响数量尚未确定，请核对全部分组。</p><p v-if="expired">预览已过期，请重新查询。</p><el-checkbox v-model="voyageAcknowledged" :disabled="!preview.can_execute || !!preview.issues.length || expired">已核对全部分组，确认按航次执行</el-checkbox></template><el-button type="primary" :loading="submitting" :disabled="!canExecuteVoyage || busy || !taskSyncReady || !runtimeAvailable" @click="start">确认按航次解锁</el-button></section>
+          <section v-if="scope === 'bill' || rows.length" class="unlock-progress-panel">
             <div class="unlock-section-heading"><h2>执行进度</h2><div v-if="taskState === 'running' || taskState === 'paused'"><el-button :disabled="controlling" :icon="paused ? VideoPlay : VideoPause" @click="controlTask(paused ? 'resume' : 'pause')">{{ paused ? '继续剩余项' : '暂停后续项' }}</el-button><el-button :disabled="controlling" @click="cancelRemaining">取消剩余项</el-button></div><el-tag v-else effect="plain" :type="attentionCount ? 'warning' : rows.length ? 'success' : 'info'">{{ rows.length ? '任务已结束' : '等待开始' }}</el-tag></div>
             <div class="progress-number">{{ done }}<span>/ {{ rows.length || total }}</span><small>{{ paused ? '已暂停后续项' : taskState === 'running' ? '真实处理中' : rows.length ? '条已处理' : '条待处理' }}</small></div>
             <el-progress :percentage="percentage" :show-text="false" :stroke-width="12" color="var(--accent)" />
             <div class="progress-description"><span>{{ currentRow ? `正在处理 ${currentRow.bill}` : paused ? '已暂停，继续将跳过待核实项。' : rows.length ? `任务账号：${taskAccountName}` : '等待提交任务' }}</span><span v-if="pollError" class="progress-tip" role="alert"><el-icon><InfoFilled /></el-icon>{{ pollError }}</span></div>
           </section>
-          <section class="unlock-results-panel">
+          <section v-if="scope === 'bill' || rows.length" class="unlock-results-panel">
             <div class="unlock-section-heading"><h2>执行结果</h2><el-select v-model="filter" aria-label="筛选结果" style="width:150px" size="small"><el-option label="全部结果" value="all"/><el-option label="核实通过" value="success"/><el-option label="待人工处理" value="attention"/><el-option label="等待处理" value="waiting"/><el-option label="已取消" value="cancelled"/></el-select></div>
             <el-alert v-if="taskState === 'completed' && attentionCount" class="unlock-attention-summary" type="warning" :closable="false" :title="`本批已结束，${attentionCount} 项需人工核实，未自动重提解锁。`"><template #default><el-button link type="primary" @click="filter = 'attention'">只看待处理项</el-button></template></el-alert>
             <div v-if="!rows.length" class="unlock-empty"><el-icon><List /></el-icon><h3>逐笔结果将在这里显示</h3><p>平台响应、复查状态与异常原因都会保留。</p></div>
@@ -62,7 +64,7 @@
               <el-table-column label="结果" min-width="125"><template #default="{ row }"><el-tag :type="statusStyle(row.status)" size="small" round>{{ statusText(row.status,row.detail) }}</el-tag></template></el-table-column>
               <el-table-column label="平台响应" min-width="120"><template #default="{ row }">{{ row.detail?.platform_success === true ? '明确成功' : row.detail?.platform_success === false ? '明确拒绝' : '—' }}</template></el-table-column>
               <el-table-column label="锁状态复查" min-width="120"><template #default="{ row }">{{ row.detail?.before?.lock || '—' }} → {{ row.detail?.after?.lock || '—' }}</template></el-table-column>
-              <el-table-column prop="message" label="说明" min-width="180"/>
+              <el-table-column label="分阶段耗时" min-width="160"><template #default="{row}"><div v-for="(timing,i) in row.detail?.detail?.timings || row.detail?.timings || []" :key="i">{{ timing.stage }}：{{ timing.seconds }} 秒</div><span v-if="!(row.detail?.detail?.timings || row.detail?.timings)?.length">—</span></template></el-table-column><el-table-column label="说明" min-width="180"><template #default="{row}">{{ row.detail?.status === 'voyage_platform_confirmed' ? cleanMessage(row.detail?.reason || '航次平台确认，全航次影响数量未提供') : row.message }}</template></el-table-column>
               <el-table-column prop="time" label="处理时间" width="100"/>
               <el-table-column label="凭证" width="110"><template #default="{ row }"><el-link v-if="row.detail?.screenshot" :href="`/api/ilog/tasks/${encodeURIComponent(taskId)}/evidence/${row.evidenceIndex}`" target="_blank" rel="noopener" type="primary">查看截图</el-link><span v-else>{{ row.detail?.screenshotExpired ? '已过期清理' : '—' }}</span></template></el-table-column>
             </el-table>
@@ -101,7 +103,7 @@
         <el-table-column label="类型" width="100"><template #default="{ row }">{{ row.kind==='fee' ? '小锁' : '大锁' }}</template></el-table-column>
         <el-table-column prop="actualAccountName" label="实际账号" min-width="170"/>
         <el-table-column label="结果" min-width="130"><template #default="{ row }">{{ statusText(row.status,row.detail) }}</template></el-table-column>
-        <el-table-column label="说明" min-width="240"><template #default="{ row }">{{ cleanMessage(row.message) }}</template></el-table-column>
+        <el-table-column label="说明" min-width="240"><template #default="{ row }">{{ cleanMessage(row.detail?.status === 'voyage_platform_confirmed' ? row.detail?.reason || '航次平台确认，全航次影响数量未提供' : row.message) }}</template></el-table-column>
         <el-table-column label="截图" width="110"><template #default="{ row,$index }"><el-link v-if="row.detail?.screenshot" :href="`/api/ilog/tasks/${historyTask?.id}/evidence/${$index}`" target="_blank" rel="noopener" type="primary">查看截图</el-link><span v-else>{{ row.detail?.screenshotExpired ? '已过期清理' : '无截图' }}</span></template></el-table-column>
       </el-table>
       <template #footer><el-button :icon="Download" :disabled="!historyTask" @click="exportResults(historyTask || undefined)">导出本任务</el-button><el-button @click="historyDetailOpen=false">关闭</el-button></template>
@@ -161,7 +163,7 @@ import { downloadBlob } from '../services/api'
 import { inspectBills, duplicateBills } from '../services/billValidation.mjs'
 type Kind = 'fee' | 'order'
 type Status = 'waiting' | 'processing' | 'success' | 'attention' | 'cancelled'
-type Detail = { status?: string; platform_success?: boolean; before?: {lock?: string;booking?:string}; after?: {lock?: string}; screenshot?: string; screenshotExpired?: boolean }
+type Detail = { reason?:string; detail?:{timings?:{stage:string;seconds:number}[]}; timings?:{stage:string;seconds:number}[]; status?: string; platform_success?: boolean; before?: {lock?: string;booking?:string}; after?: {lock?: string}; screenshot?: string; screenshotExpired?: boolean }
 type Attempt = { account: string; accountName: string; status: string }
 type Row = { bill: string; businessNo?:string; kind: Kind; status: Status; message: string; time: string; detail?: Detail; evidenceIndex?: number; actualAccountName?: string; attempts?: Attempt[] }
 type Task = { id: string; account: string; accountName: string; fallbackAccount?: string; fallbackAccountName?: string; state: 'running' | 'paused' | 'completed'; rows: Row[]; createdAt?: string; completedAt?: string }
@@ -252,9 +254,26 @@ const fallbackAccount = computed(() => fallbackCandidates.value.find(a => a.id =
 const selectedFallbackId = computed({ get: () => fallbackAccount.value?.id || '', set: (value: string) => { fallbackId.value = value } })
 const input = ref<Record<Kind, string>>({ fee: '', order: '' })
 const kinds: { key: Kind; title: string; placeholder: string }[] = [
-  { key: 'fee', title: '费用解锁（小锁）', placeholder: '粘贴需要费用解锁的提单号\n例如：SITGSHBAZA00451' },
-  { key: 'order', title: '订单解锁（大锁）', placeholder: '粘贴需要订单解锁的提单号\n例如：SITGSHBAZA00461' },
+  { key: 'fee', title: '费用解锁（小锁）', placeholder: '粘贴需要费用解锁的提单号' },
+  { key: 'order', title: '订单解锁（大锁）', placeholder: '粘贴需要订单解锁的提单号' },
 ]
+type VoyageGroup={key:string;account_id:string;account_name:string;bill:string;bills:string[];kind:Kind;ship:string;voyage:string;ship_id:string;voyage_id:string;records:{id:string;booking:string;mbl:string;hbl:string;lock:string;ship:string;voyage:string}[];affected_count:null}
+type Preview={token:string;expires_at:string;groups:VoyageGroup[];issues:{bill:string;kind:Kind;message:string}[];can_execute:boolean}
+const scope=ref<'bill'|'voyage'>('bill'),screenshotPolicy=ref<'errors'|'all'|'none'>('errors'),recordTimings=ref(true)
+const preview=ref<Preview|null>(null),previewLoading=ref(false),voyageAcknowledged=ref(false),groupKey=ref(''),previewSignature=ref('')
+const signature=computed(()=>JSON.stringify([scope.value,accountId.value,fallbackEnabled.value,fallbackAccount.value?.id,input.value]))
+const group=computed(()=>preview.value?.groups.find(g=>g.key===groupKey.value))
+const now=ref(Date.now()),expiryTimer=setInterval(()=>{now.value=Date.now()},1000)
+const expired=computed(()=>!preview.value || !Number.isFinite(Date.parse(preview.value.expires_at)) || Date.parse(preview.value.expires_at)<=now.value)
+const canExecuteVoyage=computed(()=>!!preview.value?.token && preview.value.can_execute && !!preview.value.groups.length && !preview.value.issues.length && !expired.value && signature.value===previewSignature.value && voyageAcknowledged.value)
+watch(signature,()=>{preview.value=null;previewSignature.value='';groupKey.value='';voyageAcknowledged.value=false;reviewOpen.value=false;reviewAcknowledged.value=false},{flush:'sync'})
+async function queryVoyages(){
+ if(busy.value || previewLoading.value || invalidCount.value || !total.value || total.value>2000 || !selectedAccount.value)return
+ const requested=signature.value;preview.value=null;voyageAcknowledged.value=false;previewLoading.value=true
+ try{const response=await axios.post<Preview>('/api/ilog/voyages/preview',{account_id:accountId.value,...(fallbackEnabled.value && fallbackAccount.value?{fallback_account_id:fallbackAccount.value.id}:{}),fee_bills:parsed.value.fee,order_bills:parsed.value.order},{headers:accountHeaders});if(disposed || requested!==signature.value)return;preview.value=response.data;previewSignature.value=requested;groupKey.value=response.data.groups[0]?.key || '';now.value=Date.now()}
+ catch{if(requested===signature.value)ElMessage.error('航次查询失败，请重新查询后核对')}
+ finally{previewLoading.value=false}
+}
 const inspections = computed(() => ({ fee: inspectBills(input.value.fee), order: inspectBills(input.value.order) }))
 const duplicates = computed(() => ({ fee: duplicateBills(inspections.value.fee), order: duplicateBills(inspections.value.order) }))
 const parsed = computed(() => ({ fee: inspections.value.fee.filter(r => r.status === 'valid').map(r => r.bill), order: inspections.value.order.filter(r => r.status === 'valid').map(r => r.bill) }))
@@ -342,9 +361,9 @@ async function newTask() {
   } finally { resetting.value = false }
 }
 async function start() {
-  if (busy.value || resetting.value || !taskSyncReady.value || !total.value || !selectedAccount.value || invalidCount.value || !reviewAcknowledged.value) return
+  if (busy.value || resetting.value || !taskSyncReady.value || !total.value || !selectedAccount.value || invalidCount.value || (scope.value==='voyage' ? !canExecuteVoyage.value || Date.parse(preview.value!.expires_at)<=Date.now() : !reviewOpen.value || !reviewAcknowledged.value)) return
   if (!runtimeAvailable.value || total.value > 2000) return
-  const payload = { account_id: accountId.value, fallback_account_id: fallbackEnabled.value ? fallbackAccount.value?.id || null : null, fee: parsed.value.fee, order: parsed.value.order, confirmed: true }
+  const payload = { account_id: accountId.value, fallback_account_id: fallbackEnabled.value ? fallbackAccount.value?.id || null : null, fee: parsed.value.fee, order: parsed.value.order, confirmed: true, scope:scope.value, ...(scope.value==='voyage'?{preview_token:preview.value!.token}:{}), screenshot_policy:screenshotPolicy.value, record_timings:recordTimings.value }
   const signature = JSON.stringify(payload)
   submitting.value = true
   try {
@@ -372,12 +391,12 @@ async function cancelRemaining() {
   try { await ElMessageBox.confirm('只取消尚未开始的单号；当前单会完成并保留结果。','取消剩余项',{type:'warning'}); await controlTask('cancel') } catch { /* User cancelled. */ }
 }
 const rowClassName = ({ row }: { row: Row }) => row.status === 'processing' ? 'active-unlock-row' : ''
-const statusText = (s: Status, detail?: Detail) => s === 'success' ? ({ verified_fee_unlocked:'小锁已解', verified_unlocked:'复查无锁', already_unlocked:'原本已无锁', already_fee_unlocked:'小锁原本已解' }[detail?.status || ''] || '核实通过') : ({ waiting: '等待处理', processing: '真实处理中', attention: '待人工核实', cancelled: '已取消' }[s])
+const statusText = (s: Status, detail?: Detail) => detail?.status === 'voyage_platform_confirmed' ? '航次平台确认' : s === 'success' ? ({ verified_fee_unlocked:'小锁已解', verified_unlocked:'复查无锁', already_unlocked:'原本已无锁', already_fee_unlocked:'小锁原本已解' }[detail?.status || ''] || '核实通过') : ({ waiting: '等待处理', processing: '真实处理中', attention: '待人工核实', cancelled: '已取消' }[s])
 const statusStyle = (s: Status) => ({ waiting: 'info', processing: 'primary', success: 'success', attention: 'warning', cancelled:'info' } as const)[s]
 const attemptText = (status: string) => ({ not_found:'未找到', ambiguous:'多条匹配', verified_unlocked:'成功并复查无锁', verified_fee_unlocked:'小锁已核实解开', already_unlocked:'原本已无锁', already_fee_unlocked:'小锁原本已解', rejected:'平台拒绝', blocked_duplicate:'已阻止重复提交', platform_confirmed:'平台成功，仍需核实', needs_verification:'待核实' }[status] || '待核实')
 function exportResults(task?:Task) {
   const cell = (v: string) => `"${(/^[=+@\-\t\r]/.test(v) ? "'" + v : v).replace(/"/g, '""')}"`
-  const content = [['主账号', '兜底账号', '实际使用账号', '查询路径', '提单号', '业务号', '类型', '结果', '平台响应', '原锁状态', '复查锁状态', '说明', '时间'], ...(task?.rows || rows.value).map(r => [task?.accountName || taskAccountName.value, task ? task.fallbackAccountName || '' : taskFallbackName.value, r.actualAccountName || '', (r.attempts || []).map(a => `${a.accountName}: ${attemptText(a.status)}`).join(' → '), r.bill, r.businessNo || r.detail?.before?.booking || '', r.kind === 'fee' ? '费用解锁' : '订单解锁', statusText(r.status,r.detail), r.detail?.platform_success === true ? '成功' : r.detail?.platform_success === false ? '拒绝' : '未确认', r.detail?.before?.lock || '', r.detail?.after?.lock || '', cleanMessage(r.message), r.time])].map(r => r.map(cell).join(',')).join('\r\n')
+  const content = [['主账号', '兜底账号', '实际使用账号', '查询路径', '提单号', '业务号', '类型', '结果', '平台响应', '原锁状态', '复查锁状态', '说明', '时间'], ...(task?.rows || rows.value).map(r => [task?.accountName || taskAccountName.value, task ? task.fallbackAccountName || '' : taskFallbackName.value, r.actualAccountName || '', (r.attempts || []).map(a => `${a.accountName}: ${attemptText(a.status)}`).join(' → '), r.bill, r.businessNo || r.detail?.before?.booking || '', r.kind === 'fee' ? '费用解锁' : '订单解锁', statusText(r.status,r.detail), r.detail?.platform_success === true ? '成功' : r.detail?.platform_success === false ? '拒绝' : '未确认', r.detail?.before?.lock || '', r.detail?.after?.lock || '', cleanMessage(r.detail?.status === 'voyage_platform_confirmed' ? r.detail.reason || '航次平台确认，全航次影响数量未提供' : r.message), r.time])].map(r => r.map(cell).join(',')).join('\r\n')
   downloadBlob(new Blob(['\uFEFF', content], { type: 'text/csv;charset=utf-8' }), 'iLog解锁-真实结果.csv')
 }
 const taskAccountName = ref('')
@@ -418,5 +437,14 @@ async function removeAccount(account: Account) {
     ElMessage.success('账号已删除')
   } catch { ElMessage.error('删除失败，请检查本地服务后重试。') }
 }
-onBeforeUnmount(() => { disposed = true; clearTimeout(timer) })
+onBeforeUnmount(() => { disposed = true; clearTimeout(timer);clearInterval(expiryTimer) })
 </script>
+
+<style scoped>
+.scope-options,.execution-options,.bill-input-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-bottom:16px}.scope-options label{display:flex;align-items:center;gap:12px;padding:16px;border:1px solid var(--el-border-color);border-radius:8px;cursor:pointer}.scope-options .selected{border-color:var(--accent);background:var(--el-fill-color-light)}.execution-options label{display:flex;align-items:center;gap:12px}.execution-options .el-select{width:140px}.unlock-layout{grid-template-columns:minmax(0,1.2fr) minmax(0,1fr)}.unlock-inputs,.unlock-execution,.unlock-input-panel{min-width:0}.bill-input-grid textarea{min-height:240px}.voyage-review{padding:20px;border:1px solid var(--el-border-color);border-radius:8px;margin-bottom:16px;background:var(--el-bg-color)}.voyage-review dl{display:grid;grid-template-columns:110px minmax(0,1fr);gap:12px}.voyage-review dd{margin:0;overflow-wrap:anywhere}.voyage-review p,.voyage-review dt{color:var(--ink-muted);font-size:13px}.voyage-review summary{padding:12px 0;cursor:pointer;color:var(--accent)}.voyage-review .el-select{width:100%}.voyage-review .el-checkbox{white-space:normal;height:auto;margin-bottom:16px}@media(max-width:1100px){.unlock-layout{grid-template-columns:minmax(0,1fr)}}@media(max-width:600px){.scope-options,.execution-options,.bill-input-grid{grid-template-columns:minmax(0,1fr)}}
+
+.unlock-workspace-card{display:block;background:var(--el-bg-color);border:1px solid var(--el-border-color-lighter);border-radius:10px;padding:22px;align-self:start}.workspace-card-title{font-size:16px;margin:0 0 16px}.unlock-workspace-card .unlock-account-strip{padding:0;border:0;background:transparent;box-shadow:none;gap:20px;margin-bottom:24px}.unlock-workspace-card .unlock-input-panel{padding:16px}.unlock-workspace-card .unlock-section-heading h2{font-size:16px}.unlock-workspace-card .bill-input-grid textarea{min-height:170px}.unlock-workspace-card .execution-options{padding-top:18px;border-top:1px solid var(--el-border-color-lighter)}.unlock-workspace-card .scope-options{margin-bottom:20px}.unlock-execution .voyage-review{padding:22px}.unlock-input-actions .el-button{width:100%}.unlock-workspace-card .unlock-input-actions{padding:0;margin-top:18px}.unlock-workspace-card .bill-input-grid{margin-bottom:20px}@media(max-width:600px){.unlock-workspace-card{padding:16px}}
+.scope-options strong{font-size:14px;font-weight:600}.scope-options small{display:block;margin-top:5px;font-size:12px;line-height:1.5;color:var(--ink-muted)}
+.execution-options{grid-template-columns:minmax(0,1.6fr) minmax(0,1fr)}.execution-options>label{flex-wrap:wrap;gap:8px;font-size:13px}@media(max-width:600px){.execution-options{grid-template-columns:1fr}}
+.voyage-review h3{margin:0 0 16px;font-size:18px}.voyage-review>.el-alert{margin-bottom:18px}.voyage-review>.el-button{width:100%;margin-top:18px}
+</style>

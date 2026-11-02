@@ -3,6 +3,10 @@
   color: #1d1d1f;
   background: #f5f5f7;
   font-synthesis: none;
+  --secondary-nav-font: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+  --secondary-nav-size: 15px;
+  --secondary-nav-weight: 600;
+  --secondary-nav-icon-size: 18px;
   --el-color-primary: #0066cc;
   --el-color-primary-light-3: #4d94db;
   --el-color-primary-light-5: #80b3e6;
@@ -56,9 +60,9 @@ h2 { font-size: 18px; line-height: 1.5; }
 h3 { font-size: 14px; line-height: 1.5; }
 .function-nav { margin-bottom: 28px; border-bottom: 1px solid var(--border); }
 .function-nav .el-menu { --el-menu-horizontal-height: 52px; border: 0; background: transparent; gap: 28px; }
-.function-nav .el-menu-item { padding: 0 4px; font-weight: 600; font-size: 15px; }
+.function-nav .el-menu-item { padding: 0 4px; font-family: var(--secondary-nav-font); font-weight: var(--secondary-nav-weight); font-size: var(--secondary-nav-size); }
 .function-nav .el-menu-item:hover, .function-nav .el-menu-item:focus { background: transparent; }
-.function-nav .el-menu-item .el-icon { font-size: 18px; margin-right: 8px; }
+.function-nav .el-menu-item .el-icon { font-size: var(--secondary-nav-icon-size); margin-right: 8px; }
 .layout-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 32px; align-items: start; }
 .work-column, .panel { min-width: 0; }
 .upload-panel { padding: 0; }
@@ -292,3 +296,46 @@ dd { margin: 8px 0 0; font-weight: 600; line-height: 1.6; overflow-wrap: anywher
 .retention-module .retention-cleanup h2{margin:0}
 .retention-module .management-footer{justify-content:flex-end}
 @media(max-width:900px){.retention-module .retention-fields{grid-template-columns:1fr}.retention-module .retention-cleanup{align-items:flex-start;flex-direction:column}}
+
+/* Shared secondary navigation for all platform modules. */
+.module-tabs .module-tab-label,.module-tabs.ilog-tabs button{display:inline-flex;align-items:center;gap:8px}
+.module-tabs .module-tab-label>.el-icon,.module-tabs.ilog-tabs button>.el-icon{font-size:var(--secondary-nav-icon-size);flex-shrink:0}
+.module-tabs.el-tabs>.el-tabs__header{margin:0 0 24px}
+.module-tabs.el-tabs>.el-tabs__header .el-tabs__item{height:52px;font-family:var(--secondary-nav-font);font-size:var(--secondary-nav-size);font-weight:var(--secondary-nav-weight);padding:0 18px;color:var(--ink,#1d2633)}
+.module-tabs.el-tabs>.el-tabs__header .el-tabs__item.is-active{color:var(--accent,#0066cc)}
+.module-tabs.el-tabs>.el-tabs__header .el-tabs__active-bar{height:2px;background:var(--accent,#0066cc)}
+.module-tabs.ilog-tabs{gap:28px;margin-bottom:24px}
+.module-tabs.ilog-tabs button{height:52px;padding:0 4px;border-bottom-width:2px;font-family:var(--secondary-nav-font);font-size:var(--secondary-nav-size);font-weight:var(--secondary-nav-weight)}
+.module-tabs.ilog-tabs button.selected{color:var(--accent,#0066cc)}
+.module-tabs button:focus-visible{outline:2px solid var(--accent,#0066cc);outline-offset:-2px}
+@media(max-width:680px){.module-tabs.ilog-tabs{gap:18px}.module-tabs.el-tabs>.el-tabs__header .el-tabs__item{padding:0 12px}}
+
+/* Product audit: shared page rhythm, dialog structure and narrow-screen access. */
+.app-shell{padding:32px 32px 40px}
+.page-header{min-height:42px;padding:0;margin-bottom:24px}
+.mail-page .mail-heading{min-height:42px;margin-bottom:24px}
+.module-tabs.el-tabs>.el-tabs__header .el-tabs__nav{display:flex;gap:28px}
+.module-tabs.el-tabs>.el-tabs__header .el-tabs__item{padding:0 4px!important}
+.el-dialog{max-height:calc(100dvh - 48px);display:flex;flex-direction:column;overflow:hidden;border-radius:10px;padding:0;margin-bottom:24px}
+.el-dialog__header{flex:none;margin:0;padding:18px 48px 18px 24px;border-bottom:1px solid var(--border)}
+.el-dialog__title{font-size:18px;line-height:1.5;font-weight:600}
+.el-dialog__body{flex:1;min-height:0;overflow:auto;padding:20px 24px;overflow-wrap:anywhere}
+.el-dialog__footer{flex:none;padding:16px 24px;border-top:1px solid var(--border)}
+.el-message-box{max-width:calc(100vw - 32px);border-radius:10px}
+.el-message-box__content{line-height:1.7;overflow-wrap:anywhere;max-height:60dvh;overflow:auto}
+.el-dialog input[type=file]{max-width:100%;font:inherit;color:var(--ink-muted)}
+.el-dialog input[type=file]::file-selector-button{border:1px solid var(--el-border-color);border-radius:6px;background:white;padding:8px 12px;margin-right:10px;color:var(--el-text-color-regular);cursor:pointer;font:inherit}
+.ilog-workspace .unlock-heading h2{font-size:20px;line-height:1.5}
+.management-section{background:white;border:1px solid var(--border);border-radius:8px;overflow:hidden;padding:0 16px}
+.management-section .el-table .el-table__cell{padding-top:14px;padding-bottom:14px}
+.management-footer{padding:16px 0}
+button:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+@media(max-width:720px){
+.app-shell{padding:24px 16px 32px}.page-header{margin-bottom:24px;padding:0}
+.module-tabs.ilog-tabs{gap:16px}.module-tabs.ilog-tabs button{gap:8px;padding:0}
+.module-tabs.el-tabs>.el-tabs__header .el-tabs__nav{gap:18px}
+.el-dialog{max-height:calc(100dvh - 32px);margin-top:16px!important;margin-bottom:16px}
+.el-dialog__header{padding:16px 42px 16px 16px}.el-dialog__body{padding:16px}.el-dialog__footer{padding:12px 16px}.el-dialog__footer .el-button{max-width:100%;white-space:normal;height:auto;min-height:36px}
+.management-section{padding:0 8px}
+}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;transition-duration:.01ms!important}}

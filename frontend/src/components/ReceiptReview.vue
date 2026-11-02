@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { mailApi } from '../services/mail'
 import { Close } from '@element-plus/icons-vue'
 import type { MatchingRow, MatchingCandidate, ReviewState } from '../services/mailMatching'
 
@@ -7,6 +9,17 @@ const props = defineProps<{ row: MatchingRow; busy: boolean; stale: boolean; exp
 const emit = defineEmits<{
   close: []; expand: []; review: [state: ReviewState, candidate?: MatchingCandidate]; 'open-mail': [mailId: string]
 }>()
+const openingOriginal=ref(false)
+async function openOriginal(){
+  if(!chosen.value?.mail_id || openingOriginal.value)return
+  openingOriginal.value=true
+  try{
+    const result=await mailApi.openOriginal(chosen.value.mail_id)
+    if(result.opened)ElMessage.success('已请求 Outlook 打开原邮件')
+    else await ElMessageBox.alert([result.reason,result.search?.subject,result.search?.sender,result.search?.received].filter(Boolean).join('\n'),'原邮件定位提示',{confirmButtonText:'知道了',customStyle:{whiteSpace:'pre-wrap'}})
+  }catch(error){if(error!=='cancel' && error!=='close')ElMessage.error('无法打开 Outlook 原邮件，请检查本地服务。')}
+  finally{openingOriginal.value=false}
+}
 const chosenId = ref('')
 watch(() => [props.row.receipt.id, props.row.candidates.map(item => item.payment_id)] as const,
   ([id, ids], previous) => {
@@ -141,7 +154,7 @@ function review(state: ReviewState) {
     </div>
 
     <footer class="review-footer">
-      <div class="footer-actions"><el-button :disabled="!chosen?.mail_id" @click="chosen?.mail_id && emit('open-mail', chosen.mail_id)">查看原邮件</el-button><el-button type="primary" :disabled="busy || stale || !chosen?.payment_id || confirmed" :loading="busy" @click="review('confirmed')">确认关联</el-button><el-tag v-if="confirmed" type="success">已确认关联</el-tag><el-button :disabled="busy || stale" @click="review('rejected')">暂不关联</el-button><el-button :disabled="busy || stale" @click="review('pending')">重置核对</el-button></div>
+      <div class="footer-actions"><el-button :disabled="!chosen?.mail_id" @click="chosen?.mail_id && emit('open-mail', chosen.mail_id)">查看邮件详情</el-button><el-button :disabled="!chosen?.mail_id" :loading="openingOriginal" @click="openOriginal">在 Outlook 中打开</el-button><el-button type="primary" :disabled="busy || stale || !chosen?.payment_id || confirmed" :loading="busy" @click="review('confirmed')">确认关联</el-button><el-tag v-if="confirmed" type="success">已确认关联</el-tag><el-button :disabled="busy || stale" @click="review('rejected')">暂不关联</el-button><el-button :disabled="busy || stale" @click="review('pending')">重置核对</el-button></div>
       <p class="muted">确认只保存本地关联，回写需单独提交</p>
     </footer>
   </section>
@@ -150,4 +163,12 @@ function review(state: ReviewState) {
 <style scoped>
 .receipt-review{height:100%;display:flex;flex-direction:column;padding:24px;min-height:0;overflow:hidden;min-width:0;max-width:100%;color:var(--el-text-color-primary);font-size:14px;line-height:1.6;overflow-wrap:anywhere;background:var(--surface,var(--el-bg-color))}.receipt-review *{box-sizing:border-box}.receipt-review h2,.receipt-review h3,.receipt-review p{margin:0}.receipt-review h2{font-size:18px}.receipt-review h3{font-size:14px}.review-header{flex-shrink:0;min-height:60px;display:flex;align-items:center;gap:12px;padding-bottom:12px;border-bottom:1px solid var(--border)}.header-title{flex:1;min-width:0}.eyebrow,.muted{color:var(--ink-muted);font-size:13px}.close-button{flex-shrink:0}.bank-summary{flex-shrink:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:center;gap:4px 24px;padding:12px 0}.bank-summary>details{grid-column:1/-1;max-height:120px;overflow-y:auto}.bank-amount-group{min-width:0}.bank-amount{font-size:clamp(26px,4vw,36px);font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums}.bank-facts{display:flex;flex-wrap:wrap;gap:8px 24px;margin:0}.bank-facts>div{min-width:0}.receipt-review dt{color:var(--ink-muted);font-size:12px}.receipt-review dd{margin:4px 0 0;font-size:14px;font-weight:400}.receipt-review summary{cursor:pointer;min-height:36px;padding:8px 0;font-weight:500}.receipt-review details p{margin:8px 0}.raw-text{white-space:pre-wrap;overflow-wrap:anywhere}.notice,.warnings{color:var(--el-color-warning);background:var(--el-color-warning-light-9);border-radius:6px;padding:12px 16px;margin-bottom:16px!important}.warnings{padding-left:32px}.review-columns{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;display:grid;grid-template-columns:minmax(220px, .8fr) minmax(0,2fr);border-top:1px solid var(--border);align-items:start;align-content:start}.column-notices{grid-column:1/-1;padding-top:12px}.comparison tr.warning{background:var(--el-color-warning-light-9)}.comparison tr.warning td:last-child{color:var(--el-color-warning)}.candidate-sidebar{min-width:0;padding:20px 20px 24px 0}.sidebar-heading{display:flex;flex-wrap:wrap;align-items:center;gap:8px;justify-content:space-between}.list-caption{margin:8px 0 12px!important}.candidate-list{padding:0;margin:0;list-style:none;display:grid;gap:8px}.candidate-choice{width:100%;display:flex;align-items:flex-start;gap:10px;min-height:80px;padding:12px;text-align:left;background:var(--surface,var(--el-bg-color));color:inherit;border:1px solid var(--border);border-radius:6px;cursor:pointer;font:inherit}.candidate-choice:hover{background:var(--el-fill-color-light)}.candidate-choice.active{border-color:var(--el-color-primary);background:var(--el-color-primary-light-9)}.candidate-choice:focus-visible,.receipt-review summary:focus-visible{outline:2px solid var(--el-color-primary);outline-offset:3px}.rank{color:var(--ink-muted);font-size:12px;flex-shrink:0}.candidate-copy{min-width:0;flex:1}.candidate-subject{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-weight:500;line-height:1.5}.candidate-meta,.confirmed-label{display:block;font-size:12px;margin-top:6px;color:var(--ink-muted)}.confirmed-label{color:var(--el-color-success)}.candidate-score{display:flex;flex-direction:column;align-items:center;flex-shrink:0;font-size:11px;color:var(--ink-muted);font-variant-numeric:tabular-nums}.candidate-score strong{font-size:20px;line-height:1.3;color:var(--el-text-color-primary);font-weight:600}.candidate-detail{min-width:0;border-left:1px solid var(--border);padding:20px 0 28px 24px}.selected-heading{margin-bottom:20px}.selected-heading p{margin-top:8px}.selected-score{font-size:24px;font-variant-numeric:tabular-nums;margin-left:8px}.comparison{width:100%;table-layout:fixed;border-collapse:collapse;font-size:13px}.comparison th,.comparison td{padding:12px 8px;vertical-align:top;text-align:left;border-bottom:1px solid var(--border);overflow-wrap:anywhere;white-space:normal}.comparison thead th{background:var(--el-fill-color-light);font-weight:500}.comparison tbody th{font-weight:500}.field-column{width:18%}.detail-section{margin-top:24px}.business-ids{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.business-ids :deep(.el-tag){max-width:100%;height:auto;min-height:24px;white-space:normal}.business-ids :deep(.el-tag__content){min-width:0;overflow-wrap:anywhere;white-space:normal}.remark{padding:12px;background:var(--el-fill-color-light);border-radius:6px}.provenance{display:grid;gap:12px;margin:12px 0}.provenance>div{display:grid;grid-template-columns:80px minmax(0,1fr);gap:12px}.provenance dd{margin:0}.evidence{margin-top:20px;border-top:1px solid var(--border)}.evidence figure{margin:12px 0}.evidence figcaption{font-size:12px;color:var(--ink-muted)}.evidence blockquote{margin:8px 0;padding-left:12px;border-left:2px solid var(--border)}.empty{padding:24px 8px;color:var(--ink-muted);font-size:13px}.detail-empty{border-left:1px solid var(--border);min-height:160px;padding:24px}.review-footer{flex-shrink:0;padding:16px 0 max(12px,env(safe-area-inset-bottom));border-top:1px solid var(--border);background:var(--surface,var(--el-bg-color))}.footer-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.receipt-review :deep(.el-button){min-height:36px;margin:0;white-space:normal;height:auto}.review-footer>p{margin-top:8px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 @media(max-width:799px){.bank-summary{gap:4px 12px}.bank-amount{font-size:26px}.review-columns{grid-template-columns:minmax(0,1fr)}.candidate-sidebar{padding-right:0}.candidate-detail,.detail-empty{border-left:0;border-top:1px solid var(--border);padding-left:0}.comparison th,.comparison td{padding:10px 4px;font-size:12px}.provenance>div{grid-template-columns:64px minmax(0,1fr);gap:8px}.review-header{gap:8px}.review-footer{padding-top:12px}.footer-actions{gap:8px}.bank-facts{gap:12px 24px}}
+
+@media(max-width:600px){
+.receipt-review{padding:16px}.review-header{flex-wrap:wrap;gap:8px;position:relative;padding-right:42px}
+.review-header .header-title{display:block;flex-basis:100%}.review-header .header-title h2{font-size:18px;line-height:1.5;word-break:normal;overflow-wrap:anywhere}
+.review-header .close-button{position:absolute;right:0;top:0}.review-header>.el-tag{font-size:12px}
+.bank-summary{grid-template-columns:1fr;gap:8px;padding:10px 0}.bank-amount{font-size:26px;line-height:1.3}.bank-facts{gap:8px 24px}.bank-facts>div{flex:1}
+.review-footer{padding-bottom:max(8px,env(safe-area-inset-bottom))}.review-footer>p{font-size:12px}.footer-actions{gap:6px}.footer-actions :deep(.el-button){font-size:12px;padding:8px 10px;min-height:36px}
+}
 </style>

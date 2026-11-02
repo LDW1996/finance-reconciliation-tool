@@ -796,6 +796,12 @@ def create_router(require_local):
         for row in result['rows']:row['payment_summary']=summaries.get(row['id']) or mail_summary(row,index.get(row['id'],[]),indexed=row['id'] in index)
         return result
 
+    @router.post('/messages/{identity}/open-original')
+    def open_original(identity: str):
+        from .mail_open import open_original
+        try:return open_original(manager().store,identity)
+        except ValueError as error:raise HTTPException(404,str(error)) from None
+
     @router.get('/messages/{identity}')
     def message(identity: str):
         row=manager().store.get(identity)

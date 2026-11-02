@@ -163,6 +163,8 @@ class MailStore:
                 # Keep copies from distinct PST stores in one matching index. Never
                 # merge using amount/business IDs, or incomplete attachment data.
                 origin=dict(folder=row.get('folder',''),store=row.get('outlook_store',''))
+                for key in ('outlook_entry_id','outlook_store_id'):
+                    if row.get(key):origin[key]=row[key]
                 fingerprint=None
                 if row.get('source')=='outlook' and row.get('internet_message_id') and not row.get('truncated') and not row.get('attachment_warning') and len(assets)==len(row.get('attachments',[])) and all(a.get('raw') for a in assets):
                     facts=[row.get(k,'') for k in ('internet_message_id','sender','subject','body')]
@@ -438,7 +440,7 @@ def scan_folder(folder, store_id, cutoff, limit, known_unchanged=None):
                 elif asset['status']=='failed' and total_bytes+size>MAX_MAIL_BYTES:
                     asset.update(status='skipped',error='本封邮件附件累计超过 25 MB。')
                 assets.append(asset)
-            row=dict(id=mail_id,source='outlook',
+            row=dict(id=mail_id,source='outlook',outlook_entry_id=identity,outlook_store_id=store_id,
                      subject=subject,sender=outlook_sender(item),received=received.isoformat(),
                      body=body[:200000],truncated=len(body)>200000,
                      attachments=[str(attachments.Item(i).FileName) for i in range(1,min(attachments.Count,100)+1)],

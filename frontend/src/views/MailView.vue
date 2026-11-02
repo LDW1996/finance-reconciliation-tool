@@ -9,9 +9,9 @@
       </div>
     </header>
 
-    <el-tabs v-model="section">
-      <el-tab-pane label="收款匹配" name="receipts"><ReceiptMatching ref="receiptMatching" :active="section === 'receipts'" @open-mail="openMatchedMail" /></el-tab-pane>
-      <el-tab-pane label="邮箱与邮件" name="mail">
+    <el-tabs v-model="section" class="module-tabs">
+      <el-tab-pane label="收款匹配" name="receipts"><template #label><span class="module-tab-label"><el-icon aria-hidden="true"><Wallet/></el-icon>收款匹配</span></template><ReceiptMatching ref="receiptMatching" :active="section === 'receipts'" @open-mail="openMatchedMail" /></el-tab-pane>
+      <el-tab-pane label="邮箱与邮件" name="mail"><template #label><span class="module-tab-label"><el-icon aria-hidden="true"><Message/></el-icon>邮箱与邮件</span></template>
     <el-alert v-if="connectionError" :title="connectionError" type="error" :closable="false" show-icon class="mail-alert" />
     <details class="mail-settings" :open="settingsOpen ?? true" @toggle="settingsOpen = ($event.target as HTMLDetailsElement).open">
       <summary><strong>自动收取邮件</strong><span class="auto-mail-state">{{ !status ? '正在检查环境' : !status.outlook_supported ? '当前 Mac 不支持连接 · Windows 经典版 Outlook 可用' : status.enabled ? '自动读取已开启' : 'Windows 经典版 Outlook' }}</span><span class="auto-mail-config">{{ settingsOpen === false ? '展开设置' : '收起设置' }}</span></summary>
@@ -100,7 +100,7 @@
       </section>
     </div>
       </el-tab-pane>
-      <el-tab-pane label="保存设置" name="storage"><MailStorageSettings v-if="section === 'storage'"/></el-tab-pane>
+      <el-tab-pane label="保存设置" name="storage"><template #label><span class="module-tab-label"><el-icon aria-hidden="true"><Setting/></el-icon>保存设置</span></template><MailStorageSettings v-if="section === 'storage'"/></el-tab-pane>
     </el-tabs>
   </main>
 </template>
@@ -114,7 +114,7 @@ function readPhase(phase?: string) {
 }
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Message, Connection, Refresh, Upload, Download, Delete, Search, Clock, VideoPlay } from '@element-plus/icons-vue'
+import { Setting, Wallet, Message, Connection, Refresh, Upload, Download, Delete, Search, Clock, VideoPlay } from '@element-plus/icons-vue'
 import { mailApi, type MailFolder, type MailRow, type MailStatus, type MailRelatedReceipts } from '../services/mail'
 import { downloadBlob } from '../services/api'
 import MailPaymentDetail from '../components/MailPaymentDetail.vue'
@@ -278,7 +278,7 @@ onBeforeUnmount(()=>{disposed=true;detailRequest++;relatedRequest++;clearTimeout
 </script>
 
 <style scoped>
-.mail-page{padding:24px 32px 40px;max-width:1920px;margin:auto}
+.mail-page{padding:32px 32px 40px;max-width:1920px;margin:auto}
 .mail-heading,.mail-actions,.mail-folder-select,.mail-schedule,.mail-schedule-options,.mail-section-heading,.mail-detail-heading,.mail-list-footer{display:flex;align-items:center;gap:12px}
 .mail-heading{justify-content:space-between;margin-bottom:16px}.mail-heading>div:first-child{display:flex;align-items:baseline;flex-wrap:wrap;gap:8px 16px}.mail-heading h1{font-size:24px;margin:0}.mail-heading p{font-size:13px;color:var(--ink-muted);margin:0}.mail-file-input{display:none}
 .mail-controls{display:grid;grid-template-columns:minmax(260px,1fr) 150px 150px auto;align-items:end;gap:20px;background:white;border-bottom:1px solid var(--border);padding:24px}

@@ -720,5 +720,14 @@
   "至少保留磁盘空间": "Minimum free disk space",
   "核对包包含全部已导入流水、前三条候选及已确认凭证，独立列出待核对记录；解压后查看，不会确认关联或回写流水。附件上限": "The review package includes all imported receipts, the top three candidates and confirmed evidence, with pending items listed separately. Extract to view; no associations are confirmed and no ledger rows are written. Attachment limit",
   "核对包已导出，请完整解压后打开": "Review package exported. Extract all files and open",
-  "查看": "View"
+  "查看": "View",
+  "已请求 ": "Requested ",
+  "打开原邮件": " to open the original message",
+  "原邮件定位提示": "Original message lookup",
+  "知道了": "OK",
+  "无法打开 ": "Unable to open ",
+  "原邮件，请检查本地服务。": " original message. Check the local service.",
+  "查看邮件详情": "View message details",
+  "在 ": "Open in ",
+  "中打开": " "
 }

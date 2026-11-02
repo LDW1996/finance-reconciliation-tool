@@ -18,7 +18,7 @@
         </template>
       </el-collapse-item>
     </el-collapse>
-    <el-dialog v-model="visible" :title="`${previewName} · 第 ${page?.number || 1} 页`" width="min(1100px, 94vw)" destroy-on-close>
+    <el-dialog v-model="visible" :title="`${previewName} · 第 ${page?.number || 1} 页`" width="min(1100px, 94vw)" class="attachment-preview-dialog" destroy-on-close>
       <template v-if="page">
         <p v-if="evidence" class="quote">原文：{{ evidence.quote }}<span v-if="evidence.confidence !== null"> · 文字识别置信度 {{ Math.round(evidence.confidence * 100) }}%</span></p>
         <div class="evidence-layout">

@@ -131,12 +131,6 @@ def execute_batch(page, found, result, report_path, directory, step):
                       failure_cause=causes.get(str(error),'批量流程在当前步骤未完成（'+str(result.get('stage'))+'），请结合逐条锁状态及失败日志核实'),
                       next_action='按业务号逐条核对 iLog 状态，不要盲目重复提交')
     finally:
-        screenshot=report_path.with_suffix('.png')
-        try:
-            page.screenshot(path=str(screenshot),full_page=True,timeout=5000)
-            screenshot.chmod(0o600);result['screenshot']=str(screenshot)
-        except Exception:
-            result['screenshot_note']='Batch screenshot unavailable'
         for row in rows:
             row.update(report=str(report_path))
             if result.get('screenshot'):row['screenshot']=result['screenshot']

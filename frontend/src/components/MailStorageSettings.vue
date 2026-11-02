@@ -1,7 +1,7 @@
 <template>
-  <section class="mail-storage" aria-labelledby="mail-storage-title" v-loading="loading">
+  <section class="mail-storage" aria-label="邮件保存设置" v-loading="loading">
     <nav class="storage-section-nav" aria-label="保存设置分区">
-      <button v-for="item in sections" :key="item.id" type="button" :class="{active:activeSection===item.id}" @click="jumpTo(item.id)">{{ item.label }}</button>
+      <button v-for="item in sections" :key="item.id" type="button" :class="{active:activeSection===item.id}" :aria-current="activeSection===item.id ? 'page' : undefined" @click="jumpTo(item.id)">{{ item.label }}</button>
 
     </nav>
     <div class="storage-content">

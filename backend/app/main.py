@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Literal
 from io import BytesIO
 from pathlib import Path
 import sys
@@ -116,6 +117,10 @@ class UnlockTaskRequest(BaseModel):
     fee: list[str] = Field(default_factory=list, max_length=2000)
     order: list[str] = Field(default_factory=list, max_length=2000)
     request_id: str = Field(min_length=1, max_length=100)
+    scope: Literal["bill", "voyage"] = "bill"
+    screenshot_policy: Literal["errors", "all", "none"] = "errors"
+    record_timings: bool = False
+    preview_token: str | None = Field(default=None, max_length=200)
     confirmed: bool = False
 
 
@@ -186,6 +191,30 @@ def ilog_task(task_id: str):
         raise HTTPException(404, '任务不存在') from None
 
 
+class VoyagePreviewRequest(BaseModel):
+    account_id: str = Field(min_length=1,max_length=100)
+    fallback_account_id: str | None = Field(default=None,min_length=1,max_length=100)
+    fee_bills: list[str] = Field(default_factory=list,max_length=2000)
+    order_bills: list[str] = Field(default_factory=list,max_length=2000)
+
+
+@app.post('/api/ilog/voyages/preview')
+def preview_ilog_voyages(body: VoyagePreviewRequest, request: Request):
+    require_local_account_write(request)
+    if not ilog_tasks.runtime()['available']: raise HTTPException(503,'缺少浏览器或自动化依赖，无法查询')
+    accounts=AccountStore().list_accounts()
+    account=next((a for a in accounts if a['id']==body.account_id),None)
+    fallback=next((a for a in accounts if a['id']==body.fallback_account_id),None) if body.fallback_account_id else None
+    if not account or not account['hasPassword']: raise HTTPException(400,'请选择已保存密码的业务账号')
+    if body.fallback_account_id and (not fallback or not fallback['hasPassword'] or fallback['id']==account['id']):
+        raise HTTPException(400,'兜底账号必须存在、已保存密码，且与主账号不同')
+    try:
+        return ilog_tasks.manager().preview(account['id'],account['name'],body.fee_bills,body.order_bills,
+            fallback_account=fallback['id'] if fallback else None,fallback_name=fallback['name'] if fallback else None)
+    except ValueError as error: raise HTTPException(400,str(error)) from None
+    except RuntimeError as error: raise HTTPException(409,str(error)) from None
+
+
 @app.post('/api/ilog/tasks', status_code=201)
 def create_ilog_task(body: UnlockTaskRequest, request: Request):
     require_local_account_write(request)
@@ -202,7 +231,8 @@ def create_ilog_task(body: UnlockTaskRequest, request: Request):
         manager=ilog_tasks.manager()
         Retention(manager).maybe_cleanup()
         return manager.create(body.account_id, account['name'], body.fee, body.order, body.request_id, body.confirmed,
-            fallback_account=fallback['id'] if fallback else None, fallback_name=fallback['name'] if fallback else None)
+            fallback_account=fallback['id'] if fallback else None, fallback_name=fallback['name'] if fallback else None,
+            scope=body.scope, screenshot_policy=body.screenshot_policy, record_timings=body.record_timings, preview_token=body.preview_token)
     except ValueError as error:
         raise HTTPException(400,str(error)) from None
     except RuntimeError as error:

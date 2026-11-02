@@ -6,6 +6,10 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import importlib.util
 import json
+import inspect
+import time
+import secrets
+from copy import deepcopy
 import os
 from pathlib import Path
 import re
@@ -71,6 +75,7 @@ class TaskManager:
             db.execute('CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, request_key TEXT UNIQUE, payload TEXT, state TEXT, data TEXT)')
             db.execute('CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY,value TEXT)')
             db.execute('CREATE TABLE IF NOT EXISTS expired_requests (request_key TEXT PRIMARY KEY,task_id TEXT)')
+            db.execute('CREATE TABLE IF NOT EXISTS voyage_previews (token TEXT PRIMARY KEY, expires REAL, binding TEXT, data TEXT)')
             # Old tasks did not have a completion timestamp. Prefer their row times.
             now=datetime.now(timezone.utc).isoformat()
             for row in db.execute('SELECT id,data FROM tasks').fetchall():
@@ -143,7 +148,69 @@ class TaskManager:
         present(data)
         return data
 
-    def create(self, account, name, fee, order, key, confirmed, *, fallback_account=None, fallback_name=None):
+    @staticmethod
+    def normalize_bills(bills):
+        if not isinstance(bills, list): raise ValueError('单号必须为列表')
+        result=[]
+        for bill in bills:
+            if not isinstance(bill,str): raise ValueError('单号格式异常')
+            bill=bill.strip().upper()
+            if not re.fullmatch(r'[A-Z0-9_/-]{1,80}',bill): raise ValueError('存在格式异常的单号')
+            if bill not in result: result.append(bill)
+        return result
+
+    @staticmethod
+    def preview_binding(account, fallback_account, fee, order):
+        return json.dumps([account,fallback_account or None,fee,order],ensure_ascii=False)
+
+    def preview(self, account, name, fee, order, *, fallback_account=None, fallback_name=None):
+        from contextlib import nullcontext
+        from .ilog_session import SessionPool
+        from .ilog_unlock import run
+        from .ilog_voyage import build_groups
+        fee,order=self.normalize_bills(fee),self.normalize_bills(order)
+        if not 1<=len(fee)+len(order)<=2000: raise ValueError('每批需要 1–2000 项')
+        if fallback_account and (fallback_account==account or not fallback_name): raise ValueError('兜底账号无效')
+        if self.permission_check is not None and not self.permission_check(): raise RuntimeError('平台访问未授权')
+        runner=self.runner or run
+        parameters=inspect.signature(runner).parameters
+        accepts_kwargs=any(p.kind==inspect.Parameter.VAR_KEYWORD for p in parameters.values())
+        queries=[];issues=[]
+        use_pool=self.runner is None or accepts_kwargs or 'session_pool' in parameters
+        with (SessionPool() if use_pool else nullcontext(None)) as session_pool:
+            for kind,bills in [('fee',fee),('order',order)]:
+                for bill in bills:
+                    candidates=[(account,name)]
+                    if fallback_account: candidates.append((fallback_account,fallback_name))
+                    result={}
+                    try:
+                        for actual,actual_name in candidates:
+                            options={'execute':False,'channel':runtime()['channel'] or 'chrome','scope':'voyage','screenshot_policy':'none','record_timings':False}
+                            if use_pool: options['session_pool']=session_pool
+                            if not accepts_kwargs: options={k:v for k,v in options.items() if k in parameters}
+                            result=runner(actual,bill,kind,**options)
+                            if result.get('status')!='not_found': break
+                        records=result.get('matches') or ([result['before']] if result.get('before') else [])
+                        if result.get('status')!='inspected' or not records:
+                            issues.append({'bill':bill,'kind':kind,'message':'未找到匹配记录' if result.get('status')=='not_found' else '查询未成功，请核实后重新预览'})
+                            continue
+                        query={'account_id':actual,'account_name':actual_name,'bill':bill,'kind':kind,'records':records}
+                        build_groups([query])
+                        queries.append(query)
+                    except Exception:
+                        issues.append({'bill':bill,'kind':kind,'message':'查询或航次信息校验失败，请重新预览'})
+        groups=build_groups(queries) if queries else []
+        expires=time.time()+600
+        data={'token':secrets.token_urlsafe(32),'expires_at':datetime.fromtimestamp(expires,timezone.utc).isoformat(),'groups':groups,'issues':issues,'can_execute':bool(groups) and not issues}
+        with self.db() as db:
+            db.execute('DELETE FROM voyage_previews WHERE expires<=?',(time.time(),))
+            db.execute('INSERT INTO voyage_previews VALUES (?,?,?,?)',(data['token'],expires,self.preview_binding(account,fallback_account,fee,order),json.dumps(data,ensure_ascii=False)))
+        return deepcopy(data)
+
+    def create(self, account, name, fee, order, key, confirmed, *, fallback_account=None, fallback_name=None, scope="bill", screenshot_policy="errors", record_timings=False, preview_token=None):
+        if scope not in ("bill","voyage") or screenshot_policy not in ("errors","all","none") or not isinstance(record_timings,bool):
+            raise ValueError("任务选项无效")
+        if scope=="voyage" and not preview_token: raise ValueError("请先预览航次")
         if not confirmed or not key or len(key) > 100:
             raise ValueError('请先核对清单并确认真实操作')
         if fallback_account and (fallback_account == account or not fallback_name):
@@ -161,8 +228,10 @@ class TaskManager:
                     inputs.append({'bill':bill,'kind':kind,'status':'waiting','message':'等待执行','time':''})
                     seen.add(bill)
         if not inputs or len(inputs)>2000: raise ValueError('每批需要 1–2000 项')
+        fee,order=self.normalize_bills(fee),self.normalize_bills(order)
         confirmation = [account,[(r['bill'],r['kind']) for r in inputs]]
         if fallback_account: confirmation.append(fallback_account)
+        confirmation.extend([scope,screenshot_policy,record_timings,preview_token if scope=="voyage" else None])
         payload = json.dumps(confirmation)
         with self.db() as db:
             db.execute('BEGIN IMMEDIATE')
@@ -172,9 +241,18 @@ class TaskManager:
             if old:
                 if old['payload'] != payload: raise ValueError('确认请求内容已变化，请重新核对')
                 return json.loads(old['data'])
+            if scope=='voyage':
+                saved=db.execute('SELECT * FROM voyage_previews WHERE token=?',(preview_token,)).fetchone()
+                if not saved or saved['expires']<=time.time(): raise ValueError('航次预览不存在或已过期，请重新查询')
+                if saved['binding']!=self.preview_binding(account,fallback_account,fee,order): raise ValueError('预览输入或账号已变化，请重新查询')
+                preview=json.loads(saved['data'])
+                if not preview['can_execute'] or preview['issues'] or not preview['groups']: raise ValueError('预览存在问题，禁止执行')
+                inputs=[{'bill':g.get('bill') or g['bills'][0],'kind':g['kind'],'target':g,
+                         'actualAccount':g['account_id'],'actualAccountName':g['account_name'],
+                         'status':'waiting','message':'等待执行','time':''} for g in preview['groups']]
             if db.execute("SELECT 1 FROM tasks WHERE state IN ('running','paused')").fetchone():
                 raise RuntimeError('已有未结束任务，请先处理或取消剩余项')
-            data = {'id':uuid4().hex,'account':account,'accountName':name,'state':'running','rows':inputs,'createdAt':datetime.now(timezone.utc).isoformat()}
+            data = {'id':uuid4().hex,'account':account,'accountName':name,'state':'running','rows':inputs,'scope':scope,'screenshot_policy':screenshot_policy,'record_timings':record_timings,'createdAt':datetime.now(timezone.utc).isoformat()}
             if fallback_account:
                 data.update(fallbackAccount=fallback_account,fallbackAccountName=fallback_name)
             db.execute('INSERT INTO tasks VALUES (?,?,?,?,?)',(data['id'],key,payload,'running',json.dumps(data,ensure_ascii=False)))
@@ -204,111 +282,123 @@ class TaskManager:
 
     def drain(self, task_id):
         from .ilog_unlock import run
+        from .ilog_session import SessionPool
+        from contextlib import nullcontext
         with worker_lock(self.directory, blocking=True) as acquired:
             if not acquired: return
-            while True:
-                with platform_transition_lock:
-                    if self.permission_check is not None and not self.permission_check():
-                        self.control(task_id,'pause')
-                        return
+            with (SessionPool() if self.runner is None else nullcontext(None)) as session_pool:
+                while True:
+                    with platform_transition_lock:
+                        if self.permission_check is not None and not self.permission_check():
+                            self.control(task_id,'pause')
+                            return
+                        with self.db() as db:
+                            db.execute('BEGIN IMMEDIATE')
+                            data = json.loads(db.execute('SELECT data FROM tasks WHERE id=?',(task_id,)).fetchone()[0])
+                            if data['state']!='running': return
+                            index = next((i for i,r in enumerate(data['rows']) if r['status']=='waiting'),None)
+                            if index is None:
+                                data['state']='completed'; self.save(db,data); return
+                            item = data['rows'][index]
+                            item.update(status='processing',message='正在查询、执行并复查')
+                            self.save(db,data)
+                    attempts=[]
+                    actual_account, actual_name = (
+                        (item['actualAccount'], item['actualAccountName']) if data.get('scope') == 'voyage'
+                        else (data['account'], data['accountName']))
+                    candidates=[(actual_account,actual_name)]
+                    if data.get('fallbackAccount') and data.get('scope', 'bill') != 'voyage':
+                        candidates.append((data['fallbackAccount'],data['fallbackAccountName']))
+                    for actual_account, actual_name in candidates:
+                        # Persist the selected account before an attempt, including fallback.
+                        with self.db() as db:
+                            db.execute('BEGIN IMMEDIATE')
+                            progress=json.loads(db.execute('SELECT data FROM tasks WHERE id=?',(task_id,)).fetchone()[0])
+                            progress['rows'][index].update(actualAccount=actual_account,actualAccountName=actual_name,
+                                attempts=attempts,message=f'正在使用 {actual_name} 查询、执行并复查')
+                            self.save(db,progress)
+                        try:
+                            kwargs = {'execute': True, 'channel': runtime()['channel'] or 'chrome'}
+                            if self.runner is None:
+                                kwargs.update(session_pool=session_pool,
+                                    screenshot_policy=data.get('screenshot_policy', 'errors'),
+                                    record_timings=data.get('record_timings', True),
+                                    scope=data.get('scope', 'bill'), voyage_target=item.get('target'))
+                            result = (self.runner or run)(actual_account,item['bill'],item['kind'],**kwargs)
+                        except Exception:
+                            result = {'status':'needs_verification','reason':'执行异常，未自动重试'}
+                        attempts.append({'account':actual_account,'accountName':actual_name,**result})
+                        with self.db() as db:
+                            db.execute('BEGIN IMMEDIATE')
+                            progress=json.loads(db.execute('SELECT data FROM tasks WHERE id=?',(task_id,)).fetchone()[0])
+                            progress['rows'][index].update(attempts=attempts,detail=result)
+                            self.save(db,progress)
+                        if not (result.get('status')=='not_found' and result.get('submitted') is False):
+                            break
+                    ok = result.get('status') in ('verified_unlocked','verified_fee_unlocked','already_unlocked','already_fee_unlocked','voyage_platform_confirmed')
+                    notes = {'voyage_platform_confirmed':'平台已确认航次操作成功（仅代表单）',
+                        'verified_fee_unlocked':'费用小锁已解开',
+                        'verified_unlocked':'复查已无锁',
+                        'already_unlocked':'原记录已无锁，未重复提交',
+                        'already_fee_unlocked':'小锁已处于解锁后状态，未重复提交',
+                        'blocked_duplicate':'有历史提交，未再次解锁；请核对历史记录',
+                        'needs_verification':'执行结果不确定，请人工核实，未自动重试',
+                        'platform_confirmed':'平台确认成功，但目标状态尚未充分核实',
+                        'not_found':'当前账号未找到单号，未提交',
+                        'ambiguous':'查询记录编号重复、缺失或锁状态无法识别，未提交',
+                        'rejected':'平台拒绝解锁，请查看平台说明'}
+                    if result.get('status') == 'ambiguous' and result.get('matches'):
+                        matches = result['matches']
+                        descriptions = [f"业务号 {r.get('booking','未知')}（船东提单 {r.get('mbl','未知')}；货代提单 {r.get('hbl','未知')}）" for r in matches[:5]]
+                        notes['ambiguous'] = result.get('ambiguity_reason', '查询结果不唯一，未提交') + f"；共 {result.get('matched_count',len(matches))} 条：" + '；'.join(descriptions) + '；请按业务号核实'
+                    if result.get('failed_stage'):
+                        stage_names = {'login':'登录平台','query_order':'查询订单','select_record':'选中订单',
+                            'open_unlock_menu':'打开解锁菜单','choose_unlock_action':'选择解锁操作',
+                            'read_confirmation':'读取确认窗口','reserve_submission':'登记提交凭据',
+                            'submit_and_wait_response':'提交并等待平台响应','parse_platform_response':'解析平台响应',
+                            'verify_order_state':'复查锁状态','capture_result':'保存结果截图'}
+                        stage_names.update({'verify_open_page':'复查：重新打开平台页面',
+                            'verify_open_list':'复查：打开委托单列表','verify_wait_search':'复查：等待查询框就绪'})
+                        for prefix, label in [('query_', '查询'), ('verify_', '复查')]:
+                            for phase, name in {'wait_idle':'等待平台空闲','fill_bill':'输入提单号',
+                                'wait_initial_store':'等待默认订单列表加载',
+                                'wait_query_response':'等待订单查询响应','read_query_response':'读取查询返回',
+                                'wait_store_update':'等待页面列表同步'}.items():
+                                stage_names[prefix + phase] = label + '：' + name
+                        stage = stage_names.get(result['failed_stage'], result['failed_stage'])
+                        notes[result.get('status')] = f"失败步骤：{stage}；" + result.get('failure_cause','具体原因尚未确认') + '；' + ('已进入提交阶段，结果待核实' if result.get('submitted') else '未进入解锁提交阶段') + '；' + result.get('next_action','请人工核实')
+                    if result.get('verification_retries'):
+                        notes[result.get('status')] = notes.get(result.get('status'),'复查待核实') + f"；只读复查已重试 {result['verification_retries']} 次，未重复提交解锁"
+                    if result.get('query_retries'):
+                        notes[result.get('status')] = notes.get(result.get('status'),'查询待核实') + f"；首次查询已重试 {result['query_retries']} 次"
                     with self.db() as db:
                         db.execute('BEGIN IMMEDIATE')
-                        data = json.loads(db.execute('SELECT data FROM tasks WHERE id=?',(task_id,)).fetchone()[0])
-                        if data['state']!='running': return
-                        index = next((i for i,r in enumerate(data['rows']) if r['status']=='waiting'),None)
-                        if index is None:
-                            data['state']='completed'; self.save(db,data); return
-                        item = data['rows'][index]
-                        item.update(status='processing',message='正在查询、执行并复查')
-                        self.save(db,data)
-                attempts=[]
-                actual_account, actual_name = data['account'], data['accountName']
-                candidates=[(actual_account,actual_name)]
-                if data.get('fallbackAccount'):
-                    candidates.append((data['fallbackAccount'],data['fallbackAccountName']))
-                for actual_account, actual_name in candidates:
-                    # Persist the selected account before an attempt, including fallback.
-                    with self.db() as db:
-                        db.execute('BEGIN IMMEDIATE')
-                        progress=json.loads(db.execute('SELECT data FROM tasks WHERE id=?',(task_id,)).fetchone()[0])
-                        progress['rows'][index].update(actualAccount=actual_account,actualAccountName=actual_name,
-                            attempts=attempts,message=f'正在使用 {actual_name} 查询、执行并复查')
-                        self.save(db,progress)
-                    try:
-                        result = (self.runner or run)(actual_account,item['bill'],item['kind'],execute=True,channel=runtime()['channel'] or 'chrome')
-                    except Exception:
-                        result = {'status':'needs_verification','reason':'执行异常，未自动重试'}
-                    attempts.append({'account':actual_account,'accountName':actual_name,**result})
-                    with self.db() as db:
-                        db.execute('BEGIN IMMEDIATE')
-                        progress=json.loads(db.execute('SELECT data FROM tasks WHERE id=?',(task_id,)).fetchone()[0])
-                        progress['rows'][index].update(attempts=attempts,detail=result)
-                        self.save(db,progress)
-                    if not (result.get('status')=='not_found' and result.get('submitted') is False):
-                        break
-                ok = result.get('status') in ('verified_unlocked','verified_fee_unlocked','already_unlocked','already_fee_unlocked')
-                notes = {'verified_fee_unlocked':'费用小锁已解开',
-                    'verified_unlocked':'复查已无锁',
-                    'already_unlocked':'原记录已无锁，未重复提交',
-                    'already_fee_unlocked':'小锁已处于解锁后状态，未重复提交',
-                    'blocked_duplicate':'有历史提交，未再次解锁；请核对历史记录',
-                    'needs_verification':'执行结果不确定，请人工核实，未自动重试',
-                    'platform_confirmed':'平台确认成功，但目标状态尚未充分核实',
-                    'not_found':'当前账号未找到单号，未提交',
-                    'ambiguous':'查询记录编号重复、缺失或锁状态无法识别，未提交',
-                    'rejected':'平台拒绝解锁，请查看平台说明'}
-                if result.get('status') == 'ambiguous' and result.get('matches'):
-                    matches = result['matches']
-                    descriptions = [f"业务号 {r.get('booking','未知')}（船东提单 {r.get('mbl','未知')}；货代提单 {r.get('hbl','未知')}）" for r in matches[:5]]
-                    notes['ambiguous'] = result.get('ambiguity_reason', '查询结果不唯一，未提交') + f"；共 {result.get('matched_count',len(matches))} 条：" + '；'.join(descriptions) + '；请按业务号核实'
-                if result.get('failed_stage'):
-                    stage_names = {'login':'登录平台','query_order':'查询订单','select_record':'选中订单',
-                        'open_unlock_menu':'打开解锁菜单','choose_unlock_action':'选择解锁操作',
-                        'read_confirmation':'读取确认窗口','reserve_submission':'登记提交凭据',
-                        'submit_and_wait_response':'提交并等待平台响应','parse_platform_response':'解析平台响应',
-                        'verify_order_state':'复查锁状态','capture_result':'保存结果截图'}
-                    stage_names.update({'verify_open_page':'复查：重新打开平台页面',
-                        'verify_open_list':'复查：打开委托单列表','verify_wait_search':'复查：等待查询框就绪'})
-                    for prefix, label in [('query_', '查询'), ('verify_', '复查')]:
-                        for phase, name in {'wait_idle':'等待平台空闲','fill_bill':'输入提单号',
-                            'wait_initial_store':'等待默认订单列表加载',
-                            'wait_query_response':'等待订单查询响应','read_query_response':'读取查询返回',
-                            'wait_store_update':'等待页面列表同步'}.items():
-                            stage_names[prefix + phase] = label + '：' + name
-                    stage = stage_names.get(result['failed_stage'], result['failed_stage'])
-                    notes[result.get('status')] = f"失败步骤：{stage}；" + result.get('failure_cause','具体原因尚未确认') + '；' + ('已进入提交阶段，结果待核实' if result.get('submitted') else '未进入解锁提交阶段') + '；' + result.get('next_action','请人工核实')
-                if result.get('verification_retries'):
-                    notes[result.get('status')] = notes.get(result.get('status'),'复查待核实') + f"；只读复查已重试 {result['verification_retries']} 次，未重复提交解锁"
-                if result.get('query_retries'):
-                    notes[result.get('status')] = notes.get(result.get('status'),'查询待核实') + f"；首次查询已重试 {result['query_retries']} 次"
-                with self.db() as db:
-                    db.execute('BEGIN IMMEDIATE')
-                    latest = json.loads(db.execute('SELECT data FROM tasks WHERE id=?',(task_id,)).fetchone()[0])
-                    if result.get('records'):
-                        expanded=[]
-                        for detail in result['records']:
-                            child_ok=detail.get('status') in ('verified_unlocked','verified_fee_unlocked','already_unlocked','already_fee_unlocked')
-                            message=notes.get(detail.get('status'),'执行异常，请人工核实')
-                            if detail.get('failure_cause'):
-                                message=detail['failure_cause']+'；'+detail.get('next_action','请人工核实')
-                            if detail.get('relocked_resubmission'):
-                                message='历史已成功，当前再次有锁，本次重新解锁；'+message
-                            child_attempts=[]
-                            for attempt in attempts:
-                                matched=next((r for r in attempt.get('records',[]) if r.get('before',{}).get('id')==detail.get('before',{}).get('id')),None)
-                                child_attempts.append({k:v for k,v in {**{k:v for k,v in attempt.items() if k!='records'},**(matched or {})}.items() if k not in ('matches','steps','verification_attempts','query_attempts')})
-                            expanded.append({**latest['rows'][index], 'status':'success' if child_ok else 'attention',
-                                'businessNo':detail.get('before',{}).get('booking',''), 'detail':detail,
-                                'actualAccount':actual_account,'actualAccountName':actual_name,
-                                'attempts':child_attempts,'message':message,'time':datetime.now(timezone.utc).isoformat()})
-                        latest['rows'][index:index+1]=expanded
-                    else:
-                        latest['rows'][index].update(status='success' if ok else 'attention', detail=result,
-                        actualAccount=actual_account,actualAccountName=actual_name,attempts=attempts,
-                        message=('历史已成功，当前再次有锁，本次重新解锁；' if result.get('relocked_resubmission') else '') + notes.get(result.get('status'),'执行异常，请人工核实') + ('；'+str(result['message']) if not ok and result.get('message') else ''),
-                        time=datetime.now(timezone.utc).isoformat())
-                    if not any(r['status']=='waiting' for r in latest['rows']): latest['state']='completed'
-                    self.save(db,latest)
+                        latest = json.loads(db.execute('SELECT data FROM tasks WHERE id=?',(task_id,)).fetchone()[0])
+                        if result.get('records'):
+                            expanded=[]
+                            for detail in result['records']:
+                                child_ok=detail.get('status') in ('verified_unlocked','verified_fee_unlocked','already_unlocked','already_fee_unlocked','voyage_platform_confirmed')
+                                message=notes.get(detail.get('status'),'执行异常，请人工核实')
+                                if detail.get('failure_cause'):
+                                    message=detail['failure_cause']+'；'+detail.get('next_action','请人工核实')
+                                if detail.get('relocked_resubmission'):
+                                    message='历史已成功，当前再次有锁，本次重新解锁；'+message
+                                child_attempts=[]
+                                for attempt in attempts:
+                                    matched=next((r for r in attempt.get('records',[]) if r.get('before',{}).get('id')==detail.get('before',{}).get('id')),None)
+                                    child_attempts.append({k:v for k,v in {**{k:v for k,v in attempt.items() if k!='records'},**(matched or {})}.items() if k not in ('matches','steps','verification_attempts','query_attempts')})
+                                expanded.append({**latest['rows'][index], 'status':'success' if child_ok else 'attention',
+                                    'businessNo':detail.get('before',{}).get('booking',''), 'detail':detail,
+                                    'actualAccount':actual_account,'actualAccountName':actual_name,
+                                    'attempts':child_attempts,'message':message,'time':datetime.now(timezone.utc).isoformat()})
+                            latest['rows'][index:index+1]=expanded
+                        else:
+                            latest['rows'][index].update(status='success' if ok else 'attention', detail=result,
+                            actualAccount=actual_account,actualAccountName=actual_name,attempts=attempts,
+                            message=('历史已成功，当前再次有锁，本次重新解锁；' if result.get('relocked_resubmission') else '') + notes.get(result.get('status'),'执行异常，请人工核实') + ('；'+str(result['message']) if not ok and result.get('message') else ''),
+                            time=datetime.now(timezone.utc).isoformat())
+                        if not any(r['status']=='waiting' for r in latest['rows']): latest['state']='completed'
+                        self.save(db,latest)
 
 
 _manager = None

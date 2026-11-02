@@ -13,7 +13,7 @@
     </header>
     <ReconciliationView v-if="page==='excel' && can('excel')"/>
     <MailView v-else-if="page==='mail' && can('mail')"/>
-    <div v-else-if="can('ilog') && isIlog" class="ilog-workspace"><ModuleTitle class="ilog-title" :icon="Unlock">iLog</ModuleTitle><nav class="ilog-tabs" aria-label="iLog功能导航"><button v-for="tab in ilogTabs" :key="tab.page" type="button" :class="{selected:page===tab.page}" :aria-current="page===tab.page ? 'page' : undefined" @click="navigate(tab.page)">{{tab.label}}</button></nav>
+    <div v-else-if="can('ilog') && isIlog" class="ilog-workspace"><ModuleTitle class="ilog-title" :icon="Unlock">iLog</ModuleTitle><nav class="ilog-tabs module-tabs" aria-label="iLog功能导航"><button v-for="tab in ilogTabs" :key="tab.page" type="button" :class="{selected:page===tab.page}" :aria-current="page===tab.page ? 'page' : undefined" @click="navigate(tab.page)"><el-icon aria-hidden="true"><component :is="tab.icon"/></el-icon>{{tab.label}}</button></nav>
     <UnlockView v-if="can('ilog') && (page==='unlock'||page==='accounts'||page==='history')" :view="page" @navigate="navigate"/><IlogRetentionSettings v-if="page==='retention'"/></div>
   </template>
 </template>
@@ -21,7 +21,7 @@
 import ModuleTitle from './components/ModuleTitle.vue'
 import { ref, computed, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
-import { OfficeBuilding, User, SwitchButton, Unlock } from '@element-plus/icons-vue'
+import { OfficeBuilding, User, SwitchButton, Unlock, Clock, Setting } from '@element-plus/icons-vue'
 import ReconciliationView from './views/ReconciliationView.vue'
 import MailView from './views/MailView.vue'
 import UnlockView from './views/UnlockView.vue'
@@ -32,7 +32,7 @@ const buildCommit=(import.meta.env.VITE_BUILD_COMMIT || 'local').slice(0,8)
 type Page='excel'|'mail'|'unlock'|'accounts'|'history'|'retention'
 const session=ref<PlatformSession>({authenticated:false,capabilities:[]}),loading=ref(true),startupError=ref(''),loggingOut=ref(false),page=ref<Page>('excel')
 const can=(capability:string)=>session.value.capabilities.includes(capability)
-const ilogTabs=[{page:'unlock',label:'批量解锁'},{page:'accounts',label:'业务账号'},{page:'history',label:'解锁历史'},{page:'retention',label:'保存设置'}] as const
+const ilogTabs=[{page:'unlock',label:'批量解锁',icon:Unlock},{page:'accounts',label:'业务账号',icon:User},{page:'history',label:'解锁历史',icon:Clock},{page:'retention',label:'保存设置',icon:Setting}] as const
 const isIlog=computed(()=>ilogTabs.some(tab=>tab.page===page.value))
 const items=computed(()=>[...(can('excel')?[{page:'excel' as Page,label:'Excel对账'}]:[]),...(can('mail')?[{page:'mail' as Page,label:'邮件收款'}]:[]),...(can('ilog')?[{page:'unlock' as Page,label:'iLog'}]:[])])
 function navigate(value:Page){page.value=(items.value.some(i=>i.page===value)||(can('ilog')&&ilogTabs.some(tab=>tab.page===value)))?value:(items.value[0]?.page || 'excel');location.hash=page.value}
@@ -48,9 +48,10 @@ void initialize()
 <style scoped>
 .ilog-workspace{padding:32px;min-width:0}.ilog-workspace>.ilog-title{margin:0 0 24px;font-size:28px}
 .ilog-tabs{display:flex;gap:32px;border-bottom:1px solid var(--border);margin-bottom:24px;overflow-x:auto}
-.ilog-tabs button{border:0;border-bottom:3px solid transparent;background:transparent;padding:12px 0 16px;white-space:nowrap;color:inherit;font:inherit;cursor:pointer}
+.ilog-tabs button{border:0;border-bottom:2px solid transparent;background:transparent;padding:0 4px;white-space:nowrap;color:inherit;cursor:pointer}
 .ilog-tabs button.selected{color:var(--el-color-primary);border-bottom-color:var(--el-color-primary);font-weight:600}
 .ilog-tabs button:focus-visible{outline:2px solid var(--el-color-primary)}
+.ilog-workspace :deep(.unlock-heading h2){font-size:20px;line-height:1.5}
 .ilog-workspace :deep(.unlock-shell){padding:0;margin:0;max-width:none}
 @media(max-width:700px){.ilog-workspace{padding:24px 16px}}
 
