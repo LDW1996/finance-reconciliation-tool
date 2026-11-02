@@ -111,3 +111,22 @@ def test_smoke_cleanup_preserves_primary_failure(tmp_path,monkeypatch):
             raise RuntimeError('original OCR failure')
     assert 'original OCR failure' in (tmp_path/'failure.log').read_text(encoding='utf-8')
     assert 'locked database' in (tmp_path/'cleanup.log').read_text(encoding='utf-8')
+
+
+def test_full_smoke_cleanup_retries_windows_file_lock(tmp_path,monkeypatch):
+    import types
+    path=Path(__file__).resolve().parents[2]/'packaging'/'smoke_windows_exe.py'
+    spec=importlib.util.spec_from_file_location('cleanup_smoke',path)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    attempts=[]
+    def cleanup():
+        attempts.append(1)
+        if len(attempts)<3:raise PermissionError('locked')
+    monkeypatch.setattr(module.time,'sleep',lambda _:None)
+    module.cleanup_test_directory(types.SimpleNamespace(cleanup=cleanup),tmp_path)
+    assert len(attempts)==3
+    def locked():raise PermissionError('locked')
+    ticks=iter([0,11])
+    monkeypatch.setattr(module.time,'monotonic',lambda:next(ticks))
+    module.cleanup_test_directory(types.SimpleNamespace(cleanup=locked),tmp_path,failed=True)
+    assert 'PermissionError' in (tmp_path/'cleanup.log').read_text()

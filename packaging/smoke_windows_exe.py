@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 from pathlib import Path
 
 import httpx
@@ -255,6 +256,21 @@ def start_test_process(exe, env):
     return process
 
 
+def cleanup_test_directory(sandbox, diagnostics, failed=False):
+    deadline=time.monotonic()+10
+    while True:
+        try:
+            sandbox.cleanup()
+            return
+        except PermissionError:
+            if time.monotonic()<deadline:
+                time.sleep(.25)
+                continue
+            (diagnostics/'cleanup.log').write_text(traceback.format_exc(),encoding='utf-8')
+            if not failed:raise
+            return
+
+
 def stop_process_tree(process):
     job=getattr(process,'_smoke_job',None)
     if job:
@@ -339,7 +355,7 @@ def main() -> int:
 
     sandbox = tempfile.TemporaryDirectory(prefix='finance-exe-smoke-')
     app_env={**process_env,'FINANCE_RECONCILE_DATA_DIR':sandbox.name}
-    process = subprocess.Popen([str(exe_path)], env=app_env)
+    process = start_test_process(exe_path, app_env)
     try:
         wait_for_health(process=process,startup_log=startup_log)
         assert_frontend_served()
@@ -361,7 +377,7 @@ def main() -> int:
             key=Path(sandbox.name)/'mail'/'mail.key'
             key_before=key.read_bytes()
             stop_process_tree(process)
-            process=subprocess.Popen([str(exe_path)],env=app_env)
+            process=start_test_process(exe_path,app_env)
             wait_for_health(process=process,startup_log=startup_log)
             if SESSION.get(APP_URL+"/api/platform/session").status_code != 401:
                 raise AssertionError("Restart retained platform session")
@@ -375,11 +391,19 @@ def main() -> int:
             make_sample_workbook(sample_path)
             assert_excel_flow(sample_path)
     finally:
-        stop_process_tree(process)
-        sandbox.cleanup()
-        if SESSION is not None:
-            SESSION.close()
-            SESSION=None
+        failed=sys.exc_info()[0] is not None
+        if failed:
+            (diagnostics/'failure.log').write_text(traceback.format_exc(),encoding='utf-8')
+        try:
+            if SESSION is not None:
+                SESSION.close()
+                SESSION=None
+            stop_process_tree(process)
+        except Exception:
+            (diagnostics/'shutdown.log').write_text(traceback.format_exc(),encoding='utf-8')
+            if not failed:raise
+        finally:
+            cleanup_test_directory(sandbox,diagnostics,failed or sys.exc_info()[0] is not None)
     return 0
 
 
