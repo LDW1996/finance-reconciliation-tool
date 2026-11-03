@@ -164,7 +164,7 @@ def test_combined_tolerance_marks_original_rows_and_separates_exceptions():
     rows_by_key = {raw.cell(row, key_col).value: row for row in range(2, raw.max_row + 1)}
     assert raw.cell(rows_by_key["EXACT"], 1).fill.fgColor.rgb == "FFD2EEDA"
     assert raw.cell(rows_by_key["NEAR"], 1).fill.fgColor.rgb == "FFFFF2CC"
-    assert raw.cell(rows_by_key["DIFF"], 1).fill.patternType is None
+    assert raw.cell(rows_by_key["DIFF"], 1).fill.fgColor.rgb == "FFD7B899"
     assert raw.cell(rows_by_key["ONLY"], 1).fill.patternType is None
     assert result.output_filename == "1703_2615_原表标色.xlsx"
 
@@ -235,6 +235,22 @@ def test_one_rupiah_difference_colors_every_row_and_export_summary(tolerance, ex
     assert marked.summary['容差匹配']['分配数量']==(2 if expected_yellow else 0)
     for row in sheet.iter_rows(min_row=2):
         for cell in row:
-            assert (cell.fill.fgColor.rgb=='FFFFF2CC') is expected_yellow
+            assert cell.fill.fgColor.rgb==('FFFFF2CC' if expected_yellow else 'FFD7B899')
     detailed=reconcile_combined_workbook(BytesIO(raw),'one.xlsx',tolerance=tolerance,output_mode='detailed')
     assert detailed.summary['容差匹配']==marked.summary['容差匹配']
+
+
+def test_amount_discrepancy_marks_all_source_rows_coffee_without_counting_as_match():
+    rows=[{'公司代码or伙伴公司':company,'分配':key,'原币金额':amount}
+          for company,key,amount in [('1703','DIFF',600),('1703','DIFF',400),
+                                     ('2615','DIFF',-700),('1703','ONLY',50),
+                                     ('1703','EXACT',200),('2615','EXACT',-200)]]
+    result=reconcile_combined_workbook(workbook_bytes(rows),'diff.xlsx',tolerance=100,output_mode='marked')
+    sheet=load_workbook(BytesIO(result.excel_bytes)).active
+    assert result.summary['金额差异']['明细行数']==3
+    assert result.summary['匹配成功']['明细行数']==2
+    for row in sheet.iter_rows(min_row=2):
+        if row[1].value=='DIFF':
+            assert all(c.fill.patternType=='solid' and c.fill.fgColor.rgb=='FFD7B899' for c in row)
+        elif row[1].value=='ONLY':
+            assert all(c.fill.patternType is None for c in row)

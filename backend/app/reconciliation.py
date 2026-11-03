@@ -410,7 +410,8 @@ def reconcile_combined_workbook(
             company_field, company_a_code, company_b_code,
         )["匹配成功"]
     if output_mode == "marked":
-        excel_bytes = _write_marked_data_excel(source_bytes, filename, df, match_field, match_type_by_key)
+        color_by_key = {key: match_type_by_key[key] or status for key, status in status_by_key.items()}
+        excel_bytes = _write_marked_data_excel(source_bytes, filename, df, match_field, color_by_key)
     else:
         exceptions = pd.concat([differences, unmatched], ignore_index=True)
         difference_summary = _build_difference_summary(
@@ -514,6 +515,7 @@ def _write_marked_data_excel(
     fills = {
         "完全一致": PatternFill("solid", fgColor=MATCH_GREEN),
         "容差匹配": PatternFill("solid", fgColor="FFFFF2CC"),
+        "金额差异": PatternFill("solid", fgColor="FFD7B899"),
     }
     for excel_row, key in enumerate(_normalize_match_key(raw_data[match_field]), start=2):
         fill = fills.get(match_type_by_key.get(key, ""))
@@ -648,7 +650,7 @@ def _write_rule_section(ws, summary_df: pd.DataFrame, tolerance: float, locale: 
         ("核对规则", "说明"),
         ("完全一致", f"分配字段一致，且{company_a}与{company_b}的原币金额汇总后相加等于0；标绿色。"),
         ("容差匹配", f"双方均存在且差额绝对值大于0、不超过 IDR {tolerance:g}；标黄色。"),
-        ("金额差异", f"分配字段在两家公司都存在，但差额绝对值超过 IDR {tolerance:g}。"),
+        ("金额差异", f"分配字段在两家公司都存在，但差额绝对值超过 IDR {tolerance:g}；原表标色模式下标咖啡色，仍归为金额差异。"),
         ("未匹配", "分配字段仅存在于其中一家公司；分配为空的记录也归入未匹配。"),
         ("金额口径", f"本文件{company_a}和{company_b}的原币均为IDR，因此直接使用“原币金额”核对。"),
     ]
