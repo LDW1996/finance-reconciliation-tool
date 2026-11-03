@@ -20,7 +20,11 @@ def describe_failure(error, phase='任务调度', attempt=0, limit=3):
     base = code & 0xff if isinstance(code, int) else None
     kind = 'internal_error'
     retryable = False
-    if isinstance(error, BrokenProcessPool):
+    if getattr(type(error), 'ocr_quarantined', False):
+        kind = 'worker_quarantined'
+    elif getattr(type(error), 'attachment_changed', False):
+        kind, retryable = 'attachment_changed', True
+    elif isinstance(error, BrokenProcessPool):
         kind, retryable = 'worker_pool_broken', True
     elif isinstance(error, MemoryError):
         kind = 'memory_low'
@@ -41,6 +45,8 @@ def describe_failure(error, phase='任务调度', attempt=0, limit=3):
     elif isinstance(error, OSError):
         kind = 'unknown_io'
     details = {
+        'worker_quarantined': ('OCR 进程终止受阻，已暂停创建新进程', '检查进程终止权限，必要时重启应用或系统；旧进程回收后再手动重试'),
+        'attachment_changed': ('邮件附件在识别期间发生变化', '重新读取当前附件后重试'),
         'worker_pool_broken': ('分析进程意外退出', '重新建立分析进程后重试'),
         'database_busy': ('数据库暂时被占用', '稍后重新执行任务'),
         'disk_full': ('存储空间不足', '释放磁盘空间后手动重试'),

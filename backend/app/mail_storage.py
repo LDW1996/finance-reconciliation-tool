@@ -92,7 +92,14 @@ class AnalysisQueue:
             return row[0],bool(row[1])
 
     def done(self,identity):
-        with self.store.db() as db:db.execute('DELETE FROM mail_analysis_queue WHERE mail_id=?',(identity,))
+        # Serialize the final evidence check and acknowledgement with mail saves.
+        # The controller's earlier read may predate a newly committed attachment.
+        from .outlook_probe import StaleAttachmentError
+        with self.store.db() as db:
+            for payload, in db.execute('SELECT metadata FROM mail_attachment WHERE mail_id=?',(identity,)):
+                if self.store.decode(payload).get('status') in ('pending','running'):
+                    raise StaleAttachmentError('Mail changed before queue acknowledgement')
+            db.execute('DELETE FROM mail_analysis_queue WHERE mail_id=?',(identity,))
 
     def release(self, identity):
         with self.store.db() as db:

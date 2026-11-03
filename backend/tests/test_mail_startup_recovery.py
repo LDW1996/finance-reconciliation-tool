@@ -10,11 +10,8 @@ def manager(tmp_path):
 
 def test_settings_write_failure_never_leaves_phantom_busy(tmp_path,monkeypatch):
     m=manager(tmp_path)
-    original=m.store.set_state
-    def fail(key,value):
-        if key=='poll_settings':raise sqlite3.OperationalError('database is locked')
-        return original(key,value)
-    monkeypatch.setattr(m.store,'set_state',fail)
+    def fail(value):raise sqlite3.OperationalError('configuration storage unavailable')
+    monkeypatch.setattr(m.poll_settings,'save',fail)
     with pytest.raises(sqlite3.OperationalError):m.start('s','f',7,100)
     assert not m.state['busy']
     assert m.state['error'] and not m.state['enabled']
@@ -33,7 +30,7 @@ def test_thread_creation_failure_clears_busy(tmp_path,monkeypatch):
 def test_failed_configuration_is_not_applied(tmp_path,monkeypatch):
     m=manager(tmp_path)
     def fail(*a):raise sqlite3.OperationalError('database is locked')
-    monkeypatch.setattr(m.store,'set_state',fail)
+    monkeypatch.setattr(m.poll_settings,'save',fail)
     with pytest.raises(sqlite3.OperationalError):m.configure(True,'s','f',7,100,60)
     assert not m.state['enabled'] and not m.state['busy']
 

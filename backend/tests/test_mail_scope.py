@@ -146,7 +146,7 @@ def test_fixed_date_poll_stops_when_archive_range_finishes(tmp_path,monkeypatch)
     manager.configure(True,'pst','a',90,100,300,folders=[dict(store='pst',folder='a')],start_date='2026-08-01',end_date='2026-08-31')
     wait(manager)
     assert manager.status()['enabled'] is False
-    assert manager.store.get_state('poll_settings')['enabled'] is False
+    assert manager.poll_settings.load()['enabled'] is False
 
 
 def test_non_mail_folders_are_not_scanned_but_children_can_be(monkeypatch):

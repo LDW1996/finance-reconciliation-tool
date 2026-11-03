@@ -44,7 +44,12 @@ class MailDatabase:
             record('mail_database_transaction_failed',error,elapsed_seconds=perf_counter()-started,write=write)
             raise
         finally:
-            if db is not None:db.close()
-            if acquired:self.writer.release()
+            try:
+                if db is not None:db.close()
+            except Exception as error:
+                record('mail_database_close_failed',error,write=write)
+                raise
+            finally:
+                if acquired:self.writer.release()
             elapsed=perf_counter()-started
             if elapsed>=2:record('mail_database_transaction_slow',elapsed_seconds=elapsed,write=write)

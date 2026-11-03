@@ -28,6 +28,8 @@ hiddenimports = [
     "app.ilog_metrics",
     "app.outlook_probe",
     "app.mail_database",
+    "app.mail_poll_settings",
+    "app.mail_workers",
     "app.mail_tasks",
     "app.mail_matching",
     "app.mail_insights",

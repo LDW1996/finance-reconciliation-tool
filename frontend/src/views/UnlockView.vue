@@ -56,12 +56,12 @@
             <el-alert v-if="taskState === 'completed' && attentionCount" class="unlock-attention-summary" type="warning" :closable="false" :title="`本批已结束，${attentionCount} 项需人工核实，未自动重提解锁。`"><template #default><el-button link type="primary" @click="filter = 'attention'">只看待处理项</el-button></template></el-alert>
             <div v-if="!rows.length" class="unlock-empty"><el-icon><List /></el-icon><h3>逐笔结果将在这里显示</h3><p>平台响应、复查状态与异常原因都会保留。</p></div>
             <el-table v-else :data="filteredRows" height="420" empty-text="没有符合条件的结果" :row-class-name="rowClassName">
-              <el-table-column type="index" label="#" width="44"/>
-              <el-table-column prop="bill" label="提单号" min-width="185"/>
+              <el-table-column type="index" label="#" width="44" fixed="left"/>
+              <el-table-column prop="bill" label="提单号" width="185" fixed="left"/>
+              <el-table-column label="结果" width="150" fixed="left"><template #default="{ row }"><el-tag :type="statusStyle(row.status)" size="small" round>{{ statusText(row.status,row.detail) }}</el-tag></template></el-table-column>
               <el-table-column prop="businessNo" label="业务号" min-width="160"><template #default="{row}">{{ row.businessNo || row.detail?.before?.booking || '—' }}</template></el-table-column>
               <el-table-column label="类型" min-width="100"><template #default="{ row }">{{ row.kind === 'fee' ? '费用解锁' : '订单解锁' }}</template></el-table-column>
               <el-table-column label="实际使用账号" min-width="180"><template #default="{ row }">{{ row.actualAccountName || '—' }}<el-tag v-if="(row.attempts?.length || 0) > 1" size="small" type="info">兜底</el-tag><div v-for="(attempt,i) in row.attempts || []" :key="i" style="font-size:12px;color:var(--ink-muted)">{{ attempt.accountName }}：{{ attemptText(attempt.status) }}</div></template></el-table-column>
-              <el-table-column label="结果" min-width="125"><template #default="{ row }"><el-tag :type="statusStyle(row.status)" size="small" round>{{ statusText(row.status,row.detail) }}</el-tag></template></el-table-column>
               <el-table-column label="平台响应" min-width="120"><template #default="{ row }">{{ row.detail?.platform_success === true ? '明确成功' : row.detail?.platform_success === false ? '明确拒绝' : '—' }}</template></el-table-column>
               <el-table-column label="锁状态复查" min-width="120"><template #default="{ row }">{{ row.detail?.before?.lock || '—' }} → {{ row.detail?.after?.lock || '—' }}</template></el-table-column>
               <el-table-column label="分阶段耗时" min-width="160"><template #default="{row}"><div v-for="(timing,i) in row.detail?.detail?.timings || row.detail?.timings || []" :key="i">{{ timing.stage }}：{{ timing.seconds }} 秒</div><span v-if="!(row.detail?.detail?.timings || row.detail?.timings)?.length">—</span></template></el-table-column><el-table-column label="说明" min-width="180"><template #default="{row}">{{ row.detail?.status === 'voyage_platform_confirmed' ? cleanMessage(row.detail?.reason || '航次平台确认，全航次影响数量未提供') : row.message }}</template></el-table-column>
@@ -98,11 +98,11 @@
     <el-dialog v-model="historyDetailOpen" append-to-body class="bill-review-dialog" title="历史任务详情" width="min(1100px,94vw)" top="4vh">
       <p>{{ historyTask?.accountName }} · {{ formatDate(historyTask?.createdAt) }}</p>
       <el-table :data="historyTask?.rows || []" max-height="480" empty-text="暂无记录">
-        <el-table-column prop="bill" label="单号" min-width="180"/>
+        <el-table-column prop="bill" label="单号" width="185" fixed="left"/>
+        <el-table-column label="结果" width="150" fixed="left"><template #default="{ row }">{{ statusText(row.status,row.detail) }}</template></el-table-column>
         <el-table-column label="业务号" min-width="160"><template #default="{row}">{{ row.businessNo || row.detail?.before?.booking || '—' }}</template></el-table-column>
         <el-table-column label="类型" width="100"><template #default="{ row }">{{ row.kind==='fee' ? '小锁' : '大锁' }}</template></el-table-column>
         <el-table-column prop="actualAccountName" label="实际账号" min-width="170"/>
-        <el-table-column label="结果" min-width="130"><template #default="{ row }">{{ statusText(row.status,row.detail) }}</template></el-table-column>
         <el-table-column label="说明" min-width="240"><template #default="{ row }">{{ cleanMessage(row.detail?.status === 'voyage_platform_confirmed' ? row.detail?.reason || '航次平台确认，全航次影响数量未提供' : row.message) }}</template></el-table-column>
         <el-table-column label="截图" width="110"><template #default="{ row,$index }"><el-link v-if="row.detail?.screenshot" :href="`/api/ilog/tasks/${historyTask?.id}/evidence/${$index}`" target="_blank" rel="noopener" type="primary">查看截图</el-link><span v-else>{{ row.detail?.screenshotExpired ? '已过期清理' : '无截图' }}</span></template></el-table-column>
       </el-table>

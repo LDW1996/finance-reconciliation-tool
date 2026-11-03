@@ -21,6 +21,12 @@ from cryptography.fernet import Fernet
 from .mail_attachments import capture_attachment, MAX_MAIL_BYTES, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS
 
 
+class StaleAttachmentError(sqlite3.OperationalError):
+    """The attachment/mail snapshot changed while recognition was in flight."""
+    attachment_changed = True
+    sqlite_errorcode = sqlite3.SQLITE_BUSY
+
+
 def candidates(text):
     found = []
     for value in re.findall(r'(?<![A-Za-z0-9])[A-Za-z0-9]{8,40}(?![A-Za-z0-9])', text.upper()):
@@ -311,15 +317,21 @@ class MailStore:
             if row is None:return None
             encrypted=row[2] if row[2] is not None else row[1]
             return {**self.decode(row[0]),'raw':self.cipher.decrypt(encrypted) if encrypted else b''}
-    def update_attachment(self, mail_id, identity, **changes):
+    def update_attachment(self, mail_id, identity, *, expected_sha256=None, **changes):
         from .mail_assets import without_previews
         with self.db() as db:
             row=db.execute('SELECT metadata FROM mail_attachment WHERE mail_id=? AND id=?',(mail_id,identity)).fetchone()
-            if row:
-                metadata={**self.decode(row[0]),**changes}
-                available=db.execute('''SELECT 1 FROM mail_attachment a LEFT JOIN mail_attachment_blob_ref r ON r.attachment_id=a.id LEFT JOIN mail_blob b ON b.digest=r.digest WHERE a.id=? AND (LENGTH(a.content)>100 OR LENGTH(b.content)>100)''',(identity,)).fetchone()
-                if available:metadata=without_previews(metadata)
-                db.execute('UPDATE mail_attachment SET metadata=? WHERE id=?',(self.encode(metadata),identity))
+            if row is None:
+                if expected_sha256 is not None:
+                    raise StaleAttachmentError('Attachment removed during recognition')
+                return
+            current=self.decode(row[0])
+            if expected_sha256 is not None and current.get('sha256') != expected_sha256:
+                raise StaleAttachmentError('Attachment changed during recognition')
+            metadata={**current,**changes}
+            available=db.execute('''SELECT 1 FROM mail_attachment a LEFT JOIN mail_attachment_blob_ref r ON r.attachment_id=a.id LEFT JOIN mail_blob b ON b.digest=r.digest WHERE a.id=? AND (LENGTH(a.content)>100 OR LENGTH(b.content)>100)''',(identity,)).fetchone()
+            if available:metadata=without_previews(metadata)
+            db.execute('UPDATE mail_attachment SET metadata=? WHERE id=?',(self.encode(metadata),identity))
     def get_state(self, key, default=None):
         with self.db(write=False) as db:
             row=db.execute('SELECT payload FROM mail_state WHERE key=?',(key,)).fetchone()
