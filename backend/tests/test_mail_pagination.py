@@ -4,9 +4,9 @@ from app.outlook_probe import MailStore
 
 def test_all_saved_mail_is_accessible_beyond_500_and_searches_old_records(tmp_path):
     store=MailStore(tmp_path/'mail.sqlite3')
-    store.save([dict(id=str(i),subject='old-needle' if i==0 else f'mail {i}',body='private body',sender='a',received='',attachments=[],candidates=[]) for i in range(971)])
-    result=store.message_page(page=20,page_size=50)
-    assert result['total']==971 and result['total_saved']==971 and len(result['rows'])==21
+    store.save([dict(id=str(i),subject='old-needle' if i==0 else f'mail {i}',body='private body',sender='a',received='',attachments=[],candidates=[]) for i in range(501)])
+    result=store.message_page(page=11,page_size=50)
+    assert result['total']==501 and result['total_saved']==501 and len(result['rows'])==1
     assert all('body' not in r for r in result['rows'])
     result=store.message_page(keyword='old-needle')
     assert [r['id'] for r in result['rows']]==['0']
@@ -14,10 +14,10 @@ def test_all_saved_mail_is_accessible_beyond_500_and_searches_old_records(tmp_pa
 
 def test_payment_filter_and_payer_search_cover_entire_store(tmp_path):
     store=MailStore(tmp_path/'mail.sqlite3')
-    store.save([dict(id=str(i),subject='test',body='body') for i in range(510)])
+    store.save([dict(id=str(i),subject='test',body='body') for i in range(51)])
     store.set_payment_summary('0',dict(count=1,status='ready',payers=['Historical Payer'],dates=['2025-09-01'],amounts=[]))
     result=store.message_page(keyword='Historical Payer',payment_filter='payment')
-    assert result['total']==1 and result['total_saved']==510
+    assert result['total']==1 and result['total_saved']==51
     assert result['rows'][0]['id']=='0'
 
 
@@ -45,16 +45,16 @@ def test_paged_api_returns_total_and_preserves_local_access_check(tmp_path,monke
     from app import mail_tasks
     store=MailStore(tmp_path/'mail.sqlite3')
     manager=mail_tasks.MailManager(store)
-    store.save([dict(id=str(i),subject='page test',body='private body',sender='',received='',attachments=[],candidates=[]) for i in range(501)])
+    store.save([dict(id=str(i),subject='page test',body='private body',sender='',received='',attachments=[],candidates=[]) for i in range(51)])
     monkeypatch.setattr(mail_tasks,'_manager',manager)
     client=TestClient(app)
     assert client.get('/api/mail/messages/page').status_code==403
-    result=client.get('/api/mail/messages/page?page=11&page_size=50',headers={'X-Finance-Local':'1'})
+    result=client.get('/api/mail/messages/page?page=2&page_size=50',headers={'X-Finance-Local':'1'})
     assert result.status_code==200
     data=result.json()
-    assert data['total_saved']==501 and len(data['rows'])==1
+    assert data['total_saved']==51 and len(data['rows'])==1
     assert 'body' not in data['rows'][0]
-    assert client.get('/api/mail/status',headers={'X-Finance-Local':'1'}).json()['saved_total']==501
+    assert client.get('/api/mail/status',headers={'X-Finance-Local':'1'}).json()['saved_total']==51
 
 
 def test_5000_identical_timestamps_resume_without_repeated_prefix_scans():

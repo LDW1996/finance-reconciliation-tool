@@ -111,7 +111,7 @@ jobs:
           if ('${{ matrix.edition }}' -eq 'excel') {
             python -m pytest backend\tests\test_excel_edition.py backend\tests\test_reconciliation.py backend\tests\test_launcher.py -q --durations=25 --durations-min=0.1
           } else {
-            python -m pytest backend\tests -q --durations=25 --durations-min=0.1
+            python -m pytest backend\tests -q -n 2 --dist=loadfile --durations=25 --durations-min=0.1
           }
         env:
           PYTHONPATH: backend

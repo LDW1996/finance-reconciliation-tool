@@ -22,15 +22,17 @@ def paused_manager(tmp_path):
     manager.selection=('store','folder',90,100);manager.selection_options={}
     manager.state.update(enabled=True,seconds=300)
     manager.store.set_state('sync_progress',dict(cursor={'position':17}))
-    for i in range(100):manager.analysis_queue.append((str(i),False))
+    manager.analysis_queue.extend((str(i),False) for i in range(100))
     manager._run('store','folder',90,100)
     return manager,calls
 
 
 def drain(manager, count):
-    for _ in range(count):
-        identity,_=manager.analysis_queue.popleft()
-        manager.analysis_queue.done(identity)
+    # These tests exercise low-water scheduling, not individual queue writes.
+    with manager.store.db() as db:
+        ids=db.execute('SELECT mail_id FROM mail_analysis_queue WHERE claimed=0 ORDER BY rowid LIMIT ?', (count,)).fetchall()
+        assert len(ids)==count
+        db.executemany('DELETE FROM mail_analysis_queue WHERE mail_id=?', ids)
 
 
 def test_low_water_schedules_quick_resume_and_retains_cursor(tmp_path):

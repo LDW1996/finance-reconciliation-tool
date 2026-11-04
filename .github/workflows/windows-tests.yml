@@ -38,6 +38,6 @@ jobs:
       - name: Install Python dependencies
         run: python -m pip install --disable-pip-version-check -r packaging/requirements-build.txt
       - name: Run tests
-        run: python -m pytest backend/tests -q --durations=25 --durations-min=0.1
+        run: python -m pytest backend/tests -q -n 2 --dist=loadfile --durations=25 --durations-min=0.1
         env:
           PYTHONPATH: backend

@@ -68,7 +68,11 @@ def test_encrypted_state_and_payments_are_not_limited_to_ui_list(tmp_path):
     store=MailStore(tmp_path/'mail.sqlite3')
     store.set_state('private',{'value':'SENSITIVE_STATE'})
     assert store.get_state('private')['value']=='SENSITIVE_STATE'
-    for i in range(501): store.set_payments(str(i),[{'id':str(i),'payer':'SENSITIVE_PAYER'}])
+    # Keep a real public write, then batch-seed the pagination fixture.
+    store.set_payments('0',[{'id':'0','payer':'SENSITIVE_PAYER'}])
+    with store.db() as db:
+        db.executemany('INSERT INTO mail_payments VALUES(?,?)',
+                       [(str(i),store.encode([{'id':str(i),'payer':'SENSITIVE_PAYER'}])) for i in range(1,501)])
     assert len(store.payment_rows())==501
     raw=(tmp_path/'mail.sqlite3').read_bytes()
     assert b'SENSITIVE_STATE' not in raw and b'SENSITIVE_PAYER' not in raw
