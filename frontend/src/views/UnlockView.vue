@@ -40,21 +40,21 @@
             </div>
             <el-text v-if="inspections[kind.key].some(r => r.status === 'invalid')" type="danger">有格式异常的单号，请在核对清单中查看并返回修改。</el-text>
           </section>
-          </div><div class="execution-options"><label>截图方式 <el-radio-group v-model="screenshotPolicy" :disabled="busy" aria-label="截图方式" size="small"><el-radio-button value="errors">仅异常保存</el-radio-button><el-radio-button value="all">每笔保存</el-radio-button><el-radio-button value="none">不保存</el-radio-button></el-radio-group></label><label>分阶段耗时 <el-switch v-model="recordTimings" :disabled="busy"/></label></div><div class="unlock-input-actions"><el-button class="unlock-start" size="large" type="primary" :disabled="busy || resetting || !taskSyncReady || !reviewRows.length || !selectedAccount" :icon="VideoPlay" :loading="previewLoading" @click="scope === 'voyage' ? queryVoyages() : openReview()">{{ scope === 'voyage' ? '查询航次并核对' : '校验单号并核对清单' }}</el-button></div>
+          </div><div class="execution-options"><label>执行模式 <el-radio-group v-model="verifyAfter" :disabled="busy" aria-label="执行模式" size="small"><el-radio-button :value="true">标准模式（复查）</el-radio-button><el-radio-button :value="false">快速模式（不复查）</el-radio-button></el-radio-group></label><label class="screenshot-options">截图方式 <el-radio-group v-model="screenshotPolicy" :disabled="busy" aria-label="截图方式" size="small"><el-radio-button value="errors">仅异常保存</el-radio-button><el-radio-button value="all">每笔保存</el-radio-button><el-radio-button value="none">不保存</el-radio-button></el-radio-group></label><label class="timing-option">分阶段耗时 <el-switch v-model="recordTimings" :disabled="busy"/></label></div><div class="unlock-input-actions"><el-button class="unlock-start" size="large" type="primary" :disabled="busy || resetting || !taskSyncReady || !reviewRows.length || !selectedAccount" :icon="VideoPlay" :loading="previewLoading" @click="scope === 'voyage' ? queryVoyages() : openReview()">{{ scope === 'voyage' ? '查询航次并核对' : '校验单号并核对清单' }}</el-button></div>
           <p v-if="!runtimeAvailable" class="demo-note">{{ runtimeMessage }}</p>
         </aside>
 
         <section class="unlock-execution"><section v-if="scope==='voyage'" class="voyage-review" aria-live="polite"><h3>航次核对</h3><el-alert title="本次操作影响整个航次，不仅是输入提单。" type="warning" :closable="false"/><p v-if="!preview">输入代表提单并查询后核对实际账号、船名航次及类型。</p><template v-else><el-alert v-for="(issue,i) in preview.issues" :key="i" :title="issue.bill+' · '+issue.kind+'：'+issue.message" type="error" :closable="false"/><el-select v-model="groupKey" aria-label="选择航次分组"><el-option v-for="g in preview.groups" :key="g.key" :value="g.key" :label="g.account_name+' · '+g.ship+'/'+g.voyage+' · '+(g.kind==='fee'?'费用小锁':'订单大锁')"/></el-select><template v-if="group"><dl><dt>输入代表提单</dt><dd>{{ group.bills?.join('、') || group.bill }}</dd><dt>实际账号</dt><dd>{{ group.account_name }}</dd><dt>船名 / 航次</dt><dd>{{ group.ship || '—' }} / {{ group.voyage || '—' }}</dd><dt>类型</dt><dd>{{ group.kind==='fee'?'费用小锁':'订单大锁' }}</dd><dt>查询匹配条数</dt><dd>{{ group.records.length }} 条（非全航次数）</dd></dl><details><summary>查看查询匹配明细</summary><el-table :data="group.records" max-height="260"><el-table-column v-for="c in ['id','booking','mbl','hbl','lock','ship','voyage']" :key="c" :prop="c" :label="({id:'记录ID',booking:'业务号',mbl:'主提单',hbl:'分提单',lock:'锁状态',ship:'船名',voyage:'航次'} as Record<string,string>)[c]" min-width="120"/></el-table></details></template><p>实际影响数量尚未确定，请核对全部分组。</p><p v-if="expired">预览已过期，请重新查询。</p><el-checkbox v-model="voyageAcknowledged" :disabled="!preview.can_execute || !!preview.issues.length || expired">已核对全部分组，确认按航次执行</el-checkbox></template><el-button type="primary" :loading="submitting" :disabled="!canExecuteVoyage || busy || !taskSyncReady || !runtimeAvailable" @click="start">确认按航次解锁</el-button></section>
           <section v-if="scope === 'bill' || rows.length" class="unlock-progress-panel">
             <div class="unlock-section-heading"><h2>执行进度</h2><div v-if="taskState === 'running' || taskState === 'paused'"><el-button :disabled="controlling" :icon="paused ? VideoPlay : VideoPause" @click="controlTask(paused ? 'resume' : 'pause')">{{ paused ? '继续剩余项' : '暂停后续项' }}</el-button><el-button :disabled="controlling" @click="cancelRemaining">取消剩余项</el-button></div><el-tag v-else effect="plain" :type="attentionCount ? 'warning' : rows.length ? 'success' : 'info'">{{ rows.length ? '任务已结束' : '等待开始' }}</el-tag></div>
-            <div class="progress-number">{{ done }}<span>/ {{ rows.length || total }}</span><small>{{ paused ? '已暂停后续项' : taskState === 'running' ? '真实处理中' : rows.length ? '条已处理' : '条待处理' }}</small></div>
+            <p v-if="taskId">{{ taskVerifyAfter ? '标准模式（复查）' : '快速模式（不复查）' }}</p><div class="progress-number">{{ done }}<span>/ {{ rows.length || total }}</span><small>{{ paused ? '已暂停后续项' : taskState === 'running' ? '真实处理中' : rows.length ? '条已处理' : '条待处理' }}</small></div>
             <el-progress :percentage="percentage" :show-text="false" :stroke-width="12" color="var(--accent)" />
             <div class="progress-description"><span>{{ currentRow ? `正在处理 ${currentRow.bill}` : paused ? '已暂停，继续将跳过待核实项。' : rows.length ? `任务账号：${taskAccountName}` : '等待提交任务' }}</span><span v-if="pollError" class="progress-tip" role="alert"><el-icon><InfoFilled /></el-icon>{{ pollError }}</span></div>
           </section>
           <section v-if="scope === 'bill' || rows.length" class="unlock-results-panel">
-            <div class="unlock-section-heading"><h2>执行结果</h2><el-select v-model="filter" aria-label="筛选结果" style="width:150px" size="small"><el-option label="全部结果" value="all"/><el-option label="核实通过" value="success"/><el-option label="待人工处理" value="attention"/><el-option label="等待处理" value="waiting"/><el-option label="已取消" value="cancelled"/></el-select></div>
+            <div class="unlock-section-heading"><h2>执行结果</h2><el-select v-model="filter" aria-label="筛选结果" style="width:150px" size="small"><el-option label="全部结果" value="all"/><el-option label="处理成功" value="success"/><el-option label="待人工处理" value="attention"/><el-option label="等待处理" value="waiting"/><el-option label="已取消" value="cancelled"/></el-select></div>
             <el-alert v-if="taskState === 'completed' && attentionCount" class="unlock-attention-summary" type="warning" :closable="false" :title="`本批已结束，${attentionCount} 项需人工核实，未自动重提解锁。`"><template #default><el-button link type="primary" @click="filter = 'attention'">只看待处理项</el-button></template></el-alert>
-            <div v-if="!rows.length" class="unlock-empty"><el-icon><List /></el-icon><h3>逐笔结果将在这里显示</h3><p>平台响应、复查状态与异常原因都会保留。</p></div>
+            <div v-if="!rows.length" class="unlock-empty"><el-icon><List /></el-icon><h3>逐笔结果将在这里显示</h3><p>平台响应、锁状态与异常原因都会保留；是否复查取决于任务模式。</p></div>
             <el-table v-else :data="filteredRows" height="420" empty-text="没有符合条件的结果" :row-class-name="rowClassName">
               <el-table-column type="index" label="#" width="44" fixed="left"/>
               <el-table-column prop="bill" label="提单号" width="185" fixed="left"/>
@@ -63,7 +63,7 @@
               <el-table-column label="类型" min-width="100"><template #default="{ row }">{{ row.kind === 'fee' ? '费用解锁' : '订单解锁' }}</template></el-table-column>
               <el-table-column label="实际使用账号" min-width="180"><template #default="{ row }">{{ row.actualAccountName || '—' }}<el-tag v-if="(row.attempts?.length || 0) > 1" size="small" type="info">兜底</el-tag><div v-for="(attempt,i) in row.attempts || []" :key="i" style="font-size:12px;color:var(--ink-muted)">{{ attempt.accountName }}：{{ attemptText(attempt.status) }}</div></template></el-table-column>
               <el-table-column label="平台响应" min-width="120"><template #default="{ row }">{{ row.detail?.platform_success === true ? '明确成功' : row.detail?.platform_success === false ? '明确拒绝' : '—' }}</template></el-table-column>
-              <el-table-column label="锁状态复查" min-width="120"><template #default="{ row }">{{ row.detail?.before?.lock || '—' }} → {{ row.detail?.after?.lock || '—' }}</template></el-table-column>
+              <el-table-column label="锁状态复查" min-width="120"><template #default="{ row }">{{ row.detail?.before?.lock || '—' }} → {{ row.detail?.verification_performed === false ? '未复查' : row.detail?.after?.lock || '—' }}</template></el-table-column>
               <el-table-column label="分阶段耗时" min-width="160"><template #default="{row}"><div v-for="(timing,i) in row.detail?.detail?.timings || row.detail?.timings || []" :key="i">{{ timing.stage }}：{{ timing.seconds }} 秒</div><span v-if="!(row.detail?.detail?.timings || row.detail?.timings)?.length">—</span></template></el-table-column><el-table-column label="说明" min-width="180"><template #default="{row}">{{ row.detail?.status === 'voyage_platform_confirmed' ? cleanMessage(row.detail?.reason || '航次平台确认，全航次影响数量未提供') : row.message }}</template></el-table-column>
               <el-table-column prop="time" label="处理时间" width="100"/>
               <el-table-column label="凭证" width="110"><template #default="{ row }"><el-link v-if="row.detail?.screenshot" :href="`/api/ilog/tasks/${encodeURIComponent(taskId)}/evidence/${row.evidenceIndex}`" target="_blank" rel="noopener" type="primary">查看截图</el-link><span v-else>{{ row.detail?.screenshotExpired ? '已过期清理' : '—' }}</span></template></el-table-column>
@@ -96,7 +96,7 @@
       <div class="management-footer"><el-pagination v-model:current-page="historyPage" :page-size="20" :total="historyTotal" layout="prev,pager,next,total" @current-change="loadHistory"/></div>
     </section>
     <el-dialog v-model="historyDetailOpen" append-to-body class="bill-review-dialog" title="历史任务详情" width="min(1100px,94vw)" top="4vh">
-      <p>{{ historyTask?.accountName }} · {{ formatDate(historyTask?.createdAt) }}</p>
+      <p>{{ historyTask?.accountName }} · {{ formatDate(historyTask?.createdAt) }} · {{ historyTask?.verify_after === false ? '快速模式（不复查）' : '标准模式（复查）' }}</p>
       <el-table :data="historyTask?.rows || []" max-height="480" empty-text="暂无记录">
         <el-table-column prop="bill" label="单号" width="185" fixed="left"/>
         <el-table-column label="结果" width="150" fixed="left"><template #default="{ row }">{{ statusText(row.status,row.detail) }}</template></el-table-column>
@@ -138,7 +138,7 @@
       </el-table>
       <el-checkbox v-model="reviewAcknowledged" style="margin-top:16px;white-space:normal">我已核对主账号、兜底账号、单号及大小锁类型，并授权本次真实解锁</el-checkbox>
       <el-text v-if="total > 2000" type="danger">每批最多 2000 项，请返回拆分。</el-text>
-      <p class="demo-note">将实际修改 iLog 锁状态。单笔异常不阻断后续项，解锁提交不自动重试；只读复查最多重试三次。暂停仅停止后续项。</p>
+      <p class="demo-note">将实际修改 iLog 锁状态。单笔异常不阻断后续项，解锁提交不自动重试；{{ verifyAfter ? '标准模式：提交后复查锁状态。' : '快速模式：平台明确成功即记录成功（未复查），不查询最终锁状态。' }}响应不明确则待人工核实。暂停仅停止后续项。</p>
       <template #footer><el-button :disabled="submitting" @click="reviewOpen = false">返回修改</el-button><el-button type="primary" :loading="submitting" :disabled="busy || !runtimeAvailable || !reviewAcknowledged || !!invalidCount || !total || total > 2000" @click="start">确认解锁 {{ total }} 项</el-button></template>
     </el-dialog>
     <el-dialog v-model="accountOpen" :title="editingId ? '编辑业务账号' : '添加业务账号'" width="460px" :close-on-click-modal="!savingAccount" :close-on-press-escape="!savingAccount" :show-close="!savingAccount" @closed="accountPassword = ''">
@@ -163,10 +163,10 @@ import { downloadBlob } from '../services/api'
 import { inspectBills, duplicateBills } from '../services/billValidation.mjs'
 type Kind = 'fee' | 'order'
 type Status = 'waiting' | 'processing' | 'success' | 'attention' | 'cancelled'
-type Detail = { reason?:string; detail?:{timings?:{stage:string;seconds:number}[]}; timings?:{stage:string;seconds:number}[]; status?: string; platform_success?: boolean; before?: {lock?: string;booking?:string}; after?: {lock?: string}; screenshot?: string; screenshotExpired?: boolean }
+type Detail = { verification_performed?: boolean; reason?:string; detail?:{timings?:{stage:string;seconds:number}[]}; timings?:{stage:string;seconds:number}[]; status?: string; platform_success?: boolean; before?: {lock?: string;booking?:string}; after?: {lock?: string}; screenshot?: string; screenshotExpired?: boolean }
 type Attempt = { account: string; accountName: string; status: string }
 type Row = { bill: string; businessNo?:string; kind: Kind; status: Status; message: string; time: string; detail?: Detail; evidenceIndex?: number; actualAccountName?: string; attempts?: Attempt[] }
-type Task = { id: string; account: string; accountName: string; fallbackAccount?: string; fallbackAccountName?: string; state: 'running' | 'paused' | 'completed'; rows: Row[]; createdAt?: string; completedAt?: string }
+type Task = { id: string; account: string; accountName: string; fallbackAccount?: string; fallbackAccountName?: string; state: 'running' | 'paused' | 'completed'; rows: Row[]; verify_after?: boolean; createdAt?: string; completedAt?: string }
 type HistoryItem = Omit<Task,'rows'> & {total:number;attention:number}
 const historyOpen=ref(false), historyDetailOpen=ref(false), historyLoading=ref(false)
 const historyItems=ref<HistoryItem[]>([]), historyTask=ref<Task|null>(null)
@@ -259,7 +259,8 @@ const kinds: { key: Kind; title: string; placeholder: string }[] = [
 ]
 type VoyageGroup={key:string;account_id:string;account_name:string;bill:string;bills:string[];kind:Kind;ship:string;voyage:string;ship_id:string;voyage_id:string;records:{id:string;booking:string;mbl:string;hbl:string;lock:string;ship:string;voyage:string}[];affected_count:null}
 type Preview={token:string;expires_at:string;groups:VoyageGroup[];issues:{bill:string;kind:Kind;message:string}[];can_execute:boolean}
-const scope=ref<'bill'|'voyage'>('bill'),screenshotPolicy=ref<'errors'|'all'|'none'>('errors'),recordTimings=ref(true)
+const taskVerifyAfter=ref(true)
+const scope=ref<'bill'|'voyage'>('bill'),screenshotPolicy=ref<'errors'|'all'|'none'>('errors'),recordTimings=ref(true),verifyAfter=ref(true)
 const preview=ref<Preview|null>(null),previewLoading=ref(false),voyageAcknowledged=ref(false),groupKey=ref(''),previewSignature=ref('')
 const signature=computed(()=>JSON.stringify([scope.value,accountId.value,fallbackEnabled.value,fallbackAccount.value?.id,input.value]))
 const group=computed(()=>preview.value?.groups.find(g=>g.key===groupKey.value))
@@ -312,6 +313,7 @@ const filteredRows = computed(() => filter.value === 'all' ? rows.value : rows.v
 let timer: ReturnType<typeof setTimeout> | undefined
 let disposed = false
 function applyTask(task: Task) {
+  taskVerifyAfter.value=task.verify_after !== false
   taskId.value = task.id; taskState.value = task.state; taskAccountName.value = task.accountName
   accountId.value = task.account
   fallbackEnabled.value = !!task.fallbackAccount; fallbackId.value = task.fallbackAccount || ''
@@ -363,7 +365,7 @@ async function newTask() {
 async function start() {
   if (busy.value || resetting.value || !taskSyncReady.value || !total.value || !selectedAccount.value || invalidCount.value || (scope.value==='voyage' ? !canExecuteVoyage.value || Date.parse(preview.value!.expires_at)<=Date.now() : !reviewOpen.value || !reviewAcknowledged.value)) return
   if (!runtimeAvailable.value || total.value > 2000) return
-  const payload = { account_id: accountId.value, fallback_account_id: fallbackEnabled.value ? fallbackAccount.value?.id || null : null, fee: parsed.value.fee, order: parsed.value.order, confirmed: true, scope:scope.value, ...(scope.value==='voyage'?{preview_token:preview.value!.token}:{}), screenshot_policy:screenshotPolicy.value, record_timings:recordTimings.value }
+  const payload = { account_id: accountId.value, fallback_account_id: fallbackEnabled.value ? fallbackAccount.value?.id || null : null, fee: parsed.value.fee, order: parsed.value.order, confirmed: true, scope:scope.value, ...(scope.value==='voyage'?{preview_token:preview.value!.token}:{}), screenshot_policy:screenshotPolicy.value, record_timings:recordTimings.value, verify_after:verifyAfter.value }
   const signature = JSON.stringify(payload)
   submitting.value = true
   try {
@@ -391,12 +393,12 @@ async function cancelRemaining() {
   try { await ElMessageBox.confirm('只取消尚未开始的单号；当前单会完成并保留结果。','取消剩余项',{type:'warning'}); await controlTask('cancel') } catch { /* User cancelled. */ }
 }
 const rowClassName = ({ row }: { row: Row }) => row.status === 'processing' ? 'active-unlock-row' : ''
-const statusText = (s: Status, detail?: Detail) => detail?.status === 'voyage_platform_confirmed' ? '航次平台确认' : s === 'success' ? ({ verified_fee_unlocked:'小锁已解', verified_unlocked:'复查无锁', already_unlocked:'原本已无锁', already_fee_unlocked:'小锁原本已解' }[detail?.status || ''] || '核实通过') : ({ waiting: '等待处理', processing: '真实处理中', attention: '待人工核实', cancelled: '已取消' }[s])
+const statusText = (s: Status, detail?: Detail) => detail?.status === 'voyage_platform_confirmed' ? (detail.verification_performed === false ? '航次平台成功（未复查）' : '航次平台确认') : s === 'success' ? ({ platform_accepted:'平台返回成功（未复查）', verified_fee_unlocked:'小锁已解', verified_unlocked:'复查无锁', already_unlocked:'原本已无锁', already_fee_unlocked:'小锁原本已解' }[detail?.status || ''] || '核实通过') : ({ waiting: '等待处理', processing: '真实处理中', attention: '待人工核实', cancelled: '已取消' }[s])
 const statusStyle = (s: Status) => ({ waiting: 'info', processing: 'primary', success: 'success', attention: 'warning', cancelled:'info' } as const)[s]
-const attemptText = (status: string) => ({ not_found:'未找到', ambiguous:'多条匹配', verified_unlocked:'成功并复查无锁', verified_fee_unlocked:'小锁已核实解开', already_unlocked:'原本已无锁', already_fee_unlocked:'小锁原本已解', rejected:'平台拒绝', blocked_duplicate:'已阻止重复提交', platform_confirmed:'平台成功，仍需核实', needs_verification:'待核实' }[status] || '待核实')
+const attemptText = (status: string) => ({ platform_accepted:'平台返回成功（未复查）', not_found:'未找到', ambiguous:'多条匹配', verified_unlocked:'成功并复查无锁', verified_fee_unlocked:'小锁已核实解开', already_unlocked:'原本已无锁', already_fee_unlocked:'小锁原本已解', rejected:'平台拒绝', blocked_duplicate:'已阻止重复提交', platform_confirmed:'平台成功，仍需核实', needs_verification:'待核实' }[status] || '待核实')
 function exportResults(task?:Task) {
   const cell = (v: string) => `"${(/^[=+@\-\t\r]/.test(v) ? "'" + v : v).replace(/"/g, '""')}"`
-  const content = [['主账号', '兜底账号', '实际使用账号', '查询路径', '提单号', '业务号', '类型', '结果', '平台响应', '原锁状态', '复查锁状态', '说明', '时间'], ...(task?.rows || rows.value).map(r => [task?.accountName || taskAccountName.value, task ? task.fallbackAccountName || '' : taskFallbackName.value, r.actualAccountName || '', (r.attempts || []).map(a => `${a.accountName}: ${attemptText(a.status)}`).join(' → '), r.bill, r.businessNo || r.detail?.before?.booking || '', r.kind === 'fee' ? '费用解锁' : '订单解锁', statusText(r.status,r.detail), r.detail?.platform_success === true ? '成功' : r.detail?.platform_success === false ? '拒绝' : '未确认', r.detail?.before?.lock || '', r.detail?.after?.lock || '', cleanMessage(r.detail?.status === 'voyage_platform_confirmed' ? r.detail.reason || '航次平台确认，全航次影响数量未提供' : r.message), r.time])].map(r => r.map(cell).join(',')).join('\r\n')
+  const content = [['主账号', '兜底账号', '实际使用账号', '查询路径', '提单号', '业务号', '类型', '结果', '平台响应', '原锁状态', '复查锁状态', '说明', '时间', '执行模式'], ...(task?.rows || rows.value).map(r => [task?.accountName || taskAccountName.value, task ? task.fallbackAccountName || '' : taskFallbackName.value, r.actualAccountName || '', (r.attempts || []).map(a => `${a.accountName}: ${attemptText(a.status)}`).join(' → '), r.bill, r.businessNo || r.detail?.before?.booking || '', r.kind === 'fee' ? '费用解锁' : '订单解锁', statusText(r.status,r.detail), r.detail?.platform_success === true ? '成功' : r.detail?.platform_success === false ? '拒绝' : '未确认', r.detail?.before?.lock || '', r.detail?.verification_performed === false ? '未复查' : r.detail?.after?.lock || '', cleanMessage(r.detail?.status === 'voyage_platform_confirmed' ? r.detail.reason || '航次平台确认，全航次影响数量未提供' : r.message), r.time, (task ? task.verify_after === false : !taskVerifyAfter.value) ? '快速模式（不复查）' : '标准模式（复查）'])].map(r => r.map(cell).join(',')).join('\r\n')
   downloadBlob(new Blob(['\uFEFF', content], { type: 'text/csv;charset=utf-8' }), 'iLog解锁-真实结果.csv')
 }
 const taskAccountName = ref('')
@@ -445,6 +447,6 @@ onBeforeUnmount(() => { disposed = true; clearTimeout(timer);clearInterval(expir
 
 .unlock-workspace-card{display:block;background:var(--el-bg-color);border:1px solid var(--el-border-color-lighter);border-radius:10px;padding:22px;align-self:start}.workspace-card-title{font-size:16px;margin:0 0 16px}.unlock-workspace-card .unlock-account-strip{padding:0;border:0;background:transparent;box-shadow:none;gap:20px;margin-bottom:24px}.unlock-workspace-card .unlock-input-panel{padding:16px}.unlock-workspace-card .unlock-section-heading h2{font-size:16px}.unlock-workspace-card .bill-input-grid textarea{min-height:170px}.unlock-workspace-card .execution-options{padding-top:18px;border-top:1px solid var(--el-border-color-lighter)}.unlock-workspace-card .scope-options{margin-bottom:20px}.unlock-execution .voyage-review{padding:22px}.unlock-input-actions .el-button{width:100%}.unlock-workspace-card .unlock-input-actions{padding:0;margin-top:18px}.unlock-workspace-card .bill-input-grid{margin-bottom:20px}@media(max-width:600px){.unlock-workspace-card{padding:16px}}
 .scope-options strong{font-size:14px;font-weight:600}.scope-options small{display:block;margin-top:5px;font-size:12px;line-height:1.5;color:var(--ink-muted)}
-.execution-options{grid-template-columns:minmax(0,1.6fr) minmax(0,1fr)}.execution-options>label{flex-wrap:wrap;gap:8px;font-size:13px}@media(max-width:600px){.execution-options{grid-template-columns:1fr}}
+.execution-options{display:flex;flex-wrap:wrap;align-items:center;gap:16px 24px}.execution-options>label{display:inline-flex;flex:0 0 auto;flex-wrap:nowrap;align-items:center;gap:10px;font-size:13px;white-space:nowrap}.execution-options .el-radio-group{display:inline-flex;flex-wrap:nowrap}.execution-options .el-switch{flex-shrink:0}.execution-options>.screenshot-options{margin-left:auto}.execution-options>.timing-option{flex-basis:100%}@media(max-width:600px){.execution-options{gap:16px}.execution-options>label{max-width:100%;flex-wrap:wrap}.execution-options>.screenshot-options{margin-left:0}}
 .voyage-review h3{margin:0 0 16px;font-size:18px}.voyage-review>.el-alert{margin-bottom:18px}.voyage-review>.el-button{width:100%;margin-top:18px}
 </style>

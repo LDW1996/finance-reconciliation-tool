@@ -131,14 +131,17 @@ class MailManager:
         if previous.get('status')=='running':
             self.store.set_state('mail_maintenance_job',{**previous,'status':'interrupted','message':'上次存储优化被中断；数据保留，可重新预览并继续。'})
         self.analyzer=analyzer; self.analysis_queue=AnalysisQueue(store); self.analysis_busy=False; self.analysis_current=set()
-        self.analysis_workers=configured_workers(analysis_workers)
+        self.analysis_requested=4 if store.get_state('recognition_mode','light')=='fast' else 2
+        self.analysis_workers=configured_workers(analysis_workers if analysis_workers is not None else self.analysis_requested)
         self.recognition_cache=RecognitionCache(store)
         self.performance=MailPerformance()
         start_cleanup()
         self.read_progress={}
         self._status_counts={'saved_total':0,'analysis_pending':0};self._status_progress={}
         self.state=dict(busy=False,enabled=False,queue_paused=False,analysis_skipped=0,analysis_halted=False,analysis_recovering=False,seconds=300,last_run=None,next_run=None,error='',errors=[],partial=False,new=0,read=0)
-        self.sync=MailSync(store);self.workspace=MailWorkspace(store);self.online=OnlineLedger(self.workspace);self.customer_online=OnlineCustomerMapping(self.workspace)
+        self.sync=MailSync(store);self.workspace=MailWorkspace(store);
+        self.workspace.matches.load_status=lambda:dict(active=len(self.analysis_current),pending=len(self.analysis_queue),workers=self.analysis_workers,busy=bool(self.analysis_busy and not self.state.get('analysis_halted') and not self.maintenance_active and self.platform_permitted()))
+        self.online=OnlineLedger(self.workspace);self.customer_online=OnlineCustomerMapping(self.workspace)
         self.paged_reader=paged_reader or (read_outlook_page if reader is read_outlook else None)
         from .mail_poll_settings import PollSettings
         self.poll_settings=PollSettings(self.store)
@@ -153,6 +156,14 @@ class MailManager:
             self._start_analysis_thread()
         if self.platform_permitted() and saved.get('enabled') and saved.get('resume_on_start') and sys.platform=='win32':
             self.configure(True,saved['store'],saved['folder'],saved['days'],saved['limit'],saved['seconds'],True,**{k:saved.get(k) for k in ('folders','include_children','start_date','end_date')})
+
+    def set_recognition_mode(self,mode):
+        if mode not in ('light','fast'):raise ValueError('识别模式无效')
+        with self.lock:
+            self.store.set_state('recognition_mode',mode)
+            self.analysis_requested=4 if mode=='fast' else 2
+            if not self.analysis_busy:self.analysis_workers=configured_workers(self.analysis_requested)
+        return self.status()
 
     def platform_permitted(self):
         return not self.platform_suspended and (self.permission_check is None or self.permission_check())
@@ -227,6 +238,8 @@ class MailManager:
                     'folders_total':progress.get('folders_total'),'folders_done':progress.get('folders_done'),
                     **counts,'status_diagnostic':status_diagnostic,'maintenance_active':self.maintenance_active,
                     'analysis_active':len(self.analysis_current),'analysis_workers':self.analysis_workers,
+                    'recognition_mode':'fast' if self.analysis_requested==4 else 'light',
+                    'recognition_switching':self.analysis_workers!=configured_workers(self.analysis_requested),
                     'performance':self.performance.snapshot(),
                     'sync_scanned':progress.get('scanned',0),'sync_start':progress.get('start'),'sync_end':progress.get('end')}
 
@@ -362,18 +375,26 @@ class MailManager:
                 def analyze(raw,name):
                     return pool.submit(analyze_attachment,raw,name).result() if pool else self.analyzer(raw,name)
                 while True:
+                    target=configured_workers(self.analysis_requested)
+                    if target!=self.analysis_workers and not pending:
+                        stack.close()
+                        self.analysis_workers=target
+                        pool=stack.enter_context(analysis_pool(target)) if self.analyzer is analyze_attachment else None
+                        controllers=stack.enter_context(ThreadPoolExecutor(max_workers=target))
                     with self.lock:
                         phase='检查存储空间'
                         reason=self.storage.block_reason(reserve_bytes=32*1024**2)
                         if reason:
                             self.state['analysis_error']=reason
                             stopping=True
-                        while self.platform_permitted() and not stopping and not self.maintenance_active and self.analysis_queue and len(pending)<self.analysis_workers:
+                        while self.platform_permitted() and not stopping and not self.maintenance_active and self.analysis_queue and self.analysis_workers==configured_workers(self.analysis_requested) and len(pending)<self.analysis_workers:
                             phase='领取识别任务'
                             identity,retry=self.analysis_queue.popleft()
                             self.analysis_current.add(identity)
                             pending[controllers.submit(self._analyze_mail,identity,retry,analyze)]=identity
-                        if not pending:break
+                        if not pending:
+                            if self.analysis_workers!=configured_workers(self.analysis_requested):continue
+                            break
                     completed,_=wait(pending,timeout=.1,return_when=FIRST_COMPLETED)
                     for future in completed:
                         identity=pending.pop(future)
@@ -875,6 +896,9 @@ def manager():
 def create_router(require_local):
     def no_cache(response: Response): response.headers['Cache-Control']='no-store'
     router=APIRouter(prefix='/api/mail',dependencies=[Depends(require_local),Depends(no_cache)])
+
+    @router.post('/recognition-mode')
+    def recognition_mode(body: dict): return manager().set_recognition_mode(body.get('mode'))
 
     @router.get('/status')
     def status(): return manager().status()

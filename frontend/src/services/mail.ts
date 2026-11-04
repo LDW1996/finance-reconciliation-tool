@@ -51,7 +51,7 @@ export interface MailStatus {
   read_progress?: { phase?: string; current_folder?: string; folder_number?: number; folders_total?: number; folders_done?: number; stage_seconds?: number; stalled?: boolean }
   analysis_halted?:boolean;analysis_recovering?:boolean;analysis_recovery?:string
   analysis_diagnostic?:MailDiagnostic;analysis_diagnostics?:MailDiagnostic[];status_diagnostic?:MailDiagnostic|null
-  performance?: MailPerformance; analysis_workers?:number; analysis_active?:number; queue_paused?:boolean
+  recognition_mode?:'light'|'fast'; recognition_switching?:boolean; performance?: MailPerformance; analysis_workers?:number; analysis_active?:number; queue_paused?:boolean
   saved_total?:number; analysis_pending?:number
   busy: boolean; enabled: boolean; seconds: number; last_run: string | null; next_run: string | null
   error: string; errors: string[]; partial: boolean; new: number; read: number; outlook_supported: boolean
@@ -68,6 +68,7 @@ export interface MailStatus {
 export interface MailFolder { id: string; store: string; label: string; name?:string; parent?:string|null; store_label?:string; selectable?:boolean }
 const client = axios.create({ baseURL: '/api/mail', headers: { 'X-Finance-Local': '1' }, timeout: 30000 })
 export const mailApi = {
+  recognitionMode:async(mode:string)=>(await client.post('/recognition-mode',{mode})).data,
   openOriginal: async (id:string) => (await client.post<{opened:boolean;reason?:string;search?:{subject:string;sender:string;received:string}}>('/messages/'+encodeURIComponent(id)+'/open-original')).data,
   preview: async (mailId:string,attachmentId:string,page:number) => (await client.get<Blob>(`/messages/${encodeURIComponent(mailId)}/attachments/${encodeURIComponent(attachmentId)}/preview/${page}`,{responseType:'blob'})).data,
   status: async () => (await client.get<MailStatus>('/status')).data,

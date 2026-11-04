@@ -120,6 +120,7 @@ class UnlockTaskRequest(BaseModel):
     scope: Literal["bill", "voyage"] = "bill"
     screenshot_policy: Literal["errors", "all", "none"] = "errors"
     record_timings: bool = False
+    verify_after: bool = True
     preview_token: str | None = Field(default=None, max_length=200)
     confirmed: bool = False
 
@@ -232,7 +233,7 @@ def create_ilog_task(body: UnlockTaskRequest, request: Request):
         Retention(manager).maybe_cleanup()
         return manager.create(body.account_id, account['name'], body.fee, body.order, body.request_id, body.confirmed,
             fallback_account=fallback['id'] if fallback else None, fallback_name=fallback['name'] if fallback else None,
-            scope=body.scope, screenshot_policy=body.screenshot_policy, record_timings=body.record_timings, preview_token=body.preview_token)
+            scope=body.scope, screenshot_policy=body.screenshot_policy, record_timings=body.record_timings, preview_token=body.preview_token, verify_after=body.verify_after)
     except ValueError as error:
         raise HTTPException(400,str(error)) from None
     except RuntimeError as error:

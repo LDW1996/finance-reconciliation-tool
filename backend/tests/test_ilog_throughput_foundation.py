@@ -1,5 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import Mock
+from unittest.mock import Mock, MagicMock
 import pytest
 from app.ilog_metrics import Timings
 from app.ilog_session import SessionPool
@@ -118,3 +118,29 @@ def test_disabled_timings_do_not_add_fields_to_children():
     timer.stage('save')
     timer.finish()
     assert result == {'records': [{}]}
+
+
+@pytest.mark.parametrize('verify_after,expected,queries', [(True,'verified_fee_unlocked',2),(False,'platform_accepted',1)])
+def test_single_mode_controls_post_submission_query(tmp_path, monkeypatch, verify_after, expected, queries):
+    from app import ilog_unlock
+    from types import SimpleNamespace
+    store=Mock();store.list_accounts.return_value=[{'id':'a','username':'one'}];store.password_for.return_value='test'
+    monkeypatch.setattr(ilog_unlock,'AccountStore',lambda:store)
+    monkeypatch.setattr(ilog_unlock,'account_data_dir',lambda:tmp_path)
+    before={'id':'one','lock':'A','booking':'JOB1'}
+    query=Mock(side_effect=[[before],[{**before,'lock':'B'}]])
+    monkeypatch.setattr(ilog_unlock,'search_bill',query)
+    pool=Mock();page=pool.page.return_value
+    page.locator.return_value.count.return_value=1
+    page.locator.return_value.inner_text.return_value='确认取消锁定吗?'
+    page.evaluate.return_value=['one']
+    page.get_by_role.return_value.locator.return_value.bounding_box.return_value={'width':100,'height':30}
+    response=SimpleNamespace(ok=True,status=200,text=lambda:'{"success":true}')
+    page.expect_response.return_value=MagicMock()
+    page.expect_response.return_value.__enter__.return_value.value=response
+    result=ilog_unlock.run('a','TEST001',execute=True,session_pool=pool,verify_after=verify_after)
+    assert result['status']==expected
+    assert query.call_count==queries
+    assert result['verification_performed'] is verify_after
+    pool.invalidate.assert_not_called()
+    if not verify_after:page.goto.assert_not_called()

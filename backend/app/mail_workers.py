@@ -49,7 +49,7 @@ def worker_limit(requested, cpu_count, available):
 def configured_workers(requested=None):
     if requested is None:
         try:
-            requested = int(os.environ.get('FINANCE_OCR_WORKERS', '4'))
+            requested = int(os.environ.get('FINANCE_OCR_WORKERS', '2'))
         except ValueError:
             requested = 1
     return worker_limit(max(1, min(4, requested)), os.cpu_count(), available_memory())

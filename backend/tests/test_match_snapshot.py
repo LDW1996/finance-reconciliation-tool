@@ -172,3 +172,17 @@ def test_english_matching_failure_keeps_actionable_reason():
     from app.mail_english import response
     result=response({'computation':{'error':'匹配结果保存空间不足，请检查保存容量和磁盘剩余空间后重试。'}})
     assert result['computation']['error']=='Insufficient space for matching results. Check the storage limit and free disk space, then retry.'
+
+
+def test_recognition_load_defers_matching_and_keeps_last_result(tmp_path):
+    ws=workspace(tmp_path);ws.matching()
+    ws.store.set_payments('new',[payment()])
+    ws.matches.load_status=lambda:dict(active=2,pending=12,workers=2)
+    state=ws.match_state()
+    assert state['state']=='waiting' and state['available'] and state['stale']
+    assert state['recognition_active']==2
+    assert ws.matches.running is None
+    ws.matches.load_status=lambda:dict(active=0,pending=0,workers=2)
+    ws.matches.quiet_seconds=0
+    ws.matches.request(wait=True)
+    assert ws.match_state()['state']=='ready'

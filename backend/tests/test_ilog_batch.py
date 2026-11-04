@@ -53,6 +53,7 @@ class FakePage:
     def route(self,*args): pass
     def goto(self,*args): self.events.append(('query_navigation',))
     def wait_for(self): pass
+    def wait_for_function(self,*args,**kwargs): pass
     def screenshot(self,**kw): Path(kw['path']).write_bytes(b'test-proof')
     def expect_response(self, predicate):
         request=SimpleNamespace(method='POST',post_data='query=4&ids='+','.join(self.selected))
@@ -124,3 +125,33 @@ def test_batch_duplicate_guard_is_per_record(tmp_path,monkeypatch):
     assert [r['status'] for r in result['records']]==['blocked_duplicate','verified_unlocked']
     assert first.read_text()==old
     assert page.events.count(('click','Yes'))==1
+
+
+def test_platform_success_finishes_without_post_submit_query(tmp_path, monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Post-submit query must not run')
+    monkeypatch.setattr('app.ilog_unlock.search_bill', forbidden)
+    page = FakePage(['one', 'two'])
+    result = {'account':'east','bill':'BILL123456','kind':'order','submitted':False}
+    execute_batch(page, records(), result, tmp_path/'report.json', tmp_path, lambda stage:result.update(stage=stage), verify_after=False)
+    assert result['status'] == 'platform_accepted'
+    assert all(row['status']=='platform_accepted' and 'after' not in row for row in result['records'])
+    assert ('query_navigation',) not in page.events
+    assert page.events.count(('click','Yes')) == 1
+
+
+@pytest.mark.parametrize('reply,expected', [('{"success":false}', 'rejected'),('broken', 'needs_verification')])
+def test_fast_mode_does_not_turn_rejection_or_bad_reply_into_success(tmp_path, monkeypatch, reply, expected):
+    page=FakePage(['one','two'])
+    original=page.expect_response
+    def response(predicate):
+        context=original(predicate)
+        context.value.text=lambda:reply
+        return context
+    page.expect_response=response
+    result={'account':'east','bill':'BILL123456','kind':'order','submitted':False}
+    execute_batch(page,records(),result,tmp_path/'r.json',tmp_path,lambda s:result.update(stage=s),verify_after=False)
+    assert result['status']=='batch_attention'
+    assert all(r['status']==expected for r in result['records'])
+    assert page.events.count(('click','Yes'))==1
+    assert ('query_navigation',) not in page.events

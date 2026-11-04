@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlparse
 
-SUCCESS = {'verified_unlocked','verified_fee_unlocked','already_unlocked','already_fee_unlocked'}
+SUCCESS = {'platform_accepted','verified_unlocked','verified_fee_unlocked','already_unlocked','already_fee_unlocked'}
 
 
 def plan_batch(found, bill, kind):
@@ -23,12 +23,13 @@ def batch_status(rows, kind):
         return 'batch_attention'
     if all(r['status'] in ('already_unlocked','already_fee_unlocked') for r in rows):
         return 'already_unlocked' if all(r['status']=='already_unlocked' for r in rows) else 'already_fee_unlocked'
+    if any(r['status']=='platform_accepted' for r in rows):return 'platform_accepted'
     return 'verified_unlocked' if kind=='order' else 'verified_fee_unlocked'
 
 
-def execute_batch(page, found, result, report_path, directory, step):
+def execute_batch(page, found, result, report_path, directory, step, *, verify_after=True):
     from .ilog_query import URL
-    from .ilog_unlock import reserve_operation, private_report, outcome, parse_reply, search_bill, retry_verification, compact_success, error_context
+    from .ilog_unlock import reserve_operation, private_report, outcome, parse_reply, search_bill, retry_verification, compact_success, error_context, finish_submission, dismiss_result_dialog
     rows = plan_batch(found, result['bill'], result['kind'])
     result['records'] = rows
     journals = []
@@ -107,21 +108,31 @@ def execute_batch(page, found, result, report_path, directory, step):
                           failure_cause='批量提交未取得可确认的返回，需要逐条核对平台状态',
                           next_action='先核对业务号和订单跟踪，不重复提交',
                           response_note='批量提交响应未确认，不重复提交解锁')
-        def verify():
-            step('verify_open_page');page.goto(URL)
-            step('verify_open_list');page.get_by_text('委托单列表',exact=True).click()
-            step('verify_wait_search');page.locator('input[name=search]').wait_for()
-            after=search_bill(page,result['bill'],trace=lambda phase:step('verify_'+phase))
-            step('verify_order_state')
-            if len(after)!=len(found) or {r['id'] for r in after}!={r['id'] for r in found}:
-                raise RuntimeError('Verification record mismatch')
-            current={str(r['id']):r for r in after}
+        if verify_after:
+            def verify():
+                step('verify_open_page');page.goto(URL)
+                step('verify_open_list');page.get_by_text('委托单列表',exact=True).click()
+                step('verify_wait_search');page.locator('input[name=search]').wait_for()
+                after=search_bill(page,result['bill'],trace=lambda phase:step('verify_'+phase))
+                step('verify_order_state')
+                if len(after)!=len(found) or {r['id'] for r in after}!={r['id'] for r in found}:
+                    raise RuntimeError('Verification record mismatch')
+                current={str(r['id']):r for r in after}
+                for row in eligible:
+                    row['after']=current[str(row['before']['id'])]
+                    row['status']=outcome(reply,row['before']['lock'],row['after']['lock'],result['kind'])
+                if reply and reply['success'] and any(row['status'] not in SUCCESS for row in eligible):
+                    raise RuntimeError('Lock state not yet updated')
+            retry_verification(verify,result)
+            result['verification_performed'] = True
+        else:
             for row in eligible:
-                row['after']=current[str(row['before']['id'])]
-                row['status']=outcome(reply,row['before']['lock'],row['after']['lock'],result['kind'])
-            if reply and reply['success'] and any(row['status'] not in SUCCESS for row in eligible):
-                raise RuntimeError('Lock state not yet updated')
-        retry_verification(verify,result)
+                finish_submission(row, reply)
+            result['verification_performed'] = False
+            if reply is not None:
+                step('dismiss_platform_result')
+                dismiss_result_dialog(page, result)
+
     except Exception as error:
         causes={'Selection mismatch':'选中的记录 ID 与本次目标不一致，已停止提交',
                 'Unexpected confirmation':'批量确认窗口内容与预期不同，未继续确认',

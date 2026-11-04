@@ -225,3 +225,13 @@ def test_no_bypass_for_fee_unknown_state_or_different_record(tmp_path, kind, loc
                                'after': {'id': record, 'lock': 'U'}}))
     with pytest.raises(FileExistsError):
         reserve_operation(tmp_path, 'west', 'record1', kind, current_lock=lock)
+
+
+@pytest.mark.parametrize('reply,expected', [({'success':True},'platform_accepted'),({'success':False},'rejected'),(None,'needs_verification'),({},'needs_verification')])
+def test_platform_response_without_verification(reply, expected):
+    from app.ilog_unlock import finish_submission
+    result = {'submitted':True}
+    finish_submission(result, reply)
+    assert result['status'] == expected
+    assert result['verification_performed'] is False
+    assert 'after' not in result

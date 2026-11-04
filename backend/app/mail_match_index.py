@@ -11,6 +11,7 @@ import logging
 from threading import Event, RLock, Thread
 import uuid
 import zlib
+from time import monotonic
 
 log=logging.getLogger(__name__)
 
@@ -25,6 +26,8 @@ class MatchIndex:
     def __init__(self,workspace):
         self.workspace=workspace;self.store=workspace.store
         self.lock=RLock();self.done=Event();self.done.set()
+        self.load_status=lambda:dict(active=0,pending=0,workers=0)
+        self.quiet_seconds=5;self.last_busy=0
         self.running=None;self.failure=None;self.completed=0;self.total=0;self.readers={}
         with self.store.db() as db:
             db.execute('CREATE TABLE IF NOT EXISTS mail_match_generation (day_window INTEGER PRIMARY KEY, signature TEXT NOT NULL, generation TEXT NOT NULL, updated_at TEXT NOT NULL, ledger_id TEXT NOT NULL)')
@@ -65,16 +68,24 @@ class MatchIndex:
             row=db.execute('SELECT signature,generation,updated_at,ledger_id FROM mail_match_generation WHERE day_window=?',(window,)).fetchone()
         return dict(zip(('signature','generation','updated_at','ledger_id'),row)) if row else None
 
+    def background_load(self):
+        load=self.load_status()
+        if load.get('active',0) or load.get('busy',load.get('pending',0)):self.last_busy=monotonic()
+        waiting=bool(load.get('active',0) or load.get('busy',load.get('pending',0)) or (self.last_busy and monotonic()-self.last_busy<self.quiet_seconds))
+        return load,waiting
+
     def state(self,window=3):
         key,data=self.identity(window);meta=self.metadata(window)
+        load,waiting=self.background_load()
         with self.lock:
             current=self.running
             error=self.failure if self.failure and self.failure['signature']==key else None
             stale=bool(data and (not meta or meta['signature']!=key))
-            return dict(state='running' if current else 'failed' if error else 'stale' if stale else 'ready',
+            return dict(state='failed' if error else 'waiting' if waiting and (stale or current) else 'running' if current else 'stale' if stale else 'ready',
                         stale=stale,available=bool(meta and data and meta['ledger_id']==data['id']),
                         revision=meta['signature'] if meta else '',target_revision=key,
                         updated_at=meta['updated_at'] if meta else None,
+                        recognition_active=load.get('active',0),recognition_pending=load.get('pending',0),recognition_workers=load.get('workers',0),
                         completed=self.completed,total=self.total,error=error['message'] if error else '')
 
     def request(self,window=3,wait=False,retry=False):
@@ -82,6 +93,9 @@ class MatchIndex:
         while True:
             key,data=self.identity(window);meta=self.metadata(window)
             if not data or (meta and meta['signature']==key):return self.state(window)
+            if self.background_load()[1]:
+                if wait:raise ValueError('正在处理邮件识别，匹配将在识别空闲后统一更新，请稍后再试。')
+                return self.state(window)
             with self.lock:
                 if self.failure and self.failure['signature']==key and not retry:
                     if wait:raise ValueError(self.failure['message'])
@@ -121,6 +135,7 @@ class MatchIndex:
             derived_bytes=0
             entries=data['entries']
             for start in range(0,len(entries),1):
+                while self.background_load()[1]:Event().wait(.5)
                 rows=rank_receipts(entries[start:start+1],[],day_window=window,limit=None,mapping=mapping,_groups=groups,_by_date=by_date)
                 from .mail_workspace import signature
                 encoded=[];links=[]

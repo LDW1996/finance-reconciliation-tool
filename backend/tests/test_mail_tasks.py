@@ -91,3 +91,15 @@ def test_mail_routes_require_local_header_and_allow_sample_import(tmp_path, monk
     assert not manager.status()['analysis_busy'], 'Background analysis did not finish'
     assert client.delete('/api/mail/messages',headers=headers).status_code==200
     assert manager.store.rows()==[]
+
+
+def test_recognition_mode_saved_and_active_workers_not_changed_mid_task(tmp_path):
+    store=MailStore(tmp_path/'mode.sqlite3');m=MailManager(store,analyzer=lambda *a:None)
+    before=m.analysis_workers;m.analysis_busy=True
+    m.set_recognition_mode('fast')
+    assert m.analysis_workers==before
+    assert m.analysis_requested==4
+    assert store.get_state('recognition_mode')=='fast'
+    m.analysis_busy=False
+    m.set_recognition_mode('light')
+    assert m.analysis_requested==2

@@ -207,8 +207,8 @@ class TaskManager:
             db.execute('INSERT INTO voyage_previews VALUES (?,?,?,?)',(data['token'],expires,self.preview_binding(account,fallback_account,fee,order),json.dumps(data,ensure_ascii=False)))
         return deepcopy(data)
 
-    def create(self, account, name, fee, order, key, confirmed, *, fallback_account=None, fallback_name=None, scope="bill", screenshot_policy="errors", record_timings=False, preview_token=None):
-        if scope not in ("bill","voyage") or screenshot_policy not in ("errors","all","none") or not isinstance(record_timings,bool):
+    def create(self, account, name, fee, order, key, confirmed, *, fallback_account=None, fallback_name=None, scope="bill", screenshot_policy="errors", record_timings=False, preview_token=None, verify_after=True):
+        if scope not in ("bill","voyage") or screenshot_policy not in ("errors","all","none") or not isinstance(record_timings,bool) or type(verify_after) is not bool:
             raise ValueError("任务选项无效")
         if scope=="voyage" and not preview_token: raise ValueError("请先预览航次")
         if not confirmed or not key or len(key) > 100:
@@ -232,6 +232,7 @@ class TaskManager:
         confirmation = [account,[(r['bill'],r['kind']) for r in inputs]]
         if fallback_account: confirmation.append(fallback_account)
         confirmation.extend([scope,screenshot_policy,record_timings,preview_token if scope=="voyage" else None])
+        if not verify_after: confirmation.append({'verify_after':False})
         payload = json.dumps(confirmation)
         with self.db() as db:
             db.execute('BEGIN IMMEDIATE')
@@ -252,7 +253,7 @@ class TaskManager:
                          'status':'waiting','message':'等待执行','time':''} for g in preview['groups']]
             if db.execute("SELECT 1 FROM tasks WHERE state IN ('running','paused')").fetchone():
                 raise RuntimeError('已有未结束任务，请先处理或取消剩余项')
-            data = {'id':uuid4().hex,'account':account,'accountName':name,'state':'running','rows':inputs,'scope':scope,'screenshot_policy':screenshot_policy,'record_timings':record_timings,'createdAt':datetime.now(timezone.utc).isoformat()}
+            data = {'id':uuid4().hex,'account':account,'accountName':name,'state':'running','rows':inputs,'scope':scope,'screenshot_policy':screenshot_policy,'record_timings':record_timings,'verify_after':verify_after,'createdAt':datetime.now(timezone.utc).isoformat()}
             if fallback_account:
                 data.update(fallbackAccount=fallback_account,fallbackAccountName=fallback_name)
             db.execute('INSERT INTO tasks VALUES (?,?,?,?,?)',(data['id'],key,payload,'running',json.dumps(data,ensure_ascii=False)))
@@ -300,7 +301,7 @@ class TaskManager:
                             if index is None:
                                 data['state']='completed'; self.save(db,data); return
                             item = data['rows'][index]
-                            item.update(status='processing',message='正在查询、执行并复查')
+                            item.update(status='processing',message='正在查询并提交解锁')
                             self.save(db,data)
                     attempts=[]
                     actual_account, actual_name = (
@@ -323,7 +324,8 @@ class TaskManager:
                                 kwargs.update(session_pool=session_pool,
                                     screenshot_policy=data.get('screenshot_policy', 'errors'),
                                     record_timings=data.get('record_timings', True),
-                                    scope=data.get('scope', 'bill'), voyage_target=item.get('target'))
+                                    scope=data.get('scope', 'bill'), voyage_target=item.get('target'),
+                                    verify_after=data.get('verify_after', True))
                             result = (self.runner or run)(actual_account,item['bill'],item['kind'],**kwargs)
                         except Exception:
                             result = {'status':'needs_verification','reason':'执行异常，未自动重试'}
@@ -335,8 +337,8 @@ class TaskManager:
                             self.save(db,progress)
                         if not (result.get('status')=='not_found' and result.get('submitted') is False):
                             break
-                    ok = result.get('status') in ('verified_unlocked','verified_fee_unlocked','already_unlocked','already_fee_unlocked','voyage_platform_confirmed')
-                    notes = {'voyage_platform_confirmed':'平台已确认航次操作成功（仅代表单）',
+                    ok = result.get('status') in ('verified_unlocked','verified_fee_unlocked','platform_accepted','already_unlocked','already_fee_unlocked','voyage_platform_confirmed')
+                    notes = {'platform_accepted':'平台返回成功（未复查）','voyage_platform_confirmed':'平台已确认航次操作成功（仅代表单）',
                         'verified_fee_unlocked':'费用小锁已解开',
                         'verified_unlocked':'复查已无锁',
                         'already_unlocked':'原记录已无锁，未重复提交',
@@ -377,7 +379,7 @@ class TaskManager:
                         if result.get('records'):
                             expanded=[]
                             for detail in result['records']:
-                                child_ok=detail.get('status') in ('verified_unlocked','verified_fee_unlocked','already_unlocked','already_fee_unlocked','voyage_platform_confirmed')
+                                child_ok=detail.get('status') in ('verified_unlocked','verified_fee_unlocked','platform_accepted','already_unlocked','already_fee_unlocked','voyage_platform_confirmed')
                                 message=notes.get(detail.get('status'),'执行异常，请人工核实')
                                 if detail.get('failure_cause'):
                                     message=detail['failure_cause']+'；'+detail.get('next_action','请人工核实')

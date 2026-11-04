@@ -258,3 +258,22 @@ def test_api_rejects_unusable_fallback_account(tmp_path,monkeypatch):
         response=client.post('/api/ilog/tasks',json={'account_id':primary['id'],'fallback_account_id':fallback,'fee':['TRBTSTHP2607S'],'request_id':'key','confirmed':True},headers={'X-Finance-Local':'1'})
         assert response.status_code==400
     assert client.get('/api/ilog/tasks/latest').json() is None
+
+
+def test_platform_acknowledged_success_is_not_labelled_verified(tmp_path):
+    m = manager(tmp_path, lambda *a, **kw: {'status':'platform_accepted','platform_success':True,'submitted':True,'verification_performed':False})
+    job = m.create('west', 'West', ['TRBTSTZH2606S'], [], 'accepted', True)
+    m.drain(job['id'])
+    row = m.get(job['id'])['rows'][0]
+    assert row['status'] == 'success'
+    assert row['message'] == '平台返回成功（未复查）'
+    assert row['detail']['verification_performed'] is False
+
+
+def test_fast_mode_is_saved_and_legacy_task_defaults_to_verification(tmp_path):
+    m = manager(tmp_path)
+    job = m.create('west','West',['TRBTSTZH2606S'],[],'fast',True,verify_after=False)
+    assert job['verify_after'] is False
+    assert m.get(job['id'])['verify_after'] is False
+    with pytest.raises(ValueError):
+        m.create('west','West',['TRBTSTZH2606S'],[],'fast',True,verify_after=True)

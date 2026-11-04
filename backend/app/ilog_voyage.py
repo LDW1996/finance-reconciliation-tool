@@ -38,8 +38,8 @@ def voyage_reply_status(reply):
     return 'voyage_platform_confirmed' if reply.get('success') is True else 'rejected'
 
 
-def execute_voyage(page, found, result, report_path, directory, step, target):
-    from .ilog_unlock import private_report, parse_reply, search_bill, retry_verification
+def execute_voyage(page, found, result, report_path, directory, step, target, *, verify_after=True):
+    from .ilog_unlock import private_report, parse_reply, search_bill, retry_verification, dismiss_result_dialog
     from .ilog_query import URL
     seed = validate_target(found, target)
     if target['account_id'] != result['account'] or target['kind'] != result['kind']:
@@ -91,16 +91,26 @@ def execute_voyage(page, found, result, report_path, directory, step, target):
         if reply:
             result.update(platform_success=reply['success'], message=str(reply.get('msg',''))[:3000])
         result['status'] = voyage_reply_status(reply)
-        def verify():
-            step('verify_open_page'); page.goto(URL)
-            page.get_by_text('委托单列表', exact=True).click(); page.locator('input[name=search]').wait_for()
-            after = search_bill(page, result['bill'])
-            current = validate_target(after, target); result['after'] = current
-            if reply and reply.get('success') and (current['lock'] != 'U' if result['kind']=='order' else current['lock'] not in ('B','U')):
-                raise RuntimeError('Lock state not yet updated')
-        retry_verification(verify, result)
-        result['verification_scope'] = 'representative_only'
-        result['reason'] = '平台已确认航次操作；已复查代表提单，全航次影响数量未由平台提供'
+        if verify_after:
+            def verify():
+                step('verify_open_page'); page.goto(URL)
+                page.get_by_text('委托单列表', exact=True).click(); page.locator('input[name=search]').wait_for()
+                after = search_bill(page, result['bill'])
+                current = validate_target(after, target); result['after'] = current
+                if reply and reply.get('success') and (current['lock'] != 'U' if result['kind']=='order' else current['lock'] not in ('B','U')):
+                    raise RuntimeError('Lock state not yet updated')
+            retry_verification(verify, result)
+            result['verification_scope'] = 'representative_only'
+            result['reason'] = '平台已确认航次操作；已复查代表提单，全航次影响数量未由平台提供'
+            result['verification_performed'] = True
+        else:
+            result['verification_performed'] = False
+            result['verification_scope'] = 'none'
+            result['reason'] = '平台返回航次操作成功（未复查）；全航次影响数量未由平台提供' if result['status']=='voyage_platform_confirmed' else '平台响应未确认成功，请核实平台说明'
+            if reply is not None:
+                step('dismiss_platform_result')
+                dismiss_result_dialog(page, result)
+
     except Exception:
         result['status'] = 'needs_verification'
         raise

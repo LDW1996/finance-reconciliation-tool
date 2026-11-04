@@ -43,7 +43,8 @@ export interface MatchingRow {
   review: { state: ReviewState; payment_id?: string }
 }
 export interface MatchComputation {
-  state:'ready'|'running'|'stale'|'failed';stale:boolean;available:boolean;revision:string;target_revision:string
+  recognition_active?:number;recognition_pending?:number;recognition_workers?:number;
+  state:'ready'|'running'|'waiting'|'stale'|'failed';stale:boolean;available:boolean;revision:string;target_revision:string
   updated_at:string|null;completed:number;total:number;error:string;review_revision?:string
 }
 export interface MatchingResult {

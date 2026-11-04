@@ -42,6 +42,31 @@ def outcome(reply, before, after, kind=None):
     return 'needs_verification'
 
 
+
+def submission_outcome(reply):
+    """A platform acknowledgement is not an independently verified lock state."""
+    if not reply or type(reply.get('success')) is not bool:
+        return 'needs_verification'
+    return 'platform_accepted' if reply['success'] else 'rejected'
+
+
+def finish_submission(result, reply):
+    result.update(status=submission_outcome(reply), verification_performed=False)
+    if result['status'] == 'needs_verification':
+        result.setdefault('next_action', '平台响应未确认，请人工核实；不要重复提交')
+
+
+def dismiss_result_dialog(page, result):
+    # Keep the authenticated list usable for the next bill, without navigating
+    # or issuing a second order query. Only dismiss the standard ExtJS message.
+    try:
+        page.wait_for_function('() => !Ext.Ajax.isLoading()')
+        page.evaluate('() => { if (Ext.Msg && Ext.Msg.isVisible()) Ext.Msg.hide(); }')
+    except Exception as error:
+        result['session_dirty'] = True
+        result['session_cleanup_note'] = {'error_type':type(error).__name__}
+
+
 def reserve_operation(directory, account, bill, kind, *, current_lock=None, legacy_bill=None):
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     key = hashlib.sha256(json.dumps([account, bill, kind]).encode()).hexdigest()
@@ -114,7 +139,7 @@ def record_step(result, report_path, stage):
 
 def compact_success(result):
     if result.get('status') in ('inspected', 'already_unlocked', 'already_fee_unlocked',
-                                'verified_unlocked', 'verified_fee_unlocked', 'voyage_platform_confirmed'):
+                                'verified_unlocked', 'verified_fee_unlocked', 'platform_accepted', 'voyage_platform_confirmed'):
         for key in ('steps', 'stage', 'selected_ids', 'matched_count', 'confirmation_text',
                     'action', 'response_error_type', 'response_note', 'error_context', 'request_diagnostics',
                     'verification_attempts', 'query_attempts'):
@@ -201,11 +226,13 @@ def search_bill(page, bill, trace=None):
     return records(page)
 
 
-def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed=False, expected_record_ids=None, screenshot_policy='errors', record_timings=True, session_pool=None, scope='bill', voyage_target=None):
+def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed=False, expected_record_ids=None, screenshot_policy='errors', record_timings=True, session_pool=None, scope='bill', voyage_target=None, verify_after=True):
     from contextlib import nullcontext
     from .ilog_session import SessionPool
     from .ilog_metrics import Timings
 
+    if type(verify_after) is not bool:
+        raise ValueError('Invalid verification mode')
     if screenshot_policy not in ('errors', 'all', 'none'):
         raise ValueError('Unknown screenshot policy')
     if scope not in ('bill', 'voyage'):
@@ -273,7 +300,7 @@ def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed
                 result.update(matches=found, matched_count=len(found))
                 if execute:
                     from .ilog_voyage import execute_voyage
-                    execute_voyage(page, found, result, report_path, directory, step, voyage_target)
+                    execute_voyage(page, found, result, report_path, directory, step, voyage_target, verify_after=verify_after)
                 else:
                     result['status'] = 'inspected'
                 return result
@@ -287,7 +314,7 @@ def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed
                     return result
                 result.update(matches=found,matched_count=len(found))
                 if execute:
-                    execute_batch(page,found,result,report_path,directory,step)
+                    execute_batch(page,found,result,report_path,directory,step,verify_after=verify_after)
                 else:
                     result['status']='inspected'
                 return result
@@ -369,28 +396,36 @@ def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed
                         if result['stage'] == 'parse_platform_response' else '提交确认或等待平台响应时发生异常，是否实际执行需核实')
                     result['next_action'] = '先在 iLog 核对锁状态及订单跟踪，不要直接重复解锁'
                     result['response_note'] = 'Unrecognized reply or timeout; never automatically resubmit'
-                # A new authenticated query does not depend on dismissing a result dialog.
-                def verify():
-                    step('verify_open_page')
-                    page.goto(URL)
-                    step('verify_open_list')
-                    page.get_by_text('委托单列表', exact=True).click()
-                    step('verify_wait_search')
-                    page.locator('input[name=search]').wait_for()
-                    after = search_bill(page, bill, trace=lambda phase: step('verify_' + phase))
-                    step('verify_order_state')
-                    if len(after) != 1 or after[0]['id'] != record['id']:
-                        raise RuntimeError('Verification record mismatch')
-                    result['after'] = after[0]
-                    if reply and reply.get('success') is True and outcome(reply,record['lock'],after[0]['lock'],kind) not in ('verified_unlocked','verified_fee_unlocked'):
-                        raise RuntimeError('Lock state not yet updated')
-                    return after
-                retry_verification(verify, result)
-                result['status'] = outcome(reply, record['lock'], result.get('after', {}).get('lock'),kind)
-                if result['status'] == 'needs_verification' and not result.get('failed_stage'):
-                    result.update(failed_stage='verify_order_state', error_type='VerificationIncomplete',
-                        failure_cause=f"平台返回未充分确认成功，或复查未达到目标状态（HTTP {result.get('http_status', '未知')}，复查状态 {result.get('after', {}).get('lock', '未取得')}）",
-                        next_action='先在 iLog 核对锁状态及订单跟踪，不要直接重复解锁')
+                if verify_after:
+                    # A new authenticated query does not depend on dismissing a result dialog.
+                    def verify():
+                        step('verify_open_page')
+                        page.goto(URL)
+                        step('verify_open_list')
+                        page.get_by_text('委托单列表', exact=True).click()
+                        step('verify_wait_search')
+                        page.locator('input[name=search]').wait_for()
+                        after = search_bill(page, bill, trace=lambda phase: step('verify_' + phase))
+                        step('verify_order_state')
+                        if len(after) != 1 or after[0]['id'] != record['id']:
+                            raise RuntimeError('Verification record mismatch')
+                        result['after'] = after[0]
+                        if reply and reply.get('success') is True and outcome(reply,record['lock'],after[0]['lock'],kind) not in ('verified_unlocked','verified_fee_unlocked'):
+                            raise RuntimeError('Lock state not yet updated')
+                        return after
+                    retry_verification(verify, result)
+                    result['status'] = outcome(reply, record['lock'], result.get('after', {}).get('lock'),kind)
+                    if result['status'] == 'needs_verification' and not result.get('failed_stage'):
+                        result.update(failed_stage='verify_order_state', error_type='VerificationIncomplete',
+                            failure_cause=f"平台返回未充分确认成功，或复查未达到目标状态（HTTP {result.get('http_status', '未知')}，复查状态 {result.get('after', {}).get('lock', '未取得')}）",
+                            next_action='先在 iLog 核对锁状态及订单跟踪，不要直接重复解锁')
+                    result['verification_performed'] = True
+                else:
+                    finish_submission(result, reply)
+                    if reply is not None:
+                        step('dismiss_platform_result')
+                        dismiss_result_dialog(page, result)
+
         except FileExistsError:
             result['status'] = 'blocked_duplicate'
             result['failed_stage'] = result.get('stage')
@@ -433,9 +468,9 @@ def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed
                                      if result['submitted'] else '先检查失败截图、登录状态及订单页面，再决定是否重新发起任务')
             result['reason'] = 'Stopped on page or network error; no automatic retry'
         finally:
-            if result['status'] not in ('inspected','already_unlocked','already_fee_unlocked','verified_unlocked','verified_fee_unlocked','voyage_platform_confirmed'):
+            if result['status'] not in ('inspected','already_unlocked','already_fee_unlocked','verified_unlocked','verified_fee_unlocked','platform_accepted','voyage_platform_confirmed'):
                 result['request_diagnostics'] = {'failed': events[-20:], 'pending': list(requests.values())[-20:]}
-            success = result['status'] in ('inspected','already_unlocked','already_fee_unlocked','verified_unlocked','verified_fee_unlocked','voyage_platform_confirmed')
+            success = result['status'] in ('inspected','already_unlocked','already_fee_unlocked','verified_unlocked','verified_fee_unlocked','platform_accepted','voyage_platform_confirmed')
             if page and (screenshot_policy == 'all' or (screenshot_policy == 'errors' and not success)):
                 timings.stage('screenshot')
                 try:
@@ -447,7 +482,7 @@ def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed
                     result['screenshot_note'] = {'error_type': type(error).__name__, **error_context(error)}
             # Take diagnostic screenshots before discarding a possibly dirty page.
             reusable = success or result['status'] in ('not_found', 'ambiguous')
-            invalidate = not reusable or bool(result.get('error_type') or result.get('failed_stage'))
+            invalidate = not reusable or bool(result.get('error_type') or result.get('failed_stage') or result.get('session_dirty'))
             try:
                 if page:
                     for event, handler in (('request', request_started), ('requestfinished', request_finished),
