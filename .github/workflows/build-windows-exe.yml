@@ -109,9 +109,9 @@ jobs:
         shell: pwsh
         run: |
           if ('${{ matrix.edition }}' -eq 'excel') {
-            python -m pytest backend\tests\test_excel_edition.py backend\tests\test_reconciliation.py backend\tests\test_launcher.py -q
+            python -m pytest backend\tests\test_excel_edition.py backend\tests\test_reconciliation.py backend\tests\test_launcher.py -q --durations=25 --durations-min=0.1
           } else {
-            python -m pytest backend\tests -q
+            python -m pytest backend\tests -q --durations=25 --durations-min=0.1
           }
         env:
           PYTHONPATH: backend
