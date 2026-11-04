@@ -131,7 +131,7 @@ class MailManager:
         if previous.get('status')=='running':
             self.store.set_state('mail_maintenance_job',{**previous,'status':'interrupted','message':'上次存储优化被中断；数据保留，可重新预览并继续。'})
         self.analyzer=analyzer; self.analysis_queue=AnalysisQueue(store); self.analysis_busy=False; self.analysis_current=set()
-        self.analysis_requested=4 if store.get_state('recognition_mode','light')=='fast' else 2
+        self.analysis_requested=analysis_workers if analysis_workers is not None else (4 if store.get_state('recognition_mode','light')=='fast' else 2)
         self.analysis_workers=configured_workers(analysis_workers if analysis_workers is not None else self.analysis_requested)
         self.recognition_cache=RecognitionCache(store)
         self.performance=MailPerformance()

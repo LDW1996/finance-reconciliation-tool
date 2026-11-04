@@ -103,3 +103,11 @@ def test_recognition_mode_saved_and_active_workers_not_changed_mid_task(tmp_path
     m.analysis_busy=False
     m.set_recognition_mode('light')
     assert m.analysis_requested==2
+
+
+def test_explicit_single_worker_is_not_silently_changed_to_default(tmp_path):
+    manager=MailManager(MailStore(tmp_path/'single.sqlite3'),analyzer=lambda *a:None,analysis_workers=1)
+    assert manager.analysis_workers==1
+    assert manager.analysis_requested==1
+    manager.set_recognition_mode('light')
+    assert manager.analysis_requested==2
