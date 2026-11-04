@@ -15,6 +15,7 @@ def eligible(receipt, scope):
 
 
 def signature(candidate):
+    if candidate.get('_snapshot_signature'):return candidate['_snapshot_signature']
     facts={k:candidate.get(k) for k in ('mail_id','attachment_id','page','payer','date','amount','currency','remark','search_info','evidence')}
     return hashlib.sha256(json.dumps(facts,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
 
@@ -49,6 +50,9 @@ class MailWorkspace:
         with store.db() as db:
             db.execute('CREATE TABLE IF NOT EXISTS mail_ledger (id TEXT PRIMARY KEY, metadata TEXT NOT NULL, content BLOB NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS mail_review (receipt_id TEXT PRIMARY KEY, payload TEXT NOT NULL)')
+
+        from .mail_match_index import MatchIndex
+        self.matches=MatchIndex(self)
 
     def _dataset(self):
         with self.store.db(write=False) as db:
@@ -115,31 +119,52 @@ class MailWorkspace:
         with self.store.db(write=False) as db:
             return {key:self.store.decode(payload) for key,payload in db.execute('SELECT receipt_id,payload FROM mail_review')}
 
-    def _ranked(self,data,scope,day_window,candidate_limit):
-        from .mail_matching import rank_receipts
-        revision=self.store.get_state('match_revision','0')
-        contact=self.customer_mapping()
-        mapping_revision=str(contact.get('revision','0')) if contact.get('enabled') else 'disabled'
-        revision=f'{revision}:{mapping_revision}'
-        key=(data['id'],revision,scope,day_window,candidate_limit)
-        if self.cache and self.cache[0]==key: return deepcopy(self.cache[1]),revision
-        receipts=[r for r in data['entries'] if eligible(r,scope)]
-        result=rank_receipts(receipts,self.store.payment_rows(),day_window=day_window,limit=candidate_limit,mapping=self.mapping_index())
-        self.cache=(key,deepcopy(result))
-        return result,revision
+    def _ranked(self,data,scope,day_window,candidate_limit,wait=True,metadata=None):
+        if metadata is None:
+            self.matches.request(day_window,wait=wait)
+            metadata=self.matches.metadata(day_window)
+        rows=[]
+        for row in self.matches.rows(day_window,wait=False,metadata=metadata):
+            if eligible(row['receipt'],scope):
+                row['candidates']=row['candidates'][:candidate_limit]
+                rows.append(row)
+        return rows,metadata['signature'] if metadata else '0'
 
-    def _candidate(self,receipt,payment_id,day_window):
+    def match_state(self,day_window=3,retry=False):
+        return self.matches.request(day_window,retry=retry)
+
+    def matching_snapshot(self,**kwargs):
+        window=kwargs.get('day_window',3)
+        self.matches.request(window)
+        result=self.matching(**kwargs,_wait=False)
+        result['computation']=self.matches.state(window)
+        result['computation']['revision']=result.pop('snapshot_revision','0')
+        if result['computation']['revision']=='0' and result['ledger']:
+            result['computation'].update(available=False,stale=True)
+        return result
+
+    def _candidate(self,receipt,payment_id,day_window,wait=True):
+        # Reuse the current generation for canonical evidence. A saved source
+        # copy outside the canonical result needs only a single-receipt check.
+        self.matches.request(day_window,wait=wait)
+        meta=self.matches.metadata(day_window)
+        row=self.matches.full_row(receipt['id'],meta['generation']) if meta else None
+        if row:
+            cached=next((c for c in row['candidates'] if c.get('payment_id')==payment_id),None)
+            if cached:return cached
+        if not wait and self.matches.state(day_window)['stale']:return None
         from .mail_matching import rank_receipts
         payments=self.store.payment_rows()
         result=rank_receipts([receipt],payments,day_window=day_window,limit=1,mapping=self.mapping_index(),payment_id=payment_id)
         return next((p for p in result[0]['candidates'] if p.get('payment_id')==payment_id or p.get('id')==payment_id),None) if result else None
 
-    def matching(self,scope='unidentified',page=1,page_size=50,minimum_score=0,day_window=3,candidate_limit=3,keyword='',sort_by='source'):
-        with self.lock:
+    def matching(self,scope='unidentified',page=1,page_size=50,minimum_score=0,day_window=3,candidate_limit=3,keyword='',sort_by='source',_wait=True,review_filter='all'):
+        self.matches.request(day_window,wait=_wait)
+        with self.lock,self.matches.view(day_window) as generation:
             data=self._dataset()
             summary=dict(total=0,eligible=0,matched=0,unmatched=0,confirmed=0)
             if not data: return dict(ledger=None,summary=summary,rows=[],revision='0',page=page,total_rows=0)
-            rows,revision=self._ranked(data,scope,day_window,candidate_limit)
+            rows,revision=self._ranked(data,scope,day_window,candidate_limit,wait=False,metadata=generation)
             reviews=self._review_map()
             summary.update(total=len(data['entries']),eligible=len(rows))
             for row in rows:
@@ -151,7 +176,7 @@ class MailWorkspace:
                 review=reviews.get(row['receipt']['id'],dict(state='pending',payment_id=None))
                 if review['state']=='confirmed':
                     selected=next((c for c in row['candidates'] if (c.get('payment_id') or c['id'])==review.get('payment_id')),None)
-                    if selected is None: selected=self._candidate(row['receipt'],review.get('payment_id'),day_window)
+                    if selected is None: selected=self._candidate(row['receipt'],review.get('payment_id'),day_window,wait=_wait)
                     if not selected or signature(selected)!=review.get('signature'):
                         review=dict(state='pending',payment_id=None)
                         row['warnings'].append('来源邮件或匹配条件已更新，请重新核对关联。')
@@ -166,6 +191,12 @@ class MailWorkspace:
             confirmed=[(r['receipt']['id'],r['review']['payment_id'],next((signature(c) for c in r['candidates'] if c['payment_id']==r['review']['payment_id']),''))
                        for r in rows if r['review']['state']=='confirmed']
             confirmation_token=hashlib.sha256(json.dumps([data['id'],day_window,sorted(confirmed)],ensure_ascii=False).encode()).hexdigest()
+            pending=[r for r in rows if r['review']['state']!='confirmed']
+            summary.update(pending=len(pending),with_clues=sum(bool(r['candidates']) for r in pending),without_clues=sum(not r['candidates'] for r in pending))
+            if review_filter=='pending':rows=pending
+            elif review_filter=='clues':rows=[r for r in pending if r['candidates']]
+            elif review_filter=='no_clues':rows=[r for r in pending if not r['candidates']]
+            elif review_filter=='confirmed':rows=[r for r in rows if r['review']['state']=='confirmed']
             if minimum_score:
                 rows=[r for r in rows if r['candidates'] and max(c['score'] for c in r['candidates'])>=minimum_score]
             needle=keyword.strip().casefold()
@@ -174,8 +205,17 @@ class MailWorkspace:
             if sort_by=='score':
                 rows.sort(key=lambda r:max((c['score'] for c in r['candidates']),default=-1),reverse=True)
             total=len(rows)
-            return dict(ledger=self.ledger(),summary=summary,rows=rows[(page-1)*page_size:page*page_size],
-                        revision=f"{data['id']}:{revision}:{self.store.get_state('review_revision','0')}",page=page,total_rows=total,confirmation_token=confirmation_token)
+            selected_rows=rows[(page-1)*page_size:page*page_size]
+            for row in selected_rows:
+                full=self.matches.full_row(row['receipt']['id'],row['_generation'])
+                sources={c['payment_id']:c for c in (full or {}).get('candidates',[])}
+                row['candidates']=[sources.get(c['payment_id'],c) for c in row['candidates']]
+                for candidate in row['candidates']:
+                    candidate['warnings']=[translated(w) for w in candidate.get('warnings',[])]
+                    candidate['evidence_signature']=signature(candidate)
+                row.pop('_generation',None)
+            return dict(ledger=self.ledger(),summary=summary,rows=selected_rows,
+                        revision=f"{data['id']}:{revision}:{self.store.get_state('review_revision','0')}",page=page,total_rows=total,confirmation_token=confirmation_token,snapshot_revision=revision)
 
     def review(self,ledger_id,receipt_id,payment_id,state,day_window,expected_signature=None):
         with self.lock:
@@ -185,6 +225,7 @@ class MailWorkspace:
             if not receipt: raise ValueError('收款记录不存在，请刷新列表。')
             result=dict(state=state,payment_id=None,updated_at=datetime.now(timezone.utc).isoformat())
             if state=='confirmed':
+                if self.matches.state(day_window)['stale']:raise ValueError('匹配结果已更新，请等待更新完成后重新核对。')
                 candidate=self._candidate(receipt,payment_id,day_window)
                 if not candidate: raise ValueError('这封邮件已不符合当前匹配条件，请刷新候选。')
                 if expected_signature and signature(candidate)!=expected_signature: raise ValueError('付款证据已更新，请刷新后重新核对。')

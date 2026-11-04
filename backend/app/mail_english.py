@@ -52,6 +52,13 @@ EXACT.update(dict(zip(
  ['Scheduling task','Reading status','Restoring queue checkpoint','Building reuse index','Starting recognition worker','Checking storage space','Claiming recognition task','Recording and skipping failed mail','Saving recognition queue progress','Resuming automatic reads','Saving mail and read progress','Reading Outlook','Preparing storage check','Waiting for current attachment recognition; remaining queue paused','Reviewing selected mail and saving encrypted recovery backup','Restoring cleanup backup while preserving later data','Check complete','Restore complete','Cleanup complete','Storage optimization complete','Checking mail storage usage','Checking historical attachments','Deduplicating and cleaning rebuildable previews','Compacting database to release disk space','Storage maintenance'])))
 
 # These keys contain application-generated diagnostics, not imported business text.
+EXACT.update({
+ '匹配结果保存空间不足，请检查保存容量和磁盘剩余空间后重试。':'Insufficient space for matching results. Check the storage limit and free disk space, then retry.',
+ '匹配候选过多，临时结果超过 512MB，请缩小付款日期容差后重试。':'Matching results exceeded the 512 MB temporary limit. Reduce the date tolerance and retry.',
+ '匹配结果已更新，请等待更新完成后重新核对。':'Matching data changed. Wait for the update and review again.',
+ '匹配结果保存或计算失败':'Could not compute or save matching results',
+ '上次结果保留，请检查本地资源后重试。':'Previous results are retained. Check local resources and retry.',
+})
 GENERATED={'message','detail','error','errors','warnings','warning','phase','sync_phase','note','notes',
  'status_text','progress_text','analysis_error','analysis_recovery','reason','reasons','action',
  'flags','notice','blocked_reason','compact_note'}

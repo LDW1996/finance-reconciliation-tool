@@ -42,15 +42,20 @@ export interface MatchingRow {
   receipt: Receipt; candidates: MatchingCandidate[]; candidate_count: number; warnings: string[]
   review: { state: ReviewState; payment_id?: string }
 }
+export interface MatchComputation {
+  state:'ready'|'running'|'stale'|'failed';stale:boolean;available:boolean;revision:string;target_revision:string
+  updated_at:string|null;completed:number;total:number;error:string;review_revision?:string
+}
 export interface MatchingResult {
+  computation?:MatchComputation
   ledger: LedgerMetadata | null
-  summary: { total: number; eligible: number; matched: number; unmatched: number; confirmed: number }
+  summary: { total: number; eligible: number; matched: number; unmatched: number; confirmed: number; pending?:number;with_clues?:number;without_clues?:number }
   rows: MatchingRow[]; revision: string; page: number; total_rows: number; confirmation_token?: string
 }
 export interface MatchingQuery {
   scope: MatchingScope; page: number; page_size: number; minimum_score: number
   day_window: number; candidate_limit: number
-  keyword?: string; sort_by?: 'source' | 'score'
+  keyword?: string; sort_by?: 'source' | 'score';review_filter?:'all'|'pending'|'clues'|'no_clues'|'confirmed'
 }
 export interface OnlineConfig {
   configured: boolean; spreadsheet_url: string; sheet_id: string | number
@@ -125,6 +130,18 @@ export const mailMatchingApi = {
     if (sheet?.trim()) data.append('sheet_name', sheet.trim())
     return (await client.post<LedgerMetadata>('/ledger/import', data, { signal })).data
   },
+  matchState:async(day_window:number,signal?:AbortSignal)=>{
+    const data=(await client.get<MatchComputation>('/matching/state',{params:{day_window},signal})).data
+    if (!data || typeof data !== 'object' || typeof data.state !== 'string') throw new Error('本地服务版本较旧，请重启程序后使用新版收款核对。历史数据和读取断点不会清除。')
+    return data
+  },
+  retryMatching:async(day_window:number,signal?:AbortSignal)=>(await client.post<MatchComputation>('/matching/retry',undefined,{params:{day_window},signal})).data,
+  snapshot:async(params:MatchingQuery,signal?:AbortSignal)=>{
+    const data=(await client.get<MatchingResult>('/matching/snapshot',{params,signal})).data
+    if (!data || typeof data !== 'object' || !Array.isArray(data.rows) || !data.computation) throw new Error('本地服务版本较旧，请重启程序后使用新版收款核对。历史数据和读取断点不会清除。')
+    return data
+  },
+  ledgerPreview:async(page:number,keyword:string,signal?:AbortSignal)=>(await client.get<{rows:Receipt[];total:number;metadata:LedgerMetadata|null}>('/ledger/preview',{params:{page,keyword},signal})).data,
   matching: async (params: MatchingQuery, signal?: AbortSignal) =>
     (await client.get<MatchingResult>('/matching', { params, signal })).data,
   review: async (data: { ledger_id: string; receipt_id: string; payment_id: string | null; state: ReviewState; day_window: number; expected_signature?: string }, signal?: AbortSignal) =>

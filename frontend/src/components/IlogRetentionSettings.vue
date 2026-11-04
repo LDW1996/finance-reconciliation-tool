@@ -9,11 +9,11 @@
             <el-form-item label="任务结果保留"><div class="day-field"><el-input-number v-model="retentionForm.record_days" aria-label="任务结果保留天数" :min="1" :max="36500" controls-position="right"/><span>天</span></div></el-form-item>
           </div>
           <div class="auto-policy"><div class="auto-heading"><h3>自动清理过期数据</h3><el-switch v-model="retentionForm.auto_enabled" aria-label="自动清理过期数据"/></div><p>在打开页面、查看历史或新建任务时检查，每 24 小时最多一次；有任务正在执行时延后。清理不会修改 iLog。</p></div>
-          <footer><el-button type="primary" :loading="retentionSaving" @click="saveRetention">保存设置</el-button></footer>
+          <footer><el-button type="primary" :loading="retentionSaving" @click="saveRetention">保存规则</el-button></footer>
         </el-form>
       </section>
       <aside class="protected-records"><h2>保护中的记录 <el-icon aria-hidden="true"><InfoFilled/></el-icon></h2>
-        <div v-for="item in protectedItems" :key="item.title" class="protected-item"><span class="protection-icon"><el-icon aria-hidden="true"><component :is="item.icon"/></el-icon></span><div><h3>{{item.title}}</h3><p>{{item.text}}</p></div></div>
+        <div v-for="item in protectedItems" :key="item.title" class="protected-item"><span class="protection-icon"><el-icon aria-hidden="true"><component :is="item.icon"/></el-icon></span><div><h3>{{item.title}}</h3><p>{{$platformText(item.text)}}</p></div></div>
       </aside>
     </div>
     <section class="manual-cleanup"><div><h2>过期数据清理</h2><p>手动预览将要清理的过期数据，确认后执行清理。</p></div><el-button :disabled="retentionSaving || loading" @click="cleanupExpired">预览并清理过期数据</el-button></section>

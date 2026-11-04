@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 
 // This allowlist is deliberately limited to source code. No email content,
 // customer names, bank descriptions or other API values are translated.
-const mailSource = /\/src\/(?:views\/MailView\.vue|components\/(?:MailAttachments|MailFolderTree|MailPaymentDetail|MailStorageSettings|ReceiptMatching|ReceiptReview|CustomerMapping|CustomerMappingPreview)\.vue|services\/mail[^/]*\.ts)$/
+const mailSource = /\/src\/(?:views\/MailView\.vue|components\/(?:MailAttachments|MailFolderTree|MailPaymentDetail|MailStorageSettings|ReceiptMatching|ReceiptReview|CustomerMapping|CustomerMappingPreview|BankLedgerPreview|ReceiptEvidencePreview)\.vue|services\/mail[^/]*\.ts)$/
 export const chineseSegment = /[\u4e00-\u9fff][\u4e00-\u9fff，。、：；（）！？/ ·\-]*/g
 export function translateMailSource(source: string, catalog: Record<string, string>, filename: string): string {
   return source.replace(chineseSegment, segment => {

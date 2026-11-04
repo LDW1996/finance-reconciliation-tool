@@ -1020,9 +1020,9 @@ def create_router(require_local):
         return row
 
     @router.get('/messages/{identity}/receipts')
-    def mail_receipts(identity: str,day_window: int=Query(3,ge=1,le=7),limit: int=Query(5,ge=1,le=20),payment_id: str | None=Query(None,max_length=128)):
+    def mail_receipts(identity: str,day_window: int=Query(3,ge=1,le=7),limit: int=Query(5,ge=1,le=20),payment_id: str | None=Query(None,max_length=128),nonblocking: bool=Query(False)):
         if not manager().store.has_mail(identity):raise HTTPException(404,'邮件记录不存在，请刷新列表。')
-        try:return related_receipts(manager().workspace,identity,day_window,limit,payment_id)
+        try:return related_receipts(manager().workspace,identity,day_window,limit,payment_id,wait=not nonblocking)
         except ValueError as error:raise HTTPException(409,str(error)) from None
 
     @router.delete('/messages')
@@ -1137,6 +1137,33 @@ def create_router(require_local):
                  day_window: int=Query(3,ge=1,le=7),candidate_limit: int=Query(3,ge=1,le=20),
                  keyword: str=Query('',max_length=200),sort_by: str=Query('source',pattern='^(source|score)$')):
         return manager().workspace.matching(scope,page,page_size,minimum_score,day_window,candidate_limit,keyword,sort_by)
+
+    @router.get('/matching/state')
+    def matching_state(day_window: int=Query(3,ge=1,le=7)):
+        state=manager().workspace.match_state(day_window)
+        state['review_revision']=manager().store.get_state('review_revision','0')
+        return state
+
+    @router.post('/matching/retry')
+    def retry_matching(day_window: int=Query(3,ge=1,le=7)):
+        return manager().workspace.match_state(day_window,retry=True)
+
+    @router.get('/matching/snapshot')
+    def matching_snapshot(scope: str=Query('unidentified',pattern='^(unidentified|unclosed|all)$'),page: int=Query(1,ge=1),
+                          page_size: int=Query(50,ge=1,le=100),minimum_score: int=Query(0,ge=0,le=100),
+                          day_window: int=Query(3,ge=1,le=7),candidate_limit: int=Query(3,ge=1,le=20),
+                          keyword: str=Query('',max_length=200),sort_by: str=Query('source',pattern='^(source|score)$'),
+                          review_filter: str=Query('pending',pattern='^(all|pending|clues|no_clues|confirmed)$')):
+        return manager().workspace.matching_snapshot(scope=scope,page=page,page_size=page_size,minimum_score=minimum_score,
+            day_window=day_window,candidate_limit=candidate_limit,keyword=keyword,sort_by=sort_by,review_filter=review_filter)
+
+    @router.get('/ledger/preview')
+    def ledger_preview(page: int=Query(1,ge=1),page_size: int=Query(50,ge=1,le=100),keyword: str=Query('',max_length=200)):
+        data=manager().workspace._dataset()
+        if not data:return dict(rows=[],total=0,metadata=None)
+        needle=keyword.strip().casefold()
+        rows=[r for r in data['entries'] if not needle or any(needle in str(r.get(k) or '').casefold() for k in ('ref','payer','description'))]
+        return dict(rows=rows[(page-1)*page_size:page*page_size],total=len(rows),metadata=manager().workspace.ledger())
 
     @router.post('/matching/review')
     def review(body: ReceiptReview):

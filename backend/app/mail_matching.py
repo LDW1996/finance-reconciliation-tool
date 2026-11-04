@@ -368,25 +368,27 @@ def _group_payments(payments):
     return groups
 
 
-def rank_receipts(receipts: list, payments: list, day_window=3, limit=3, mapping=None, payment_id=None) -> list:
+def rank_receipts(receipts: list, payments: list, day_window=3, limit=3, mapping=None, payment_id=None, _groups=None, _by_date=None) -> list:
     """Date window is mandatory; amount/currency differences lower similarity.
 
     candidate_count is the deduplicated count before limit. Related search info
     is a list of {mail_id, search_info}; no scores are added for repeated mail.
     """
-    if day_window < 0 or limit < 0:
+    if day_window < 0 or (limit is not None and limit < 0):
         raise ValueError('day_window and limit must be nonnegative')
-    groups = _group_payments([effective_payment_date(payment) for payment in payments])
+    groups = _groups if _groups is not None else _group_payments([effective_payment_date(payment) for payment in payments])
     if payment_id is not None:
         # A saved confirmation may reference a noncanonical source copy. Keep
         # its original provenance, while retaining all copies for mapping clues.
         groups=[[selected]+[p for p in group if p is not selected]
                 for group in groups for selected in group if selected.get('id')==payment_id]
-    by_date={}
-    for group in groups:
-        day=_date(group[0].get('date'))
-        if day and not group[0].get('ambiguous'):
-            by_date.setdefault(day,[]).append(group)
+    by_date=_by_date
+    if by_date is None:
+        by_date={}
+        for group in groups:
+            day=_date(group[0].get('date'))
+            if day and not group[0].get('ambiguous'):
+                by_date.setdefault(day,[]).append(group)
     results = []
     for receipt in receipts:
         candidates = []
@@ -443,7 +445,7 @@ def rank_receipts(receipts: list, payments: list, day_window=3, limit=3, mapping
                     warnings.append('客户台账包含共享邮箱或一对多客户关系，请逐项核对。' if relationship['ambiguous'] else '通过客户台账关系补充匹配；未替换凭证付款人，请核对原始凭证。')
                 else:relationship=None
             candidate = dict(payment, payment_id=payment.get('id'), score=sum(breakdown.values()), breakdown=breakdown,
-                warnings=list(dict.fromkeys(warnings)), related_mail_ids=list(dict.fromkeys(p.get('mail_id') for p in group)),
+                warnings=list(dict.fromkeys(warnings)), related_payment_ids=list(dict.fromkeys(p.get('id') for p in group)), related_mail_ids=list(dict.fromkeys(p.get('mail_id') for p in group)),
                 related_search_info=[dict(mail_id=p.get('mail_id'), search_info=p.get('search_info', '')) for p in group])
             if relationship:
                 from copy import deepcopy

@@ -10,7 +10,7 @@
         <template v-if="asset.result">
           <el-alert v-for="message in asset.result.warnings" :key="message" :title="message" type="warning" :closable="false" />
           <el-table :data="fieldRows(asset)" size="small" empty-text="未提取到付款字段">
-            <el-table-column prop="label" label="项目" width="85" />
+            <el-table-column prop="label" label="项目" width="85"><template #default="{row}">{{ $platformText(row.label) }}</template></el-table-column>
             <el-table-column label="识别内容" min-width="155"><template #default="{row}">{{ row.item ? `${row.item.currency || ''} ${row.item.value}`.trim() : '未识别' }}</template></el-table-column>
             <el-table-column label="来源" width="85"><template #default="{row}"><el-button v-if="row.item" link type="primary" @click="show(asset,row.item.page,row.item)">第 {{ row.item.page }} 页</el-button></template></el-table-column>
           </el-table>

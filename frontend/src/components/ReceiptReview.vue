@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { mailApi } from '../services/mail'
+import ReceiptEvidencePreview from './ReceiptEvidencePreview.vue'
 import { Close } from '@element-plus/icons-vue'
 import type { MatchingRow, MatchingCandidate, ReviewState } from '../services/mailMatching'
 
@@ -100,11 +101,14 @@ const quotes = computed(() => {
   })
 })
 const relatedCount = computed(() => new Set(chosen.value?.related_mail_ids?.filter(id => id && id !== chosen.value?.mail_id) ?? []).size)
-function review(state: ReviewState) {
+async function review(state: ReviewState) {
   if (props.busy || props.stale) return
   if (state === 'confirmed') {
     if (chosen.value?.payment_id && !confirmed.value) emit('review', state, chosen.value)
-  } else emit('review', state)
+  } else {
+    if(state==='pending'){try{await ElMessageBox.confirm('将撤销本地核对状态，不删除邮件或流水；已回写在线表的内容不会自动撤销。','重置核对',{confirmButtonText:'确认重置',cancelButtonText:'取消',type:'warning'})}catch{return}}
+    if(!props.busy && !props.stale)emit('review', state)
+  }
 }
 </script>
 
@@ -128,8 +132,8 @@ function review(state: ReviewState) {
         <p class="muted list-caption">显示 {{ row.candidates.length }} 条 · 按匹配分排序</p>
         <ol class="candidate-list">
           <li v-for="(candidate, index) in row.candidates" :key="candidate.payment_id">
-            <button type="button" class="candidate-choice" :class="{ active: chosenId === candidate.payment_id }" :aria-pressed="chosenId === candidate.payment_id" @click="chosenId = candidate.payment_id">
-              <span class="rank">{{ index + 1 }}</span><span class="candidate-copy"><span class="candidate-subject">{{ candidate.subject || '无主题邮件' }}</span><span class="candidate-meta">{{ candidate.payer || '付款人未识别' }} · {{ candidate.date || '日期未识别' }}</span><span v-if="row.review.state === 'confirmed' && row.review.payment_id === candidate.payment_id" class="confirmed-label">已确认关联</span></span>
+            <button type="button" class="candidate-choice" :class="{ active: chosenId === candidate.payment_id }" :title="candidate.subject || '无主题邮件'" :aria-pressed="chosenId === candidate.payment_id" @click="chosenId = candidate.payment_id">
+              <span class="rank">邮件候选 {{ index + 1 }}</span><span class="candidate-copy"><span class="candidate-subject">{{ candidate.subject || '无主题邮件' }}</span><span class="candidate-meta">{{ candidate.payer || '付款人未识别' }} · {{ candidate.date || '日期未识别' }}</span><span v-if="row.review.state === 'confirmed' && row.review.payment_id === candidate.payment_id" class="confirmed-label">已确认关联</span></span>
               <span class="candidate-score"><strong>{{ candidate.score }}</strong><span>匹配分</span></span>
             </button>
           </li>
@@ -138,7 +142,7 @@ function review(state: ReviewState) {
       </aside>
 
       <article v-if="chosen" class="candidate-detail" aria-label="所选付款凭证">
-        <header class="selected-heading"><h3>所选凭证 <span class="selected-score">{{ chosen.score }}</span><span class="muted"> 匹配分 / 100</span></h3><p>{{ reason }}</p><p class="muted score-footnote">规则相似度，非正确率</p></header>
+        <header class="selected-heading"><h3>{{ chosen.subject || '所选付款凭证' }}</h3><p>{{ reason }}</p><div class="evidence-links"><el-button link type="primary" @click="emit('open-mail',chosen.mail_id)">查看邮件详情</el-button><el-button link type="primary" :loading="openingOriginal" @click="openOriginal">在 Outlook 中打开</el-button></div></header>
         <table class="comparison"><caption class="sr-only">银行流水与邮件凭证逐项核对</caption><colgroup><col class="field-column"><col><col><col></colgroup><thead><tr><th scope="col">核对项</th><th scope="col">银行流水</th><th scope="col">邮件凭证</th><th scope="col">核对说明</th></tr></thead><tbody><tr v-for="field in fields" :key="field.key" :class="{ warning: needsAttention(field) }"><th scope="row">{{ field.label }}</th><td>{{ valueFor(row.receipt, field.key) }}</td><td>{{ valueFor(chosen, field.key) }}</td><td class="muted">{{ explanation(field) }}</td></tr></tbody></table>
         <section v-if="chosen.mapping" class="detail-section" aria-label="客户映射依据">
           <h3>{{ chosen.mapping.label }} · 补充 {{ chosen.breakdown.mapping || 0 }} 分</h3>
@@ -146,16 +150,15 @@ function review(state: ReviewState) {
           <p class="muted">此为客户台账关系，凭证付款人仍保留原始识别结果；请结合金额、币种和日期核对。</p>
         </section>
         <ul v-if="warnings.length" class="warnings"><li v-for="warning in warnings" :key="warning">{{ warning }}</li></ul>
-        <section class="detail-section" aria-label="业务信息"><h3>业务信息与建议备注</h3><div class="business-ids"><el-tag v-for="id in chosen.business_ids" :key="id" type="info" effect="plain">{{ id }}</el-tag><span v-if="!chosen.business_ids?.length" class="muted">未识别业务编号</span></div><p class="remark raw-text">{{ chosen.remark || '暂无建议备注' }}</p></section>
-        <section class="detail-section" aria-label="凭证来源"><h3>凭证来源</h3><dl class="provenance"><div><dt>邮件主题</dt><dd>{{ chosen.subject || '无主题邮件' }}</dd></div><div><dt>发件人</dt><dd>{{ chosen.sender || '未提供' }}</dd></div><div><dt>收件时间</dt><dd>{{ chosen.received || '未提供' }}</dd></div><div><dt>附件 / 页码</dt><dd>{{ chosen.attachment_name || (chosen.attachment_id === 'latest_body' ? '邮件正文' : '附件名称未提供') }}<span v-if="chosen.page > 0"> · 第 {{ chosen.page }} 页</span></dd></div></dl><p v-if="relatedCount" class="muted">另有 {{ relatedCount }} 封相关邮件</p></section>
+        <ReceiptEvidencePreview :candidate="chosen"/><details class="supporting-details"><summary>业务信息与建议备注</summary><section class="detail-section" aria-label="业务信息"><h3>业务信息与建议备注</h3><div class="business-ids"><el-tag v-for="id in chosen.business_ids" :key="id" type="info" effect="plain">{{ id }}</el-tag><span v-if="!chosen.business_ids?.length" class="muted">未识别业务编号</span></div><p class="remark raw-text">{{ chosen.remark || '暂无建议备注' }}</p></section></details>
+        <details class="supporting-details"><summary>凭证来源与匹配分数</summary><p class="muted">{{ chosen.score }} / 100 · 规则相似度，非正确率</p><section class="detail-section" aria-label="凭证来源"><h3>凭证来源</h3><dl class="provenance"><div><dt>邮件主题</dt><dd>{{ chosen.subject || '无主题邮件' }}</dd></div><div><dt>发件人</dt><dd>{{ chosen.sender || '未提供' }}</dd></div><div><dt>收件时间</dt><dd>{{ chosen.received || '未提供' }}</dd></div><div><dt>附件 / 页码</dt><dd>{{ chosen.attachment_name || (chosen.attachment_id === 'latest_body' ? '邮件正文' : '附件名称未提供') }}<span v-if="chosen.page > 0"> · 第 {{ chosen.page }} 页</span></dd></div></dl><p v-if="relatedCount" class="muted">另有 {{ relatedCount }} 封相关邮件</p></section></details>
         <details :key="`${row.receipt.id}:${chosen.payment_id}`" class="evidence"><summary>查看原文证据 <span class="muted">{{ quotes.length }} 条</span></summary><figure v-for="(quote, index) in quotes" :key="index"><figcaption>{{ quote.label }}</figcaption><blockquote class="raw-text">{{ quote.text }}</blockquote></figure><p v-if="!quotes.length" class="muted">暂无可展示的原文引文，请查看原邮件及付款附件。</p></details>
       </article>
       <div v-else class="empty detail-empty">选择付款候选后，可在此逐项核对凭证。</div>
     </div>
 
     <footer class="review-footer">
-      <div class="footer-actions"><el-button :disabled="!chosen?.mail_id" @click="chosen?.mail_id && emit('open-mail', chosen.mail_id)">查看邮件详情</el-button><el-button :disabled="!chosen?.mail_id" :loading="openingOriginal" @click="openOriginal">在 Outlook 中打开</el-button><el-button type="primary" :disabled="busy || stale || !chosen?.payment_id || confirmed" :loading="busy" @click="review('confirmed')">确认关联</el-button><el-tag v-if="confirmed" type="success">已确认关联</el-tag><el-button :disabled="busy || stale" @click="review('rejected')">暂不关联</el-button><el-button :disabled="busy || stale" @click="review('pending')">重置核对</el-button></div>
-      <p class="muted">确认只保存本地关联，回写需单独提交</p>
+      <p class="muted">仅保存本地核对，不会自动回写流水。</p><div class="footer-actions"><el-tag v-if="confirmed" type="success">已确认关联</el-tag><el-button v-if="row.review.state!=='pending'" :disabled="busy || stale" @click="review('pending')">重置核对</el-button><el-button v-if="row.review.state!=='rejected' && !confirmed" :disabled="busy || stale" @click="review('rejected')">暂不关联</el-button><el-button v-if="!confirmed" type="primary" :disabled="busy || stale || !chosen?.payment_id" :loading="busy" @click="review('confirmed')">确认关联</el-button></div>
     </footer>
   </section>
 </template>
@@ -171,4 +174,12 @@ function review(state: ReviewState) {
 .bank-summary{grid-template-columns:1fr;gap:8px;padding:10px 0}.bank-amount{font-size:26px;line-height:1.3}.bank-facts{gap:8px 24px}.bank-facts>div{flex:1}
 .review-footer{padding-bottom:max(8px,env(safe-area-inset-bottom))}.review-footer>p{font-size:12px}.footer-actions{gap:6px}.footer-actions :deep(.el-button){font-size:12px;padding:8px 10px;min-height:36px}
 }
+</style>
+
+<style scoped>
+.review-columns{display:block}.candidate-sidebar{padding:18px 0;border-bottom:1px solid var(--border)}.candidate-list{display:flex;gap:10px;overflow-x:auto;margin-top:12px}.candidate-list li{flex:0 0 260px}.candidate-choice{padding:12px;min-height:84px}.candidate-score{display:none}.candidate-detail{border:0;padding:24px 0}.evidence-links{display:flex;gap:18px;margin-top:12px;flex-wrap:wrap}.review-footer{display:flex;align-items:center;justify-content:space-between;gap:16px}.review-footer>p{margin:0}.supporting-details{margin:18px 0;border-top:1px solid var(--border);padding-top:14px}.supporting-details summary{font-size:13px;cursor:pointer}.detail-empty{border:0}.selected-heading h3{line-height:1.6;overflow-wrap:anywhere}.sidebar-heading>.el-button{font-size:12px}@media(max-width:700px){.review-footer{align-items:stretch;flex-direction:column;gap:10px}.footer-actions{justify-content:flex-end}.candidate-list li{flex-basis:220px}}
+</style>
+
+<style scoped>
+.candidate-list li{flex:0 0 auto}.candidate-choice{min-height:40px;padding:10px 16px}.candidate-copy{display:none}.candidate-list{margin-top:8px}.candidate-sidebar{padding:14px 0}.list-caption{display:none}.rank{font-size:13px;color:inherit}.selected-heading{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 16px;margin-bottom:14px}.selected-heading h3{grid-column:1/-1;margin:0}.selected-heading p{margin:0}.selected-heading .evidence-links{margin:0}.bank-summary{padding:12px 0}.receipt-evidence{margin-top:16px}@media(max-width:700px){.selected-heading{grid-template-columns:1fr}.selected-heading h3{grid-column:auto}.selected-heading .evidence-links{grid-column:auto}}
 </style>

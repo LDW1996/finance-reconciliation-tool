@@ -47,7 +47,7 @@ onBeforeUnmount(()=>{alive=false;controller?.abort()})
 
 :global(html:has(.customer-preview-overlay)){overflow:hidden;overscroll-behavior:none}
 :global(.customer-preview-overlay .el-overlay-dialog){overflow:hidden;overscroll-behavior:none;padding:16px 0}
-:global(.customer-preview-dialog){height:min(900px,calc(100dvh - 32px));max-height:calc(100dvh - 32px);display:flex;flex-direction:column;overflow:hidden;margin:0 auto;padding:0}
+:global(.customer-preview-dialog){height:min(900px,calc(100dvh - 32px));max-height:calc(100dvh - 32px);display:flex;flex-direction:column;overflow:hidden;margin:auto;padding:0}
 :global(.customer-preview-dialog .el-dialog__header){flex:0 0 auto;margin:0;padding:16px 48px 16px 20px;border-bottom:1px solid var(--el-border-color-light)}
 :global(.customer-preview-dialog .el-dialog__body){flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;padding:12px 20px}
 :global(.customer-preview-dialog .el-dialog__footer){flex:0 0 auto;padding:12px 20px;border-top:1px solid var(--el-border-color-light)}

@@ -10,6 +10,7 @@ export interface MailPaymentSummary {
   status: 'pending' | 'ready' | 'partial' | 'empty' | 'failed'
 }
 export interface MailRelatedReceipts {
+  computation?:import('./mailMatching').MatchComputation
   ledger: LedgerMetadata | null; rows: MatchingRow[]; total_rows: number; day_window: number
 }
 
@@ -75,7 +76,7 @@ export const mailApi = {
   messages: async () => (await client.get<MailRow[]>('/messages')).data,
   message: async (id: string) => (await client.get<MailRow>(`/messages/${encodeURIComponent(id)}`)).data,
   receipts: async (id: string, limit = 5, dayWindow = 3, paymentId?:string) =>
-    (await client.get<MailRelatedReceipts>(`/messages/${encodeURIComponent(id)}/receipts`, { params: { day_window: dayWindow, limit,payment_id:paymentId || undefined } })).data,
+    (await client.get<MailRelatedReceipts>(`/messages/${encodeURIComponent(id)}/receipts`, { params: { day_window: dayWindow, limit,payment_id:paymentId || undefined,nonblocking:true } })).data,
   analyze: async (id: string) => (await client.post(`/messages/${encodeURIComponent(id)}/analyze`)).data,
   folders: async () => (await client.post<{ folders: MailFolder[]; errors: string[]; note: string }>('/folders')).data,
   scan: async (selection: object) => (await client.post<MailStatus>('/scan', selection)).data,

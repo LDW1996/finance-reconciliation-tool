@@ -82,12 +82,12 @@
         <div class="mail-filters" aria-label="付款信息筛选"><button v-for="chip in filterChips" :key="chip.value" :aria-pressed="paymentFilter === chip.value" @click="paymentFilter = chip.value">{{ chip.label }}</button></div>
         <div class="mail-cards" aria-label="邮件列表">
           <button v-for="row in filteredRows" :key="row.id" class="mail-card" :class="{selected: selected?.id === row.id}" :aria-pressed="selected?.id === row.id" @click="selectMessage(row)">
-            <strong class="mail-card-amount">{{ summaryAmount(row) }}</strong>
+            <strong class="mail-card-amount">{{ $platformText(summaryAmount(row)) }}</strong>
             <span class="mail-card-subject">{{ row.subject || '（无主题）' }}</span>
             <span>{{ row.payment_summary?.payers?.join('、') || '付款人待补充' }}</span>
             <span>付款日期：{{ row.payment_summary?.dates?.join('、') || '待补充' }}</span>
             <span class="mail-card-meta">{{ row.sender || '发件人未提供' }} · {{ formatDate(row.received) }}</span>
-            <span class="mail-card-status">{{ summaryStatus(row) }}</span>
+            <span class="mail-card-status">{{ $platformText(summaryStatus(row)) }}</span>
           </button>
           <p v-if="!filteredRows.length" class="mail-muted">{{ savedTotal ? '没有符合筛选条件的邮件' : '暂无邮件，可导入 MSG / EML 邮件' }}</p>
         </div>
@@ -182,6 +182,7 @@ watch([filter,paymentFilter],()=>{
   rows.value=[]; mailTotal.value=0; mailPage.value=1; scheduleMessages()
 })
 watch(mailPage,scheduleMessages)
+watch(section,value=>{if(value==='mail')scheduleMessages()})
 
 let timer: ReturnType<typeof setTimeout> | undefined, disposed=false, detailRequest=0, relatedRequest=0, initialized=false
 const errorText=(error: any)=>{const detail=error.response?.data?.detail;return typeof detail === 'string' ? detail : detail ? '输入参数无效，请检查天数、封数和文件夹。' : '无法连接本机邮件服务，请检查程序是否正在运行。'}
@@ -198,7 +199,8 @@ async function refresh() {
       else if(status.value.store && status.value.folder){folders.value=[{store:status.value.store,id:status.value.folder,label:status.value.folder_label || '上次选择的 Outlook 文件夹'}];folderKeys.value=folders.value.map(folderValue)}
       initialized=true
     }
-    if(!status.value.status_diagnostic) await loadMessages(); connectionError.value=''
+    if(!status.value.status_diagnostic && section.value==='mail') await loadMessages(); connectionError.value=''
+    if(section.value==='mail' && related.value?.computation?.stale && !relatedLoading.value)void loadRelated()
     if(selected.value && (status.value.analysis_busy || selected.value.payment_summary?.status === 'pending' || rows.value.find(row => row.id === selected.value?.id)?.payment_summary?.status !== selected.value.payment_summary?.status || selected.value.attachment_details?.some(a=>a.status==='pending' || a.status==='running'))) {
       const identity=selected.value.id, request=detailRequest
       const detail=await mailApi.message(identity)
@@ -210,7 +212,7 @@ async function refresh() {
       }
     }
   } catch(error) { connectionError.value=errorText(error) }
-  finally { if(!disposed) timer=setTimeout(refresh,4000) }
+  finally { if(!disposed) timer=setTimeout(refresh,section.value==='mail'?4000:15000) }
 }
 async function action(name: string, work: ()=>Promise<void>) {
   working.value=name

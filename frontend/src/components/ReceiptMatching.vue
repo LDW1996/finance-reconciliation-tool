@@ -1,29 +1,24 @@
 <template>
   <section ref="root" class="receipt-matching" aria-label="收款匹配" :aria-busy="busy">
+    <el-dialog v-model="sourcesOpen" :append-to-body="true" title="流水与台账设置" width="min(1160px, 96vw)" class="receipt-source-dialog" align-center :destroy-on-close="false" :close-on-click-modal="!busy">
+      <p class="source">两个来源独立配置，更新后统一生成匹配结果。保存配置不会读取在线表。</p>
     <section class="online-sources" aria-label="在线数据来源">
       <section class="online-panel source-card" aria-label="在线银行流水">
         <div class="online-heading"><h3>银行流水</h3><el-tag :type="onlineConfig?.configured ? 'success' : 'info'">{{ onlineConfig?.configured ? '已配置' : '待配置' }}</el-tag><el-tag v-if="result?.ledger?.online" type="success">当前使用在线流水</el-tag></div>
         <p class="source">{{ result?.ledger ? `${result.ledger.sheet} · ${result.ledger.entries_count.toLocaleString()} 条收款` : '读取待核对的银行收款记录' }}<span v-if="result?.ledger && !result.ledger.online"> · 当前使用备用文件</span></p>
         <p class="source">上次在线读取：{{ onlineConfig?.last_read_at ? readableTime(onlineConfig.last_read_at) : '尚未读取' }}</p>
-        <div class="actions"><el-button :disabled="busy" @click="openConfig">配置来源</el-button><el-button type="primary" :loading="operation === 'online-read'" :disabled="busy || !onlineConfig?.configured" @click="readOnline">读取银行流水</el-button></div>
-        <p class="source">核对后可单独回写关联。在线表更新后，请重新读取。</p>
+        <el-form class="bank-inline-form" label-position="top" @submit.prevent="saveConfig"><el-form-item label="Google Sheets 工作表链接（含 gid）"><el-input v-model="configUrl" aria-label="银行流水工作表链接" :disabled="busy"/></el-form-item><el-form-item label="流水币种"><el-select v-model="configCurrency" aria-label="在线流水币种" :disabled="busy"><el-option v-for="item in currencies" :key="item" :label="item" :value="item"/></el-select></el-form-item><el-form-item label="服务账号 JSON（已配置时可留空）"><input ref="credentialInput" type="file" accept=".json,application/json" aria-label="银行流水授权文件" :disabled="busy" @change="chooseCredential"/></el-form-item><p class="source">{{ onlineConfig?.service_email || '保存授权后显示服务账号邮箱' }}</p><p class="source">请将工作表共享给授权账号；回写需要编辑权限。</p></el-form><div class="actions"><el-button type="primary" :loading="operation === 'online-read'" :disabled="busy || bankConfigDirty || !onlineConfig?.configured" @click="readOnline">读取银行流水</el-button><el-button :disabled="busy || !result?.ledger" @click="bankPreviewOpen=true">查看流水</el-button></div>
+        <p v-if="bankConfigDirty" class="source warning">配置尚未保存，请先保存设置，再读取在线来源。</p><p class="source">核对后可单独回写关联。在线表更新后，请重新读取。</p>
         <p v-if="result?.ledger?.online && onlineConfig?.spreadsheet_url && result.ledger.online.url !== onlineConfig.spreadsheet_url" class="source">来源已修改，当前仍使用上次数据；读取成功后才替换。</p>
         <el-alert v-if="onlineError" :title="onlineError" type="error" :closable="false" show-icon />
         <p v-if="onlineError && result?.ledger" class="source">未成功读取前，当前流水数据保持不变。</p>
       </section>
-      <CustomerMapping ref="customerPanel" :disabled="busy" @busy-change="mappingBusy=$event" @changed="mappingChanged" />
+      <CustomerMapping ref="customerPanel" :embedded="true" :disabled="busy" @busy-change="mappingBusy=$event" @changed="mappingChanged" @metadata="customerMetadata=$event" />
     </section>
-    <el-dialog v-model="configOpen" title="配置银行流水来源" width="min(600px, 94vw)" :close-on-click-modal="false" :close-on-press-escape="operation !== 'online-config'" :show-close="operation !== 'online-config'" @closed="clearCredential">
-      <el-form label-position="top" @submit.prevent="saveConfig">
-        <el-form-item label="Google Sheets 工作表链接（含 gid）"><el-input v-model="configUrl" aria-label="Google Sheets 工作表链接" :disabled="operation === 'online-config'" /></el-form-item>
-        <el-form-item label="流水币种"><el-select v-model="configCurrency" aria-label="在线流水币种" :disabled="operation === 'online-config'"><el-option v-for="item in currencies" :key="item" :label="item" :value="item" /></el-select></el-form-item>
-        <el-form-item label="服务账号 JSON（已配置时可留空）"><input ref="credentialInput" type="file" accept=".json,application/json" aria-label="服务账号 JSON 文件" :disabled="operation === 'online-config'" @change="chooseCredential" /></el-form-item>
-      </el-form>
-      <p class="source">授权文件加密保存在本机，后续读取无需重复选择；页面不展示密钥内容。</p>
-      <el-alert :title="onlineConfig?.service_email ? `请将工作表共享给 ${onlineConfig.service_email}，授予编辑权限。` : '首次保存后将显示服务账号邮箱，请将工作表共享给该邮箱并授予编辑权限。'" type="info" :closable="false" />
-      <el-alert v-if="onlineError" :title="onlineError" type="error" :closable="false" />
-      <template #footer><el-button :disabled="operation === 'online-config'" @click="configOpen = false">关闭</el-button><el-button type="primary" :loading="operation === 'online-config'" :disabled="busy" @click="saveConfig">保存配置</el-button></template>
+      <details class="file-backup source-backup"><summary>本地文件备用导入</summary><div class="toolbar"><label>流水币种<el-select v-model="currency" :disabled="busy"><el-option v-for="item in currencies" :key="item" :label="item" :value="item" /></el-select></label><label>工作表（可选）<el-input v-model="sheet" :disabled="busy" /></label><input ref="fileInput" class="file-input" type="file" accept=".xlsx,.xls,.csv" aria-label="选择收款台账" @change="importFile" /><el-button :loading="operation==='import'" :disabled="busy" @click="fileInput?.click()">导入银行流水</el-button></div><div class="customer-file-backup"><label>客户台账工作表（可选）<el-input v-model="customerBackupSheet" :disabled="busy" /></label><input type="file" accept=".xlsx,.csv" aria-label="选择备用客户映射台账" :disabled="busy" @change="customerPanel?.importBackup($event,customerBackupSheet)" /></div><p class="source">导入将替换对应本地数据，不删除邮件；已有确认关系会重新校验。</p></details>
+      <template #footer><el-button :disabled="busy" @click="sourcesOpen=false">关闭设置</el-button><el-button type="primary" :disabled="busy" @click="saveSources">保存设置</el-button></template>
     </el-dialog>
+    <BankLedgerPreview v-if="bankPreviewOpen" @close="bankPreviewOpen=false" />
     <el-dialog v-model="historyOpen" title="同步记录" width="min(1000px, 94vw)">
       <el-alert v-if="onlineError" :title="onlineError" type="error" :closable="false" />
       <el-table :data="history" max-height="480" :empty-text="operation === 'online-history' ? '正在加载…' : '暂无同步记录'">
@@ -32,62 +27,34 @@
       </el-table>
     </el-dialog>
     <section class="review-workspace" aria-label="收款查询与列表">
-      <div class="writeback-actions actions"><el-button :icon="Download" :loading="operation === 'cashier-export'" :disabled="busy || !result?.ledger" @click="exportCashierPackage">导出出纳核对包</el-button><el-button :loading="operation === 'online-write'" :disabled="busy || stale || !onlineConfig?.configured || !result?.ledger?.online" @click="writeOnline">回写已确认关联</el-button><el-button :disabled="busy" @click="openHistory">同步记录</el-button></div>
-      <p class="source">核对包包含全部已导入流水、前三条候选及已确认凭证，独立列出待核对记录；解压后查看，不会确认关联或回写流水。附件上限512MB。</p>
+      <header class="workspace-heading"><h2>收款核对</h2><div class="workspace-actions"><el-button type="primary" :icon="Refresh" :loading="sourceUpdating" :disabled="busy || sourceUpdating" @click="updateData">更新数据</el-button><el-button :icon="Setting" :disabled="sourceUpdating" @click="sourcesOpen=true">流水与台账设置</el-button><el-dropdown trigger="click" :disabled="busy || sourceUpdating" @command="moreAction"><el-button>更多操作<el-icon><ArrowDown/></el-icon></el-button><template #dropdown><el-dropdown-menu><el-dropdown-item command="cashier" :disabled="!result?.ledger || stale">导出出纳核对包</el-dropdown-item><el-dropdown-item command="export" :disabled="!result?.ledger || stale">导出匹配建议</el-dropdown-item><el-dropdown-item command="write" :disabled="stale || !result?.ledger?.online">回写已确认关联</el-dropdown-item><el-dropdown-item command="history" divided>同步记录</el-dropdown-item></el-dropdown-menu></template></el-dropdown></div></header>
+      <div class="snapshot-status" role="status"><el-tag :type="sourceError || computation?.state==='failed' ? 'warning' : computation?.stale ? 'info' : 'success'">{{ sourceError ? '来源更新失败' : !result && busy ? '正在加载结果' : computation?.state==='running' ? '正在更新匹配' : computation?.state==='failed' ? '更新失败' : computation?.stale ? '有新数据待更新' : result?.ledger ? '结果已更新' : '尚未配置数据来源' }}</el-tag><span v-if="computation?.updated_at">更新于 {{ readableTime(computation.updated_at) }}</span><span>银行流水 {{ result?.ledger?.entries_count || 0 }} 条 · 客户映射 {{ customerMetadata?.entries_count || 0 }} 条</span></div>
+      <p class="source">使用已保存结果；邮件付款信息变化后统一更新匹配，搜索、排序和翻页不会重新计算。</p>
+      <el-alert v-if="computation?.stale && result?.rows.length" title="正在显示上次成功的结果，可继续查看；更新完成前不能确认或回写。" type="info" :closable="false" />
+      <el-alert v-if="computation?.state==='failed'" :title="computation.error" type="warning" :closable="false" show-icon><el-button link type="primary" :disabled="busy" @click="retryMatches">重试更新</el-button></el-alert>
+      <el-alert v-if="sourceError" :title="sourceError" type="warning" :closable="false" show-icon><p>上次成功数据保留，当前列表仍可查看。</p><el-button link @click="sourcesOpen=true">查看来源设置</el-button></el-alert>
+      <p v-if="sourceStage" class="source" role="status">{{ sourceStage }}</p>
       <template v-if="writebackResult">
         <p class="summary" role="status">已写入 {{ writebackResult.written }} · 无变化 {{ writebackResult.unchanged }} · 失败 {{ writebackResult.failed }} · 待核实 {{ writebackResult.uncertain }}</p>
         <el-alert v-if="writebackResult.uncertain" title="部分写入结果待核实，请先读取在线流水并查看同步记录，再决定是否重试。" type="warning" :closable="false" />
         <el-table v-if="writebackIssues.length" :data="writebackIssues" max-height="240" empty-text="无失败记录"><el-table-column prop="ref" label="收款编号" min-width="150" /><el-table-column prop="status" label="状态" width="120" /><el-table-column prop="message" label="处理说明" min-width="240" /></el-table>
       </template>
 
-      <header class="workspace-heading"><div><h2>收款核对</h2></div><span v-if="result?.ledger?.skipped" class="skipped-note">{{ result.ledger.skipped }} 行无有效日期或金额，已跳过</span></header>
-      <div v-if="result?.ledger" class="overview" role="status">
-        <div><span>当前收款范围</span><strong>{{ result.summary.eligible.toLocaleString() }}</strong></div>
-        <div class="has-clues"><span>有邮件线索</span><strong>{{ result.summary.matched.toLocaleString() }}</strong></div>
-        <div><span>暂无邮件线索</span><strong>{{ result.summary.unmatched.toLocaleString() }}</strong></div>
-        <div><span>已确认关联</span><strong>{{ result.summary.confirmed.toLocaleString() }}</strong></div>
-      </div>
-    <form class="query-bar" @submit.prevent="applySearch">
-      <label class="query-keyword">查找收款<el-input v-model="keywordDraft" clearable :prefix-icon="Search" maxlength="200" placeholder="流水号、付款人或银行摘要" aria-label="搜索流水号付款人或摘要" :disabled="mutating" @clear="applySearch" /></label>
-      <label>收款范围<el-select v-model="scope" aria-label="收款状态" :disabled="mutating"><el-option label="未识别收款" value="unidentified" /><el-option label="未结清收款" value="unclosed" /><el-option label="全部收款" value="all" /></el-select></label>
-      <label>匹配分数<el-select v-model="minimumScore" aria-label="最低匹配分数" :disabled="mutating"><el-option label="全部分数" :value="0" /><el-option label="70 分及以上" :value="70" /><el-option label="90 分及以上" :value="90" /><el-option v-if="![0,70,90].includes(minimumScore)" :label="`${minimumScore} 分及以上`" :value="minimumScore" /></el-select></label>
-      <el-button native-type="submit" type="primary" :icon="Search" :loading="operation === 'load'" :disabled="mutating">查询</el-button>
-      <el-button text :aria-expanded="advancedOpen" @click="advancedOpen = !advancedOpen">{{ advancedOpen ? '收起条件' : '更多条件' }}<el-icon><ArrowDown /></el-icon></el-button>
-    </form>
-    <div v-if="advancedOpen" class="advanced-filters">
-      <label>付款日期允许相差<el-select v-model="dayWindow" aria-label="日期容差天数" :disabled="mutating"><el-option v-for="days in 7" :key="days" :label="`前后 ${days} 天`" :value="days" /></el-select></label>
-      <label>排列顺序<el-select v-model="sortBy" aria-label="排列顺序" :disabled="mutating"><el-option label="匹配分从高到低" value="score" /><el-option label="流水原始顺序" value="source" /></el-select></label>
-      <el-button text :disabled="mutating" @click="resetFilters">重置条件</el-button>
-    </div>
-    <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon />
-    <div class="results-caption"><strong>{{ result?.total_rows.toLocaleString() || 0 }} 笔筛选结果</strong><span>{{ sortBy === 'score' ? '按匹配分从高到低排列' : '按流水原始顺序排列' }} · 评分仅供核对参考</span><el-button text :icon="Refresh" :loading="operation === 'load'" :disabled="busy" @click="refresh()">刷新结果</el-button></div>
+      <div class="receipt-list-tools"><div class="review-tabs" role="tablist" aria-label="核对状态筛选"><button v-for="item in reviewTabs" :key="item.value" role="tab" :aria-selected="reviewFilter===item.value" :disabled="mutating" @click="reviewFilter=item.value">{{ $platformText(item.label) }} <span>{{ item.count }}</span></button></div><form class="compact-search" @submit.prevent="applySearch"><el-input v-model="keywordDraft" clearable :prefix-icon="Search" maxlength="200" placeholder="流水号、付款人或银行摘要" aria-label="搜索流水号付款人或摘要" :disabled="mutating" @clear="applySearch" /><el-button text :aria-expanded="advancedOpen" @click="advancedOpen=!advancedOpen">更多筛选<el-icon><ArrowDown/></el-icon></el-button></form></div>
+      <div v-if="advancedOpen" class="advanced-filters"><label>收款范围<el-select v-model="scope" aria-label="收款状态" :disabled="mutating"><el-option label="未识别收款" value="unidentified"/><el-option label="未结清收款" value="unclosed"/><el-option label="全部收款" value="all"/></el-select></label><label>付款日期允许相差<el-select v-model="dayWindow" aria-label="日期容差天数" :disabled="mutating"><el-option v-for="days in 7" :key="days" :label="`前后 ${days} 天`" :value="days"/></el-select></label><label>匹配分数<el-select v-model="minimumScore" aria-label="最低匹配分数" :disabled="mutating"><el-option label="全部分数" :value="0"/><el-option label="70 分及以上" :value="70"/><el-option label="90 分及以上" :value="90"/></el-select></label><label>排列顺序<el-select v-model="sortBy" aria-label="排列顺序" :disabled="mutating"><el-option label="匹配分从高到低" value="score"/><el-option label="流水原始顺序" value="source"/></el-select></label><el-button text :disabled="mutating" @click="resetFilters">重置条件</el-button></div>
+      <el-alert v-if="error" :title="error" type="warning" :closable="false" show-icon><span v-if="result?.ledger">当前显示上次成功结果。</span><el-button link :disabled="busy" @click="refresh()">重新加载</el-button></el-alert>
+      <div class="results-caption"><strong>{{ result?.total_rows.toLocaleString() || 0 }} 笔筛选结果</strong><span v-if="result?.ledger?.skipped">{{ result.ledger.skipped }} 行无有效日期或金额，已跳过</span></div>
     <div class="table-scroll">
       <el-table :data="result?.rows || []" row-key="receipt.id" :max-height="550" highlight-current-row :current-row-key="selectedId" :empty-text="busy ? '正在加载收款…' : result?.ledger ? '没有符合条件的收款，可降低分数或调整范围' : '请先读取在线流水或导入台账'" @row-click="selectRow">
         <el-table-column label="银行流水" min-width="185"><template #default="{row}"><strong class="row-reference">{{ row.receipt.ref || '未提供参考号' }}</strong><small class="row-secondary">{{ row.receipt.date }}</small></template></el-table-column>
         <el-table-column label="收款金额" min-width="165"><template #default="{ row }"><strong class="row-amount">{{ money(row.receipt.amount, row.receipt.currency) }}</strong></template></el-table-column>
         <el-table-column label="付款人" min-width="180"><template #default="{row}">{{ row.receipt.payer || '未提供付款人' }}</template></el-table-column>
-        <el-table-column prop="receipt.status" label="收款状态" min-width="120" />
-        <el-table-column label="匹配分" width="100"><template #default="{ row }"><span v-if="row.candidates.length" class="score-pill" :class="scoreClass(row.candidates[0].score)">{{ row.candidates[0].score }}<small>分</small></span><span v-else class="row-secondary">—</span><small v-if="hasTie(row)" class="warning row-secondary">存在同分候选</small></template></el-table-column>
-        <el-table-column label="候选凭证" width="100"><template #default="{row}">{{ row.candidate_count }} 条</template></el-table-column>
-        <el-table-column label="操作" width="125" fixed="right"><template #default="{ row }"><el-button link type="primary" @click.stop="selectRow(row)">{{ row.review.state === 'confirmed' ? '查看已确认' : '核对邮件' }}</el-button><small class="row-secondary">{{ reviewLabels[row.review.state as ReviewState] }}</small></template></el-table-column>
+        <el-table-column label="邮件线索" min-width="285"><template #default="{row}"><template v-if="row.candidates.length"><el-tag size="small" :type="hasTie(row)?'warning':'info'">{{ row.candidate_count }} 条候选{{ hasTie(row)?' · 同分待核对':'' }}</el-tag><small class="row-secondary">{{ row.candidates[0].subject }}</small><span v-if="row.candidates[0].mapping" class="mapping-clue">客户台账关联</span></template><span v-else class="row-secondary">暂无邮件线索</span></template></el-table-column><el-table-column label="核对状态" width="115"><template #default="{row}"><el-tag size="small" :type="row.review.state==='confirmed'?'success':'info'">{{ $platformText(reviewLabels[row.review.state as ReviewState]) }}</el-tag></template></el-table-column>
+        <el-table-column label="操作" width="125" fixed="right"><template #default="{ row }"><el-button link type="primary" @click.stop="selectRow(row)">{{ row.review.state === 'confirmed' ? '查看已确认' : row.candidates.length ? '核对' : '查看' }}</el-button></template></el-table-column>
       </el-table>
     </div>
     <div class="pagination"><el-pagination :current-page="page" :page-size="50" :total="result?.total_rows || 0" layout="prev, pager, next" :pager-count="5" :disabled="mutating" @current-change="changePage" /></div>
     </section>
-    <details class="file-backup">
-      <summary>备用文件导入与导出<span>日常使用上方两个在线读取入口</span></summary>
-    <div class="toolbar">
-      <label>台账币种<el-select v-model="currency" aria-label="台账币种" :disabled="busy"><el-option v-for="item in currencies" :key="item" :label="item" :value="item" /></el-select></label>
-      <label>工作表<el-input v-model="sheet" aria-label="工作表" placeholder="自动选择 Bank Transactions" :disabled="busy" list="receipt-ledger-sheets" /></label>
-      <datalist id="receipt-ledger-sheets"><option v-for="item in result?.ledger?.available_sheets || []" :key="item" :value="item" /></datalist>
-      <input ref="fileInput" class="file-input" type="file" accept=".xlsx,.xls,.csv" aria-label="选择收款台账" @change="importFile" />
-      <el-button :icon="Upload" :loading="operation === 'import'" :disabled="busy" @click="fileInput?.click()">导入台账</el-button>
-      <el-button :icon="Download" :loading="operation === 'export'" :disabled="busy || !result?.ledger" @click="exportFile">导出匹配建议</el-button>
-    </div>
-    <p class="source" v-if="result?.ledger && !result.ledger.online">{{ result.ledger.name }} · {{ result.ledger.sheet || 'CSV' }} · {{ result.ledger.entries_count }} 条收款</p>
-    <p class="source" v-if="!result?.ledger">导入 xlsx、xls 或 csv 台账，最大 25MB</p>
-      <div class="customer-file-backup"><h3>备用客户台账</h3><p class="source">仅作为备用；支持XLSX/CSV，最大5MB。导入后暂用文件数据，下次在线读取成功时更新。</p><label>客户台账工作表（可选）<el-input v-model="customerBackupSheet" aria-label="备用客户台账工作表" :disabled="busy" /></label><input type="file" accept=".xlsx,.csv" aria-label="选择备用客户映射台账" :disabled="busy" @change="customerPanel?.importBackup($event,customerBackupSheet)" /></div>
-    </details>
     <el-drawer v-model="reviewOpen" :with-header="false" size="min(1180px, 96vw)" class="receipt-review-drawer" :close-on-click-modal="!mutating" :close-on-press-escape="!mutating" destroy-on-close>
       <ReceiptReview v-if="selected" :row="selected" :busy="mutating" :stale="stale" :expanded="expanded" :preferred-mail-id="preferredMailId" :preferred-payment-id="preferredPaymentId" @close="reviewOpen=false" @expand="expandCandidates" @review="review" @open-mail="openMail" />
       <el-empty v-else description="该收款不在当前结果中，请重新选择"><el-button @click="reviewOpen=false">返回列表</el-button></el-empty>
@@ -97,11 +64,13 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
-import { Download, Refresh, Upload, Search, ArrowDown } from '@element-plus/icons-vue'
+import { Download, Refresh, Upload, Search, ArrowDown, Setting } from '@element-plus/icons-vue'
 import ReceiptReview from './ReceiptReview.vue'
 import CustomerMapping from './CustomerMapping.vue'
+import BankLedgerPreview from './BankLedgerPreview.vue'
+import { platformText } from '../platformLocale'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { mailMatchingApi, matchingError, validateSpreadsheetUrl, type OnlineConfig, type OnlineHistoryItem, type OnlineWriteback, type MatchingCandidate, type MatchingResult, type MatchingRow, type MatchingScope, type ReviewState } from '../services/mailMatching'
+import { mailMatchingApi, matchingError, validateSpreadsheetUrl, type OnlineConfig, type OnlineHistoryItem, type OnlineWriteback, type MatchingCandidate, type MatchingResult, type MatchingRow, type MatchingScope, type ReviewState, type MatchComputation, type CustomerMappingMetadata } from '../services/mailMatching'
 
 const props = withDefaults(defineProps<{ active?: boolean }>(), { active: true })
 const emit = defineEmits<{ 'open-mail': [mailId: string] }>()
@@ -112,27 +81,37 @@ const dayWindow = ref(3), minimumScore = ref(0), page = ref(1), selectedId = ref
 const keywordDraft=ref(''), keyword=ref(''), advancedOpen=ref(false), reviewOpen=ref(false), sortBy=ref<'source'|'score'>('score')
 const pendingReceiptId=ref(''),preferredMailId=ref(''),preferredPaymentId=ref('')
 const result = ref<MatchingResult>(), error = ref(''), operation = ref(''), stale = ref(true)
+const sourcesOpen=ref(false),bankPreviewOpen=ref(false),sourceUpdating=ref(false),sourceStage=ref(''),sourceError=ref('')
+const customerMetadata=ref<CustomerMappingMetadata>({}),computation=ref<MatchComputation>()
+const reviewFilter=ref<'all'|'pending'|'clues'|'no_clues'|'confirmed'>('pending')
+const reviewTabs=computed(()=>[
+  {value:'pending' as const,label:'全部待核对',count:result.value?.summary.pending || 0},
+  {value:'clues' as const,label:'有邮件线索',count:result.value?.summary.with_clues || 0},
+  {value:'no_clues' as const,label:'暂无线索',count:result.value?.summary.without_clues || 0},
+  {value:'confirmed' as const,label:'已确认',count:result.value?.summary.confirmed || 0},
+])
 const defaultSheetUrl = ''
 const onlineConfig = ref<OnlineConfig>(), onlineError = ref('')
-const configOpen = ref(false), configUrl = ref(defaultSheetUrl), configCurrency = ref('IDR')
+const configUrl = ref(defaultSheetUrl), configCurrency = ref('IDR')
 const credentialInput = ref<HTMLInputElement>(), credential = ref<File>()
+const bankConfigDirty=computed(()=>configUrl.value.trim()!==(onlineConfig.value?.spreadsheet_url || '') || configCurrency.value!==(onlineConfig.value?.currency || 'IDR') || !!credential.value)
 const historyOpen = ref(false), history = ref<OnlineHistoryItem[]>([])
 const writebackResult = ref<OnlineWriteback>()
 const writebackIssues = computed(() => writebackResult.value?.items.filter(item => !['written', 'unchanged'].includes(item.status)) || [])
 const customerPanel=ref<InstanceType<typeof CustomerMapping>>(),customerBackupSheet=ref('')
 const mappingBusy=ref(false)
 const busy = computed(() => !!operation.value || mappingBusy.value)
-const mutating = computed(() => mappingBusy.value || (!!operation.value && operation.value !== 'load'))
+const mutating = computed(() => sourceUpdating.value || mappingBusy.value || (!!operation.value && operation.value !== 'load'))
 const selected = computed(() => result.value?.rows.find(row => row.receipt.id === selectedId.value))
 const reviewLabels: Record<ReviewState, string> = { pending: '待核对', confirmed: '已确认', rejected: '暂不关联' }
 let sequence = 0, alive = true, activated = true, visible = true, pendingRefresh = false
 let timer: ReturnType<typeof setTimeout> | undefined, controller: AbortController | undefined
 let observer: IntersectionObserver | undefined
 const isActive = () => alive && activated && visible && props.active && !document.hidden
-const query = () => ({ scope: scope.value, page: page.value, page_size: 50, minimum_score: minimumScore.value ?? 0, day_window: dayWindow.value ?? 3, candidate_limit: expanded.value ? 20 : 3, keyword:keyword.value,sort_by:sortBy.value })
+const query = () => ({ scope: scope.value, page: page.value, page_size: 50, minimum_score: minimumScore.value ?? 0, day_window: dayWindow.value ?? 3, candidate_limit: expanded.value ? 20 : 3, keyword:keyword.value,sort_by:sortBy.value,review_filter:reviewFilter.value })
 function schedule() {
   clearTimeout(timer)
-  if (isActive()) timer = setTimeout(() => { void refresh() }, 5000)
+  if (isActive() && !sourceUpdating.value) timer = setTimeout(() => { void pollMatchState() }, computation.value?.state==='running' ? 2000 : 15000)
 }
 // A single request lane serializes polling, imports, exports and review writes.
 async function run(kind: string, work: (signal: AbortSignal, token: number) => Promise<void>) {
@@ -146,14 +125,14 @@ async function run(kind: string, work: (signal: AbortSignal, token: number) => P
   finally {
     if (alive) {
       operation.value = ''
-      if (pendingRefresh && isActive()) { pendingRefresh = false; void refresh() }
+      if (!sourceUpdating.value && pendingRefresh && (isActive() || (reviewOpen.value && props.active))) { pendingRefresh = false; void refresh(true) }
       else schedule()
     }
   }
 }
-function mappingChanged(){stale.value=true;void refresh()}
-async function refresh() {
-  if (!isActive()) return
+function mappingChanged(){stale.value=true;if(!sourceUpdating.value)void refresh()}
+async function refresh(requiredAfterWrite = false) {
+  if (!requiredAfterWrite && !isActive()) return
   if (busy.value) { pendingRefresh = true; return }
   const params = query()
   await run('load', async (signal, token) => {
@@ -161,13 +140,14 @@ async function refresh() {
       try { onlineConfig.value = await mailMatchingApi.onlineConfig(signal) }
       catch (cause) { if (!signal.aborted) onlineError.value = matchingError(cause) }
     }
-    const data = await mailMatchingApi.matching(params, signal)
+    const data = await mailMatchingApi.snapshot(params, signal)
+    computation.value=data.computation
     if (!alive || token !== sequence) return
     const sameLedger = !result.value || result.value.ledger?.id === data.ledger?.id
     result.value = data
     if (!sameLedger) { selectedId.value = ''; expanded.value = false }
     if (selectedId.value && !data.rows.some(row => row.receipt.id === selectedId.value)) selectedId.value = ''
-    stale.value = false
+    stale.value = !!data.computation?.stale
     error.value = ''
     if(pendingReceiptId.value){
       const target=data.rows.find(row=>row.receipt.id===pendingReceiptId.value)
@@ -186,12 +166,12 @@ function invalidate() {
   pendingRefresh = true
   if (!busy.value) { pendingRefresh = false; void refresh() }
 }
-watch([scope, dayWindow, minimumScore,keyword,sortBy], () => { page.value = 1; expanded.value = false; invalidate() })
+watch([scope, dayWindow, minimumScore,keyword,sortBy,reviewFilter], () => { page.value = 1; expanded.value = false; invalidate() })
 function applySearch(){if(mutating.value)return;if(keyword.value===keywordDraft.value.trim())void refresh();else keyword.value=keywordDraft.value.trim()}
 function resetFilters(){keywordDraft.value='';keyword.value='';scope.value='unidentified';minimumScore.value=0;dayWindow.value=3;sortBy.value='score'}
 function changePage(value: number) { page.value = value; expanded.value = false; invalidate() }
 function selectRow(row: MatchingRow) {
-  if (mutating.value) return
+  if (['review','import','online-write'].includes(operation.value)) return
   reviewOpen.value=true
   preferredMailId.value=''
   preferredPaymentId.value=''
@@ -228,19 +208,28 @@ async function openConfig() {
   clearCredential()
   configUrl.value = onlineConfig.value?.spreadsheet_url || defaultSheetUrl
   configCurrency.value = onlineConfig.value?.currency || 'IDR'
-  onlineError.value = ''; configOpen.value = true
+  onlineError.value = ''; sourcesOpen.value = true
 }
 async function saveConfig() {
   if (busy.value) return
   try { validateSpreadsheetUrl(configUrl.value) } catch (cause) { onlineError.value = matchingError(cause); return }
+  let saved=false
   await onlineWork('online-config', async (signal, token) => {
     try {
       const config = await mailMatchingApi.saveOnlineConfig(configUrl.value, configCurrency.value, credential.value, signal)
       if (!alive || token !== sequence) return
-      onlineConfig.value = config
+      onlineConfig.value = config;saved=true
       ElMessage.success('配置已保存，请确认服务账号拥有工作表编辑权限')
     } finally { clearCredential() }
   })
+  return saved
+}
+async function saveSources(){
+  if(busy.value)return
+  const bankChanged=configUrl.value.trim()!==(onlineConfig.value?.spreadsheet_url || '') || configCurrency.value!==(onlineConfig.value?.currency || 'IDR') || !!credential.value
+  if(bankChanged && !(await saveConfig()))return
+  if((await customerPanel.value?.saveIfChanged())===false)return
+  ElMessage.success('来源设置已保存，未读取在线表。');sourcesOpen.value=false
 }
 async function readOnline() {
   if (busy.value || !onlineConfig.value?.configured) return
@@ -250,7 +239,7 @@ async function readOnline() {
       const ledger = await mailMatchingApi.refreshOnline(signal)
       if (!alive || token !== sequence) return
       selectedId.value = ''; expanded.value = false; page.value = 1; writebackResult.value = undefined
-      result.value = { ledger, rows: [], summary: { total: 0, eligible: 0, matched: 0, unmatched: 0, confirmed: 0 }, revision: '', page: 1, total_rows: 0 }
+      if(result.value)result.value.ledger=ledger
       error.value = ''
       onlineConfig.value = await mailMatchingApi.onlineConfig(signal)
       ElMessage.success('在线流水已读取，正在重新加载匹配')
@@ -261,9 +250,9 @@ async function writeOnline() {
   if (busy.value || stale.value || !onlineConfig.value?.configured || !result.value?.ledger?.online) return
   await onlineWork('online-write', async (signal, token) => {
     const snapshot = result.value!, ledgerId = snapshot.ledger!.id, window = dayWindow.value ?? 3
-    const fresh = await mailMatchingApi.matching({ ...query(), scope: 'all', page: 1, minimum_score: 0 }, signal)
+    const fresh = await mailMatchingApi.snapshot({ ...query(), scope: 'all', review_filter:'all', page: 1, minimum_score: 0 }, signal)
     if (!alive || token !== sequence) return
-    if (fresh.ledger?.id !== ledgerId || fresh.revision !== snapshot.revision || !fresh.ledger.online) {
+    if (fresh.computation?.stale || fresh.ledger?.id !== ledgerId || fresh.revision !== snapshot.revision || !fresh.ledger.online) {
       stale.value = true; pendingRefresh = true
       throw new Error('匹配结果已更新，请刷新核对后再回写')
     }
@@ -307,15 +296,6 @@ async function review(state: ReviewState, candidate?: MatchingCandidate) {
   if (state === 'confirmed' && (!candidate?.payment_id || !row.candidates.includes(candidate))) return
   const receiptId = row.receipt.id, ledgerId = snapshot.ledger.id
   await run('review', async (signal, token) => {
-    // Revalidate the selected page immediately before writing, including its revision.
-    const fresh = await mailMatchingApi.matching(query(), signal)
-    if (!alive || token !== sequence) return
-    const freshRow = fresh.rows.find(item => item.receipt.id === receiptId)
-    if (fresh.ledger?.id !== ledgerId || !freshRow ||
-      (candidate && !freshRow.candidates.some(item => item.payment_id === candidate.payment_id && item.evidence_signature === candidate.evidence_signature))) {
-      stale.value = true; pendingRefresh = true
-      throw new Error('匹配结果已更新，请刷新后重新核对')
-    }
     try {
       await mailMatchingApi.review({ ledger_id: ledgerId, receipt_id: receiptId, payment_id: state === 'confirmed' ? candidate!.payment_id : null, state, day_window: dayWindow.value ?? 3, expected_signature: candidate?.evidence_signature }, signal)
     } finally {
@@ -323,7 +303,7 @@ async function review(state: ReviewState, candidate?: MatchingCandidate) {
       stale.value = true; pendingRefresh = true
     }
     if (!alive || token !== sequence) return
-    stale.value = true; pendingRefresh = true; error.value = ''
+    stale.value = true; pendingRefresh = true; error.value = '';reviewOpen.value=false
     ElMessage.success(state === 'confirmed' ? '已确认关联' : state === 'rejected' ? '已标记暂不关联' : '已重置核对')
   })
 }
@@ -358,6 +338,46 @@ function money(value: number | string | null, unit: string) {
   const number = Number(value)
   return `${unit || '币种未提供'} ${Number.isFinite(number) ? number.toLocaleString('zh-CN', { maximumFractionDigits: 6 }) : value}`
 }
+let statusController:AbortController|undefined,checkingStatus=false,lastReviewRevision=''
+async function pollMatchState(){
+  if(!isActive() || busy.value || sourceUpdating.value){schedule();return}
+  if(checkingStatus)return
+  checkingStatus=true;statusController=new AbortController()
+  try{
+    const window=dayWindow.value
+    const state=await mailMatchingApi.matchState(window,statusController.signal)
+    if(!alive || !isActive() || window!==dayWindow.value)return
+    const changed=state.revision!==computation.value?.revision || (lastReviewRevision && state.review_revision!==lastReviewRevision)
+    computation.value=state;stale.value=state.stale;lastReviewRevision=state.review_revision || ''
+    if(changed)await refresh()
+  }catch(cause){if(alive && !statusController.signal.aborted)error.value=matchingError(cause)}
+  finally{checkingStatus=false;schedule()}
+}
+async function retryMatches(){
+  await run('retry',async signal=>{computation.value=await mailMatchingApi.retryMatching(dayWindow.value,signal);error.value='';pendingRefresh=true})
+}
+async function updateData(){
+  if(busy.value || sourceUpdating.value)return
+  if(!onlineConfig.value?.configured){sourcesOpen.value=true;return}
+  sourceUpdating.value=true;sourceError.value='';clearTimeout(timer)
+  let phase='bank'
+  try{
+    sourceStage.value='正在读取银行流水…';await readOnline()
+    if(onlineError.value)throw new Error(onlineError.value)
+    phase='customer';sourceStage.value='正在读取客户台账…'
+    const contactConfig=await mailMatchingApi.customerOnlineConfig()
+    if(contactConfig.configured){customerMetadata.value=await mailMatchingApi.refreshCustomerOnline();await customerPanel.value?.reload()}
+    sourceStage.value='正在更新匹配，当前列表可继续查看。'
+  }catch(cause){sourceError.value=platformText(phase==='bank'?'银行流水读取失败':'客户台账读取失败')+': '+matchingError(cause)}
+  finally{sourceUpdating.value=false;sourceStage.value='';pendingRefresh=false;await refresh()}
+}
+function moreAction(command:string){
+  if(command==='cashier')void exportCashierPackage()
+  else if(command==='export')void exportFile()
+  else if(command==='write')void writeOnline()
+  else if(command==='history')void openHistory()
+}
+watch(sourcesOpen,open=>{if(open){onlineError.value='';configUrl.value=onlineConfig.value?.spreadsheet_url || '';configCurrency.value=onlineConfig.value?.currency || 'IDR'}else{clearCredential();customerPanel.value?.resetDraft()}})
 function visibilityChanged() { if (isActive()) void refresh(); else clearTimeout(timer) }
 watch(() => props.active, visibilityChanged)
 onMounted(() => {
@@ -366,11 +386,12 @@ onMounted(() => {
     observer = new IntersectionObserver(entries => { visible = !!entries[0]?.isIntersecting; visibilityChanged() })
     observer.observe(root.value)
   }
+  void mailMatchingApi.customerMapping().then(data=>customerMetadata.value=data).catch(()=>{})
   void refresh()
 })
 onActivated(() => { activated = true; visibilityChanged() })
 onDeactivated(() => { activated = false; clearTimeout(timer); if (operation.value === 'load') { ++sequence; controller?.abort() } })
-onBeforeUnmount(() => { clearCredential(); alive = false; ++sequence; controller?.abort(); clearTimeout(timer); observer?.disconnect(); document.removeEventListener('visibilitychange', visibilityChanged) })
+onBeforeUnmount(() => { clearCredential(); alive = false; ++sequence; controller?.abort(); clearTimeout(timer); statusController?.abort();observer?.disconnect(); document.removeEventListener('visibilitychange', visibilityChanged) })
 defineExpose({ refresh, openMail, openReceipt })
 </script>
 
@@ -391,4 +412,14 @@ defineExpose({ refresh, openMail, openReceipt })
 @media(max-width:1100px){.online-panel{grid-template-columns:minmax(0,1fr)}.online-panel>.actions{grid-column:1;grid-row:3;margin-top:12px}.query-bar{grid-template-columns:minmax(180px,1fr) 150px 140px auto}.query-bar>.el-button:last-child{grid-column:4;grid-row:2}}
 @media(max-width:700px){.review-workspace{padding:16px}.online-panel{padding:16px}.workspace-heading{align-items:flex-start;flex-direction:column;gap:8px}.skipped-note{text-align:left}.overview{grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;margin:20px 0}.overview>div:nth-child(3){border:0;padding-left:0}.overview strong{font-size:24px}.query-bar{grid-template-columns:repeat(2,minmax(0,1fr))}.query-keyword{grid-column:1/-1}.query-bar>.el-button:last-child{grid-column:2;grid-row:auto}.results-caption{flex-wrap:wrap;gap:6px}.results-caption>span{width:100%;order:3}.toolbar label{width:100%}.toolbar .el-select,.toolbar .el-input{width:100%}.file-backup summary span{display:block;margin-left:14px}.advanced-filters label{width:100%}.advanced-filters .el-select{width:100%}}
 .online-sources{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin-bottom:22px}.online-sources>.online-panel{display:block;min-width:0;margin:0;padding:22px}.online-sources>.online-panel>.actions{margin:16px 0 10px}.online-sources .online-heading{flex-wrap:wrap}.writeback-actions{justify-content:flex-end;margin-bottom:16px}.customer-file-backup{display:flex;flex-wrap:wrap;align-items:center;gap:14px;margin-top:20px;border-top:1px solid var(--el-border-color-light);padding-top:16px}.customer-file-backup h3,.customer-file-backup p{flex-basis:100%;margin:0}.customer-file-backup label{display:grid;gap:6px;max-width:100%}.customer-file-backup input[type=file]{max-width:100%}@media(max-width:900px){.online-sources{grid-template-columns:minmax(0,1fr)}}@media(max-width:700px){.online-sources>.online-panel{padding:16px}}
+</style>
+
+<style scoped>
+.bank-inline-form{margin:22px 0}.bank-inline-form input[type=file]{max-width:100%}.workspace-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.snapshot-status{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:18px 0 8px;font-size:13px;color:var(--ink-muted)}.receipt-list-tools{display:flex;align-items:center;justify-content:space-between;gap:24px;margin:28px 0 20px}.review-tabs{display:flex;align-items:center;gap:8px;overflow:auto}.review-tabs button{appearance:none;border:0;background:none;padding:12px 14px;white-space:nowrap;font-size:14px;color:var(--ink);border-bottom:2px solid transparent;cursor:pointer}.review-tabs button[aria-selected=true]{color:var(--accent);background:var(--accent-soft,#edf4ff);border-color:var(--accent);font-weight:600}.review-tabs span{margin-left:5px;font-variant-numeric:tabular-nums}.compact-search{display:flex;align-items:center;gap:12px;min-width:320px;max-width:520px;flex:1}.compact-search .el-input{flex:1}.compact-search .el-button{margin:0}.mapping-clue{display:inline-block;margin-top:6px;color:var(--accent);font-size:12px}.source-backup{border-top:1px solid var(--border);padding-top:20px}.source-backup .customer-file-backup{display:flex;align-items:end;gap:20px;flex-wrap:wrap}.source-backup label{max-width:260px}.review-workspace>.workspace-heading{margin-bottom:6px}.review-workspace>.el-alert{margin:12px 0}.receipt-source-dialog .online-sources{margin-top:22px}
+@media(max-width:1100px){.receipt-list-tools{align-items:stretch;flex-direction:column;gap:14px}.compact-search{max-width:none;width:100%}}
+@media(max-width:700px){.workspace-actions{gap:8px;width:100%}.workspace-actions>.el-button{flex:1;margin:0}.workspace-actions>.el-dropdown{width:100%}.workspace-actions>.el-dropdown>.el-button{width:100%}.snapshot-status{gap:10px}.compact-search{min-width:0}.review-tabs button{padding:12px 10px;font-size:13px}.receipt-list-tools{margin-top:22px}.source-backup input[type=file]{max-width:100%}}
+</style>
+
+<style scoped>
+:global(.receipt-source-dialog){height:min(880px,calc(100dvh - 48px));max-height:calc(100dvh - 48px);margin:auto!important}:global(.receipt-source-dialog .el-dialog__body){min-height:0;overflow:auto;overscroll-behavior:contain}
 </style>

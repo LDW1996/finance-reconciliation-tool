@@ -28,7 +28,7 @@
         <span class="account-caption" :class="{ 'account-warning': fallbackEnabled && !fallbackCandidates.length }">{{ !fallbackEnabled ? '未启用，仅使用首选账号' : fallbackCandidates.length ? '仅首选账号查无订单时使用' : '没有可用备用账号，仅使用首选账号' }}</span>
         </div>
       </div>
-      <h3 class="workspace-card-title">解锁范围</h3><div class="scope-options"><label v-for="item in [{value:'bill',label:'按提单'},{value:'voyage',label:'按航次'}]" :key="item.value" :class="{selected:scope===item.value}"><input v-model="scope" type="radio" :value="item.value" :disabled="busy"/><span><strong>{{ item.label }}</strong><small>{{ item.value === 'bill' ? '按输入提单逐一处理' : '输入代表提单，解锁其所在整个航次' }}</small></span></label></div>
+      <h3 class="workspace-card-title">解锁范围</h3><div class="scope-options"><label v-for="item in [{value:'bill',label:'按提单'},{value:'voyage',label:'按航次'}]" :key="item.value" :class="{selected:scope===item.value}"><input v-model="scope" type="radio" :value="item.value" :disabled="busy"/><span><strong>{{ $platformText(item.label) }}</strong><small>{{ item.value === 'bill' ? '按输入提单逐一处理' : '输入代表提单，解锁其所在整个航次' }}</small></span></label></div>
           <div class="bill-input-grid"><section v-for="kind in kinds" :key="kind.key" class="unlock-input-panel">
             <div class="unlock-section-heading"><h2><el-icon><Unlock /></el-icon>{{ kind.title }}</h2><span class="count-pill">{{ parsed[kind.key].length }} 条</span></div>
             <label :for="`bills-${kind.key}`">{{ scope === 'voyage' ? '每行输入一个航次的代表提单，支持批量处理' : '每行一个提单号，也支持逗号、空格分隔' }}</label>

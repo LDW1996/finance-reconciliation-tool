@@ -22,7 +22,7 @@
       <div class="section-title"><h3>相关银行流水</h3><span class="muted">{{ related ? `付款日期前后 ${related.day_window} 天` : '按付款信息查找' }}</span></div>
       <p v-if="relatedLoading" role="status">正在查找相关流水…</p>
       <p v-if="relatedError" class="warning" role="alert">{{ relatedError }}</p>
-      <template v-if="related && !relatedLoading">
+      <template v-if="related && !relatedLoading"><p v-if="related.computation?.stale" class="warning" role="status">{{ related.rows.length ? '匹配结果更新中；当前展示上次结果。' : '匹配结果正在生成，完成后显示相关流水。' }}</p>
         <p v-if="!related.ledger" class="muted">尚未读取银行流水，请前往「收款匹配」读取流水。</p>
         <template v-else>
           <p v-if="!related.rows.length" class="muted">当前范围内暂无相关流水，可在「收款匹配」扩大范围查找。</p>

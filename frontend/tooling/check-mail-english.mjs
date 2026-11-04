@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mailEnglish, translateMailSource } from './mailEnglish.ts'
 const root = new URL('../', import.meta.url)
 const catalog = JSON.parse(readFileSync(new URL('./mailEnglish.json', import.meta.url)))
-const names = ['views/MailView.vue', ...['MailAttachments','MailFolderTree','MailPaymentDetail','MailStorageSettings','ReceiptMatching','ReceiptReview','CustomerMapping','CustomerMappingPreview'].map(n=>`components/${n}.vue`), ...readdirSync(new URL('src/services', root)).filter(n=>/^mail.*\.ts$/.test(n)).map(n=>`services/${n}`)]
+const names = ['views/MailView.vue', ...['MailAttachments','MailFolderTree','MailPaymentDetail','MailStorageSettings','ReceiptMatching','ReceiptReview','CustomerMapping','CustomerMappingPreview','BankLedgerPreview','ReceiptEvidencePreview'].map(n=>`components/${n}.vue`), ...readdirSync(new URL('src/services', root)).filter(n=>/^mail.*\.ts$/.test(n)).map(n=>`services/${n}`)]
 let count = 0
 for (const name of names) {
  const source = readFileSync(new URL(`src/${name}`, root), 'utf8')
