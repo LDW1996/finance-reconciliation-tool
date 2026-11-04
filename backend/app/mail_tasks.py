@@ -482,7 +482,21 @@ class MailManager:
             if metadata['status'] not in allowed: continue
             _analysis_stage.set('读取附件')
             asset=self.store.attachment(identity,metadata['id'])
-            if not asset or not asset['raw']: continue
+            if not asset: continue
+            if not asset['raw']:
+                # A legacy empty original is terminal for this pass, not a
+                # concurrent replacement. Compare metadata under the writer gate.
+                with self.store.db() as db:
+                    current=db.execute('SELECT metadata FROM mail_attachment WHERE mail_id=? AND id=?',
+                                       (identity,metadata['id'])).fetchone()
+                    expected={k:v for k,v in asset.items() if k!='raw'}
+                    if current is None or self.store.decode(current[0])!=expected:
+                        raise StaleAttachmentError('Attachment changed while checking missing original')
+                    expected.update(status='failed',error='附件原件为空或未保存，无法识别；请从 Outlook 重新导入该邮件后重试。')
+                    db.execute('UPDATE mail_attachment SET metadata=? WHERE mail_id=? AND id=?',
+                               (self.store.encode(expected),identity,metadata['id']))
+                diagnostic_record('attachment_original_missing',mail_id=identity,attachment_id=metadata['id'])
+                continue
             expected_sha256=sha256(asset['raw']).hexdigest()
             save_started=perf_counter()
             _analysis_stage.set('保存附件处理状态')
@@ -557,7 +571,12 @@ class MailManager:
         if updated:
             # New/replaced attachments must retain their queue claim for bounded retry.
             # Failed attachments are terminal for this pass, not a retry trigger.
-            if any(a.get('status') in ('pending','running') for a in updated.get('attachment_details', [])):
+            unfinished=[a for a in updated.get('attachment_details', []) if a.get('status') in ('pending','running')]
+            if unfinished:
+                diagnostic_record('mail_unfinished_attachments',mail_id=identity,
+                    pending_count=sum(a.get('status')=='pending' for a in unfinished),
+                    running_count=sum(a.get('status')=='running' for a in unfinished),
+                    empty_size_count=sum(not a.get('size') for a in unfinished))
                 raise StaleAttachmentError('Mail has unprocessed attachments')
             payments=build_payments(updated)
             summary=mail_summary(updated,payments,indexed=True)

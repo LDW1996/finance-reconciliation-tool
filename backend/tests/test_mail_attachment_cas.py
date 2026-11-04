@@ -244,3 +244,13 @@ def test_poll_save_releases_manager_lock_and_keeps_queue_claim(tmp_path,monkeypa
     assert not obj.state['error']
     assert calls==['save','append']
     assert len(obj.analysis_queue)==1
+
+
+def test_empty_original_does_not_permanently_block_queue(tmp_path):
+    store=MailStore(tmp_path/'mail.db'); save(store,[b''])
+    obj=manager(store)
+    obj._analyze_mail('mail',False,lambda *args:pytest.fail('empty original reached OCR'))
+    asset=store.get('mail')['attachment_details'][0]
+    assert asset['status']=='failed'
+    assert '原件' in asset['error']
+    assert 'mail' in store.payment_index(['mail'])
