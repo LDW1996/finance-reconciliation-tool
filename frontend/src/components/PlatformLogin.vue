@@ -47,7 +47,7 @@
 import { ref } from 'vue'
 import { Hide, View } from '@element-plus/icons-vue'
 import workspaceImage from '../assets/login-workspace.png'
-import { platformLanguage, type PlatformLanguage } from '../platformLocale'
+import { platformLanguage, platformText, type PlatformLanguage } from '../platformLocale'
 import { loginPlatform, type PlatformSession } from '../services/platformAuth'
 const emit = defineEmits<{ authenticated: [session: PlatformSession] }>()
 const username = ref(''), password = ref(''), busy = ref(false), error = ref(''), showPassword = ref(false)
@@ -64,7 +64,7 @@ async function login() {
     password.value = ''
   } catch (failure: any) {
     const status = failure.response?.status
-    error.value = status === 409 ? '当前任务正在处理，请等待完成后再登录' : status === 503 ? '平台账号暂不可用，请联系交付方检查本机账号配置' : status === 429 ? '登录尝试过于频繁，请稍后重试' : '登录失败，请检查账号密码或稍后重试'
+    error.value = platformText(status === 409 ? '当前任务正在处理，请等待完成后再登录' : status === 503 ? '平台账号暂不可用，请联系交付方检查本机账号配置' : status === 429 ? '登录尝试过于频繁，请稍后重试' : '登录失败，请检查账号密码或稍后重试')
   } finally { busy.value = false }
 }
 </script>

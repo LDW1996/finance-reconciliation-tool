@@ -375,56 +375,8 @@ def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed
                 result['relocked_resubmission'] = bool(reservation['previous_submission'])
                 result['submitted'] = True  # Intent is durable before the irreversible click.
                 private_report(journal, result)
-                reply = None
-                try:
-                    step('submit_and_wait_response')
-                    with page.expect_response(lambda r: urlparse(r.url).path.endswith('/order_unlock') and expected(r.request)) as pending:
-                        page.get_by_role('button', name='Yes', exact=True).click()
-                    response = pending.value
-                    result['http_status'] = response.status
-                    if response.ok:
-                        step('parse_platform_response')
-                        reply = parse_reply(response.text())
-                        result['platform_success'] = reply['success']
-                        result['message'] = str(reply.get('msg', ''))[:3000]
-                except Exception as error:
-                    result['response_error_type'] = type(error).__name__
-                    result['error_context'] = error_context(error)
-                    result['failed_stage'] = result['stage']
-                    result['error_type'] = type(error).__name__
-                    result['failure_cause'] = ('平台已返回响应，但无法可靠解析解锁结果'
-                        if result['stage'] == 'parse_platform_response' else '提交确认或等待平台响应时发生异常，是否实际执行需核实')
-                    result['next_action'] = '先在 iLog 核对锁状态及订单跟踪，不要直接重复解锁'
-                    result['response_note'] = 'Unrecognized reply or timeout; never automatically resubmit'
-                if verify_after:
-                    # A new authenticated query does not depend on dismissing a result dialog.
-                    def verify():
-                        step('verify_open_page')
-                        page.goto(URL)
-                        step('verify_open_list')
-                        page.get_by_text('委托单列表', exact=True).click()
-                        step('verify_wait_search')
-                        page.locator('input[name=search]').wait_for()
-                        after = search_bill(page, bill, trace=lambda phase: step('verify_' + phase))
-                        step('verify_order_state')
-                        if len(after) != 1 or after[0]['id'] != record['id']:
-                            raise RuntimeError('Verification record mismatch')
-                        result['after'] = after[0]
-                        if reply and reply.get('success') is True and outcome(reply,record['lock'],after[0]['lock'],kind) not in ('verified_unlocked','verified_fee_unlocked'):
-                            raise RuntimeError('Lock state not yet updated')
-                        return after
-                    retry_verification(verify, result)
-                    result['status'] = outcome(reply, record['lock'], result.get('after', {}).get('lock'),kind)
-                    if result['status'] == 'needs_verification' and not result.get('failed_stage'):
-                        result.update(failed_stage='verify_order_state', error_type='VerificationIncomplete',
-                            failure_cause=f"平台返回未充分确认成功，或复查未达到目标状态（HTTP {result.get('http_status', '未知')}，复查状态 {result.get('after', {}).get('lock', '未取得')}）",
-                            next_action='先在 iLog 核对锁状态及订单跟踪，不要直接重复解锁')
-                    result['verification_performed'] = True
-                else:
-                    finish_submission(result, reply)
-                    if reply is not None:
-                        step('dismiss_platform_result')
-                        dismiss_result_dialog(page, result)
+                reply = _submit_single_order(page, result, step, expected)
+                _finish_single_order(page, bill, record, reply, kind, result, step, verify_after)
 
         except FileExistsError:
             result['status'] = 'blocked_duplicate'
@@ -432,54 +384,12 @@ def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed
             result['error_type'] = 'FileExistsError'
             result['reason'] = 'Prior submission exists; inspect before deciding whether any further operation is needed'
         except Exception as error:
-            result['failed_stage'] = result.get('stage', 'browser_setup')
-            result['error_type'] = type(error).__name__
-            result['error_context'] = error_context(error)
-            known_errors = {
-                '代表提单对应的船名、航次或业务记录已变化，请重新查询核对': '代表提单对应的船名、航次或业务记录已变化；本次未再次提交，请重新查询核对',
-                '航次核对账号或操作类型不一致': '航次核对账号或操作类型与当前任务不一致，已停止提交',
-                'Visible list mismatch': '页面可见记录数量与查询结果不一致，已停止以避免选错订单',
-                'Selection mismatch': '页面实际选中的记录与目标订单不一致，已停止以避免误操作',
-                'Unexpected confirmation': '平台确认窗口的内容与预期不同，未继续确认',
-                'Query failed': '订单查询接口返回异常，未能取得可靠查询结果',
-                'Unexpected query response': '订单查询返回的数据格式与预期不同',
-                'Query results span multiple pages': '查询结果跨多页，未取得完整记录，本次不解锁',
-                'Verification record mismatch': '复查记录数量或平台记录编号与原订单不一致，已停止且不重试',
-                'Lock state not yet updated': '平台返回解锁成功，但复查及重试后仍未达到目标锁状态',
-            }
-            result['failure_cause'] = known_errors.get(str(error),
-                '等待页面控件或平台响应超时；具体是加载缓慢、页面变化还是网络问题，尚未确认'
-                if type(error).__name__ == 'TimeoutError' else '页面或执行流程异常；具体原因尚未确认，请结合失败步骤和截图核查')
-            if type(error).__name__ == 'TimeoutError':
-                timeout_causes = {
-                    'verify_open_page': '解锁后重新打开平台页面，等待页面加载超时；尚不能确认是页面资源还是网络问题',
-                    'verify_open_list': '解锁后未能在限定时间内找到或打开委托单列表',
-                    'verify_wait_search': '委托单列表的查询输入框未在限定时间内就绪',
-                    'wait_idle': '页面仍有未结束的查询请求，等待平台空闲超时',
-                    'wait_initial_store': '平台默认订单列表尚未完成首次加载，未触发提单查询',
-                    'fill_bill': '单号查询输入框未能完成输入，控件可能尚未就绪',
-                    'wait_query_response': '等待该单号对应的查询响应超时，未取得可核对的返回',
-                    'read_query_response': '已收到查询响应，但读取返回内容超时',
-                    'wait_store_update': '查询接口已返回，但页面列表未同步为该次查询结果',
-                }
-                phase = re.sub(r'^(query_|verify_)', '', result['failed_stage'])
-                result['failure_cause'] = timeout_causes.get(result['failed_stage'], timeout_causes.get(phase, result['failure_cause']))
-            result['next_action'] = ('先在 iLog 核对锁状态及订单跟踪，不要直接重复解锁'
-                                     if result['submitted'] else '先检查失败截图、登录状态及订单页面，再决定是否重新发起任务')
-            result['reason'] = 'Stopped on page or network error; no automatic retry'
+            _record_execution_failure(result, error)
         finally:
             if result['status'] not in ('inspected','already_unlocked','already_fee_unlocked','verified_unlocked','verified_fee_unlocked','platform_accepted','voyage_platform_confirmed'):
                 result['request_diagnostics'] = {'failed': events[-20:], 'pending': list(requests.values())[-20:]}
             success = result['status'] in ('inspected','already_unlocked','already_fee_unlocked','verified_unlocked','verified_fee_unlocked','platform_accepted','voyage_platform_confirmed')
-            if page and (screenshot_policy == 'all' or (screenshot_policy == 'errors' and not success)):
-                timings.stage('screenshot')
-                try:
-                    screenshot = report_path.with_suffix('.png')
-                    page.screenshot(path=str(screenshot), full_page=True, timeout=5000)
-                    screenshot.chmod(0o600)
-                    result['screenshot'] = str(screenshot)
-                except Exception as error:
-                    result['screenshot_note'] = {'error_type': type(error).__name__, **error_context(error)}
+            _save_execution_screenshot(page, result, report_path, timings, screenshot_policy, success)
             # Take diagnostic screenshots before discarding a possibly dirty page.
             reusable = success or result['status'] in ('not_found', 'ambiguous')
             invalidate = not reusable or bool(result.get('error_type') or result.get('failed_stage') or result.get('session_dirty'))
@@ -533,3 +443,117 @@ def main():
 
 if __name__ == '__main__':
     raise SystemExit(main())
+
+
+def _record_execution_failure(result, error):
+    result['failed_stage'] = result.get('stage', 'browser_setup')
+    result['error_type'] = type(error).__name__
+    result['error_context'] = error_context(error)
+    known_errors = {
+        '代表提单对应的船名、航次或业务记录已变化，请重新查询核对': '代表提单对应的船名、航次或业务记录已变化；本次未再次提交，请重新查询核对',
+        '航次核对账号或操作类型不一致': '航次核对账号或操作类型与当前任务不一致，已停止提交',
+        'Visible list mismatch': '页面可见记录数量与查询结果不一致，已停止以避免选错订单',
+        'Selection mismatch': '页面实际选中的记录与目标订单不一致，已停止以避免误操作',
+        'Unexpected confirmation': '平台确认窗口的内容与预期不同，未继续确认',
+        'Query failed': '订单查询接口返回异常，未能取得可靠查询结果',
+        'Unexpected query response': '订单查询返回的数据格式与预期不同',
+        'Query results span multiple pages': '查询结果跨多页，未取得完整记录，本次不解锁',
+        'Verification record mismatch': '复查记录数量或平台记录编号与原订单不一致，已停止且不重试',
+        'Lock state not yet updated': '平台返回解锁成功，但复查及重试后仍未达到目标锁状态',
+    }
+    result['failure_cause'] = known_errors.get(str(error),
+        '等待页面控件或平台响应超时；具体是加载缓慢、页面变化还是网络问题，尚未确认'
+        if type(error).__name__ == 'TimeoutError' else '页面或执行流程异常；具体原因尚未确认，请结合失败步骤和截图核查')
+    if type(error).__name__ == 'TimeoutError':
+        timeout_causes = {
+            'verify_open_page': '解锁后重新打开平台页面，等待页面加载超时；尚不能确认是页面资源还是网络问题',
+            'verify_open_list': '解锁后未能在限定时间内找到或打开委托单列表',
+            'verify_wait_search': '委托单列表的查询输入框未在限定时间内就绪',
+            'wait_idle': '页面仍有未结束的查询请求，等待平台空闲超时',
+            'wait_initial_store': '平台默认订单列表尚未完成首次加载，未触发提单查询',
+            'fill_bill': '单号查询输入框未能完成输入，控件可能尚未就绪',
+            'wait_query_response': '等待该单号对应的查询响应超时，未取得可核对的返回',
+            'read_query_response': '已收到查询响应，但读取返回内容超时',
+            'wait_store_update': '查询接口已返回，但页面列表未同步为该次查询结果',
+        }
+        phase = re.sub(r'^(query_|verify_)', '', result['failed_stage'])
+        result['failure_cause'] = timeout_causes.get(result['failed_stage'], timeout_causes.get(phase, result['failure_cause']))
+    result['next_action'] = ('先在 iLog 核对锁状态及订单跟踪，不要直接重复解锁'
+                             if result['submitted'] else '先检查失败截图、登录状态及订单页面，再决定是否重新发起任务')
+    result['reason'] = 'Stopped on page or network error; no automatic retry'
+
+
+
+def _save_execution_screenshot(page, result, report_path, timings, screenshot_policy, success):
+    if page and (screenshot_policy == 'all' or (screenshot_policy == 'errors' and not success)):
+        timings.stage('screenshot')
+        try:
+            screenshot = report_path.with_suffix('.png')
+            page.screenshot(path=str(screenshot), full_page=True, timeout=5000)
+            screenshot.chmod(0o600)
+            result['screenshot'] = str(screenshot)
+        except Exception as error:
+            result['screenshot_note'] = {'error_type': type(error).__name__, **error_context(error)}
+
+
+
+def _verify_single_order(page, bill, record, reply, kind, result, step):
+    step('verify_open_page')
+    page.goto(URL)
+    step('verify_open_list')
+    page.get_by_text('委托单列表', exact=True).click()
+    step('verify_wait_search')
+    page.locator('input[name=search]').wait_for()
+    after = search_bill(page, bill, trace=lambda phase: step('verify_' + phase))
+    step('verify_order_state')
+    if len(after) != 1 or after[0]['id'] != record['id']:
+        raise RuntimeError('Verification record mismatch')
+    result['after'] = after[0]
+    if reply and reply.get('success') is True and outcome(reply,record['lock'],after[0]['lock'],kind) not in ('verified_unlocked','verified_fee_unlocked'):
+        raise RuntimeError('Lock state not yet updated')
+    return after
+
+
+
+def _submit_single_order(page, result, step, expected):
+    reply = None
+    try:
+        step('submit_and_wait_response')
+        with page.expect_response(lambda r: urlparse(r.url).path.endswith('/order_unlock') and expected(r.request)) as pending:
+            page.get_by_role('button', name='Yes', exact=True).click()
+        response = pending.value
+        result['http_status'] = response.status
+        if response.ok:
+            step('parse_platform_response')
+            reply = parse_reply(response.text())
+            result['platform_success'] = reply['success']
+            result['message'] = str(reply.get('msg', ''))[:3000]
+    except Exception as error:
+        result['response_error_type'] = type(error).__name__
+        result['error_context'] = error_context(error)
+        result['failed_stage'] = result['stage']
+        result['error_type'] = type(error).__name__
+        result['failure_cause'] = ('平台已返回响应，但无法可靠解析解锁结果'
+            if result['stage'] == 'parse_platform_response' else '提交确认或等待平台响应时发生异常，是否实际执行需核实')
+        result['next_action'] = '先在 iLog 核对锁状态及订单跟踪，不要直接重复解锁'
+        result['response_note'] = 'Unrecognized reply or timeout; never automatically resubmit'
+    return reply
+
+
+def _finish_single_order(page, bill, record, reply, kind, result, step, verify_after):
+    if verify_after:
+        # A new authenticated query does not depend on dismissing a result dialog.
+        def verify():
+            return _verify_single_order(page, bill, record, reply, kind, result, step)
+        retry_verification(verify, result)
+        result['status'] = outcome(reply, record['lock'], result.get('after', {}).get('lock'),kind)
+        if result['status'] == 'needs_verification' and not result.get('failed_stage'):
+            result.update(failed_stage='verify_order_state', error_type='VerificationIncomplete',
+                failure_cause=f"平台返回未充分确认成功，或复查未达到目标状态（HTTP {result.get('http_status', '未知')}，复查状态 {result.get('after', {}).get('lock', '未取得')}）",
+                next_action='先在 iLog 核对锁状态及订单跟踪，不要直接重复解锁')
+        result['verification_performed'] = True
+    else:
+        finish_submission(result, reply)
+        if reply is not None:
+            step('dismiss_platform_result')
+            dismiss_result_dialog(page, result)

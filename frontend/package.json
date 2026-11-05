@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5173",
     "build": "vue-tsc -b && vite build",
-    "preview": "vite preview --host 127.0.0.1 --port 4173"
+    "preview": "vite preview --host 127.0.0.1 --port 4173",
+    "test:tooling": "node tooling/tests/runtimePlatformLocale.test.mjs && node tooling/tests/matchingTransport.test.mjs",
+    "check:english": "node tooling/check-mail-english.mjs && node tooling/check-platform-english.mjs",
+    "check": "npm run test:tooling && npm run check:english"
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.1",

@@ -66,19 +66,7 @@ def execute_batch(page, found, result, report_path, directory, step, *, verify_a
             else:
                 route.abort()
         page.route('**/order_unlock',guard)
-        step('select_record')
-        grid_id=page.evaluate('''()=>{let c;Ext.ComponentMgr.all.each(x=>{if(typeof x.doCancelOrder==='function')c=x});return c.grid.getEl().dom.id}''')
-        grid=page.locator('[id="'+grid_id+'"]')
-        if len(eligible)==len(found):
-            grid.locator('.x-grid3-hd-inner > .x-grid3-hd-checker').click()
-        else:
-            for index,record in enumerate(found):
-                if str(record['id']) in ids:
-                    grid.locator('.x-grid3-row').nth(index).locator('.x-grid3-row-checker').click()
-        selected=page.evaluate('''()=>{let c;Ext.ComponentMgr.all.each(x=>{if(typeof x.doCancelOrder==='function')c=x});return c.grid.getSelectionModel().getSelections().map(r=>String(r.get('jobOrderId')))}''')
-        if len(selected)!=len(ids) or set(selected)!=set(ids):
-            raise RuntimeError('Selection mismatch')
-        result['selected_ids']=selected
+        _select_batch_records(page, found, eligible, ids, result, step)
         step('open_unlock_menu')
         arrow=page.get_by_role('button',name='订单解锁',exact=True).locator('..')
         bounds=arrow.bounding_box()
@@ -110,19 +98,7 @@ def execute_batch(page, found, result, report_path, directory, step, *, verify_a
                           response_note='批量提交响应未确认，不重复提交解锁')
         if verify_after:
             def verify():
-                step('verify_open_page');page.goto(URL)
-                step('verify_open_list');page.get_by_text('委托单列表',exact=True).click()
-                step('verify_wait_search');page.locator('input[name=search]').wait_for()
-                after=search_bill(page,result['bill'],trace=lambda phase:step('verify_'+phase))
-                step('verify_order_state')
-                if len(after)!=len(found) or {r['id'] for r in after}!={r['id'] for r in found}:
-                    raise RuntimeError('Verification record mismatch')
-                current={str(r['id']):r for r in after}
-                for row in eligible:
-                    row['after']=current[str(row['before']['id'])]
-                    row['status']=outcome(reply,row['before']['lock'],row['after']['lock'],result['kind'])
-                if reply and reply['success'] and any(row['status'] not in SUCCESS for row in eligible):
-                    raise RuntimeError('Lock state not yet updated')
+                return _verify_batch_records(page, found, eligible, reply, result, step)
             retry_verification(verify,result)
             result['verification_performed'] = True
         else:
@@ -142,18 +118,59 @@ def execute_batch(page, found, result, report_path, directory, step, *, verify_a
                       failure_cause=causes.get(str(error),'批量流程在当前步骤未完成（'+str(result.get('stage'))+'），请结合逐条锁状态及失败日志核实'),
                       next_action='按业务号逐条核对 iLog 状态，不要盲目重复提交')
     finally:
-        for row in rows:
-            row.update(report=str(report_path))
-            if result.get('screenshot'):row['screenshot']=result['screenshot']
-            for key in ('platform_success','http_status','message','screenshot','verification_retries'):
-                if key in result and row['submitted']:
-                    row[key]=result[key]
-            if row['status'] not in SUCCESS:
-                for key in ('failed_stage','error_type','error_context','failure_cause','next_action'):
-                    if key in result and row['status']!='blocked_duplicate':row[key]=result[key]
-                row['steps']=result.get('steps',[])
-                row['verification_attempts']=result.get('verification_attempts',[])
-            compact_success(row)
-        for row,path in journals:private_report(path,row)
-        result['status']=batch_status(rows,result['kind'])
-        if result['status'] in SUCCESS:result.pop('matches',None)
+        _finalize_batch_results(rows, journals, result, report_path)
+
+
+def _select_batch_records(page, found, eligible, ids, result, step):
+    step('select_record')
+    grid_id=page.evaluate('''()=>{let c;Ext.ComponentMgr.all.each(x=>{if(typeof x.doCancelOrder==='function')c=x});return c.grid.getEl().dom.id}''')
+    grid=page.locator('[id="'+grid_id+'"]')
+    if len(eligible)==len(found):
+        grid.locator('.x-grid3-hd-inner > .x-grid3-hd-checker').click()
+    else:
+        for index,record in enumerate(found):
+            if str(record['id']) in ids:
+                grid.locator('.x-grid3-row').nth(index).locator('.x-grid3-row-checker').click()
+    selected=page.evaluate('''()=>{let c;Ext.ComponentMgr.all.each(x=>{if(typeof x.doCancelOrder==='function')c=x});return c.grid.getSelectionModel().getSelections().map(r=>String(r.get('jobOrderId')))}''')
+    if len(selected)!=len(ids) or set(selected)!=set(ids):
+        raise RuntimeError('Selection mismatch')
+    result['selected_ids']=selected
+
+
+
+def _verify_batch_records(page, found, eligible, reply, result, step):
+    from .ilog_query import URL
+    from .ilog_unlock import search_bill, outcome
+    step('verify_open_page');page.goto(URL)
+    step('verify_open_list');page.get_by_text('委托单列表',exact=True).click()
+    step('verify_wait_search');page.locator('input[name=search]').wait_for()
+    after=search_bill(page,result['bill'],trace=lambda phase:step('verify_'+phase))
+    step('verify_order_state')
+    if len(after)!=len(found) or {r['id'] for r in after}!={r['id'] for r in found}:
+        raise RuntimeError('Verification record mismatch')
+    current={str(r['id']):r for r in after}
+    for row in eligible:
+        row['after']=current[str(row['before']['id'])]
+        row['status']=outcome(reply,row['before']['lock'],row['after']['lock'],result['kind'])
+    if reply and reply['success'] and any(row['status'] not in SUCCESS for row in eligible):
+        raise RuntimeError('Lock state not yet updated')
+
+
+
+def _finalize_batch_results(rows, journals, result, report_path):
+    from .ilog_unlock import compact_success, private_report
+    for row in rows:
+        row.update(report=str(report_path))
+        if result.get('screenshot'):row['screenshot']=result['screenshot']
+        for key in ('platform_success','http_status','message','screenshot','verification_retries'):
+            if key in result and row['submitted']:
+                row[key]=result[key]
+        if row['status'] not in SUCCESS:
+            for key in ('failed_stage','error_type','error_context','failure_cause','next_action'):
+                if key in result and row['status']!='blocked_duplicate':row[key]=result[key]
+            row['steps']=result.get('steps',[])
+            row['verification_attempts']=result.get('verification_attempts',[])
+        compact_success(row)
+    for row,path in journals:private_report(path,row)
+    result['status']=batch_status(rows,result['kind'])
+    if result['status'] in SUCCESS:result.pop('matches',None)

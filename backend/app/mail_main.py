@@ -1,20 +1,14 @@
 """Isolated mail edition: no full-edition routes or service imports."""
+from .web_common import bundled_frontend_dir as resolve_frontend_dir, check_local_request, install_frontend
 import json
-import os
-import sys
-from pathlib import Path
-from urllib.parse import urlparse
 from fastapi import FastAPI, HTTPException, Request, Depends, Query
-from fastapi.responses import FileResponse, Response
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import Response
 from .mail_tasks import create_router
 from .mail_english import response, english_export
 
 app=FastAPI(title='Mail Reconciliation',docs_url=None,redoc_url=None,openapi_url=None)
 def require_local(request:Request):
-    origin=request.headers.get('origin')
-    if request.headers.get('x-finance-local')!='1' or (origin and urlparse(origin).hostname not in {'localhost','127.0.0.1','::1'}):
-        raise HTTPException(403,'Use the local Mail Reconciliation application.')
+    check_local_request(request, 'Use the local Mail Reconciliation application.')
 @app.get('/api/mail/customer-mapping/preview',dependencies=[Depends(require_local)])
 def customer_preview(status: str=Query('valid',pattern='^(valid|excluded)$'),keyword: str=Query('',max_length=200),
                      page: int=Query(1,ge=1),page_size: int=Query(50,ge=1,le=100)):
@@ -53,15 +47,7 @@ async def english_response(request,call_next):
 def unavailable(path:str):raise HTTPException(404,'This edition provides mail reconciliation only.')
 
 def bundled_frontend_dir():
-    if getattr(sys,'frozen',False):return Path(sys._MEIPASS)/'frontend_dist'
-    return Path(os.environ.get('FINANCE_MAIL_FRONTEND_DIR',Path(__file__).resolve().parents[2]/'frontend'/'dist'))
+    return resolve_frontend_dir('FINANCE_MAIL_FRONTEND_DIR')
+
 frontend=bundled_frontend_dir()
-if (frontend/'assets').exists():app.mount('/assets',StaticFiles(directory=frontend/'assets'),name='assets')
-@app.get('/{path:path}',include_in_schema=False)
-def frontend_page(path:str):
-    if path.startswith('api/') or path=='api':raise HTTPException(404,'Not found')
-    target=(frontend/path).resolve()
-    if not target.is_relative_to(frontend.resolve()):raise HTTPException(404,'Not found')
-    if path and target.is_file():return FileResponse(target)
-    if (frontend/'index.html').exists():return FileResponse(frontend/'index.html')
-    raise HTTPException(404,'Frontend not installed')
+install_frontend(app, frontend, require_exists=False)
