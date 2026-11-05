@@ -29,16 +29,14 @@ def require_local_account_write(request: Request):
     check_local_request(request, "请通过本机账号管理页面修改")
 
 
+from .ilog_routes import create_accounts_router as create_ilog_accounts_router
 from .ilog_routes import create_router as create_ilog_router
-ilog_router = create_ilog_router(require_local_account_write)
-# Preserve legacy route ordering (account GET preceded the mail router).
-account_read_route = next(route for route in ilog_router.routes if route.path == '/api/ilog/accounts' and 'GET' in route.methods)
-ilog_router.routes.remove(account_read_route)
-app.router.routes.append(account_read_route)
+# Legacy order: the account list read was registered before the mail router.
+app.include_router(create_ilog_accounts_router())
 
 from .mail_tasks import create_router as create_mail_router
 app.include_router(create_mail_router(require_local_account_write))
-app.include_router(ilog_router)
+app.include_router(create_ilog_router(require_local_account_write))
 
 
 from .excel_routes import router as excel_router

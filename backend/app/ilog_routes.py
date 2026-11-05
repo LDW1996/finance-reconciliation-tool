@@ -57,7 +57,8 @@ class VoyagePreviewRequest(BaseModel):
     order_bills: list[str] = Field(default_factory=list,max_length=2000)
 
 
-def create_router(require_local_account_write):
+def create_accounts_router():
+    """Account list read, registered before the mail router to keep legacy order."""
     router = APIRouter()
 
     @router.get("/api/ilog/accounts")
@@ -67,6 +68,11 @@ def create_router(require_local_account_write):
         except Exception:
             raise HTTPException(status_code=503, detail="无法读取本机账号数据，请检查应用数据目录") from None
 
+    return router
+
+
+def create_router(require_local_account_write):
+    router = APIRouter()
 
     @router.post("/api/ilog/accounts", status_code=201)
     def create_ilog_account(body: AccountUpdate, request: Request):
