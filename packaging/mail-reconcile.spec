@@ -23,7 +23,15 @@ datas = [
 binaries = []
 hiddenimports = [
     "app.mail_main",
-    
+    "app.web_common",
+    "app.mail_routes",
+    "app.mail_routes_storage",
+    "app.mail_routes_messages",
+    "app.mail_routes_ledger",
+    "app.mail_routes_customers",
+    "app.mail_routes_matching",
+    "app.mail_routes_diagnostics",
+
     "app.accounts",
     "app.outlook_probe",
     "app.mail_database",
