@@ -32,7 +32,7 @@ def install_platform_auth(app, *, credentials_path=None, transition_guard=None, 
             origin = request.headers.get("origin")
             if origin:
                 parsed = urlsplit(origin)
-                if parsed.scheme not in {"http", "https"} or parsed.hostname not in {"localhost", "127.0.0.1", "::1"} or (parsed.netloc != request.headers.get("host") and (getattr(sys,"frozen",False) or origin not in {"http://localhost:5173","http://127.0.0.1:5173"})):
+                if parsed.scheme not in {"http", "https"} or parsed.hostname not in {"localhost", "127.0.0.1", "::1"} or (parsed.netloc != request.headers.get("host") and (getattr(sys,"frozen",False) or origin not in {"http://localhost:5173","http://127.0.0.1:5173","http://localhost:8765","http://127.0.0.1:8765"})):
                     return JSONResponse({"detail": "Local origin required"}, status_code=403)
             if request.method not in {"GET", "HEAD", "OPTIONS"} and request.headers.get("x-requested-with") != "XMLHttpRequest" and request.headers.get("x-finance-local") != "1":
                 return JSONResponse({"detail": "Local mutation header required"}, status_code=403)
