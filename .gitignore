@@ -26,3 +26,6 @@ tmp/
 # Local editor files
 .idea/
 .vscode/
+
+# Private local platform credentials (injected at build time)
+backend/app/platform_accounts.json

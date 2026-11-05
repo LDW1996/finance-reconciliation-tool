@@ -79,13 +79,8 @@ jobs:
         run: npm ci
         working-directory: frontend
 
-      - name: Validate English mail localization
-        if: ${{ matrix.edition == 'mail_en' }}
-        run: node tooling/check-mail-english.mjs
-        working-directory: frontend
-
-      - name: Validate runtime language isolation
-        run: node tooling/tests/runtimePlatformLocale.test.mjs
+      - name: Validate frontend tooling and English localization
+        run: npm run check
         working-directory: frontend
 
       - name: Build frontend
@@ -115,6 +110,12 @@ jobs:
           }
         env:
           PYTHONPATH: backend
+
+      - name: Prepare private platform accounts
+        if: ${{ matrix.edition == 'full' }}
+        env:
+          PLATFORM_SMOKE_ACCOUNTS: ${{ secrets.PLATFORM_SMOKE_ACCOUNTS }}
+        run: python packaging/prepare_platform_accounts.py
 
       - name: Build EXE
         shell: pwsh

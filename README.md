@@ -150,3 +150,15 @@ Windows 一键启动程序已预留 PyInstaller 打包层，入口为 `backend/l
 - `build-diagnostics` 是单独的开发诊断附件，提供 `bundle-size-report.json`，列出压缩前文件占用、依赖分组、最大文件及 EXE 大小；体积清单不含本机源文件路径；另包含合成测试的启动日志、组件检查结果及构建警告，用于定位成品异常，不包含财务邮件或账号数据。不需要发给财务人员。
 - EXE 本身已压缩，上传交付附件时不再额外进行 ZIP 高强度压缩；文件名、解压及运行方式不变。
 - 本地打包保留 `--clean`，避免历史分析缓存造成漏文件。实际 Windows 包体和耗时需比较优化前后同环境 Actions 结果，不以 Mac 安装目录大小估算。
+
+## 平台账号交付配置
+
+正式包不再从仓库读取固定的 `backend/app/platform_accounts.json`。GitHub 使用已有的
+`PLATFORM_SMOKE_ACCOUNTS` Secret（`excel`、`mail`、`ilog`、`full` 对应口令的 JSON），
+在打包前生成 `build/platform_accounts.json`，只将带随机盐的密码哈希放入 EXE。
+同一密钥配置不变则登录口令不变，不影响本地邮件、业务账号及读取进度。
+缺少配置会停止打包，不使用默认口令。原有本地开发账号文件保留但不再提交。
+
+手工打包前，可设置上述环境变量后运行 `python packaging/prepare_platform_accounts.py`；
+也可通过 `FINANCE_PLATFORM_ACCOUNTS` 指定外部哈希文件，文件名须为 `platform_accounts.json`。
+不要上传口令或这些配置文件。历史提交中的旧哈希未被改写。

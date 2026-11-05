@@ -12,12 +12,12 @@ import secrets
 from copy import deepcopy
 import os
 from pathlib import Path
-import re
 import sqlite3
 import threading
 from uuid import uuid4
 
 from .accounts import account_data_dir
+from .bill_validation import normalize_bills
 
 
 def runtime():
@@ -148,16 +148,7 @@ class TaskManager:
         present(data)
         return data
 
-    @staticmethod
-    def normalize_bills(bills):
-        if not isinstance(bills, list): raise ValueError('单号必须为列表')
-        result=[]
-        for bill in bills:
-            if not isinstance(bill,str): raise ValueError('单号格式异常')
-            bill=bill.strip().upper()
-            if not re.fullmatch(r'[A-Z0-9_/-]{1,80}',bill): raise ValueError('存在格式异常的单号')
-            if bill not in result: result.append(bill)
-        return result
+    normalize_bills = staticmethod(normalize_bills)
 
     @staticmethod
     def preview_binding(account, fallback_account, fee, order):
@@ -215,20 +206,13 @@ class TaskManager:
             raise ValueError('请先核对清单并确认真实操作')
         if fallback_account and (fallback_account == account or not fallback_name):
             raise ValueError('兜底账号必须与主账号不同，并有有效名称')
-        inputs = []
-        for kind, bills in [('fee',fee),('order',order)]:
-            if not isinstance(bills, list): raise ValueError('单号必须为列表')
-            seen = set()
-            for bill in bills:
-                if not isinstance(bill,str): raise ValueError('单号格式异常')
-                bill = bill.strip().upper()
-                if not re.fullmatch(r'[A-Z0-9_/-]{1,80}',bill):
-                    raise ValueError('存在格式异常的单号')
-                if bill not in seen:
-                    inputs.append({'bill':bill,'kind':kind,'status':'waiting','message':'等待执行','time':''})
-                    seen.add(bill)
+        fee, order = self.normalize_bills(fee), self.normalize_bills(order)
+        inputs = [
+            {'bill': bill, 'kind': kind, 'status': 'waiting', 'message': '等待执行', 'time': ''}
+            for kind, bills in [('fee', fee), ('order', order)]
+            for bill in bills
+        ]
         if not inputs or len(inputs)>2000: raise ValueError('每批需要 1–2000 项')
-        fee,order=self.normalize_bills(fee),self.normalize_bills(order)
         confirmation = [account,[(r['bill'],r['kind']) for r in inputs]]
         if fallback_account: confirmation.append(fallback_account)
         confirmation.extend([scope,screenshot_policy,record_timings,preview_token if scope=="voyage" else None])

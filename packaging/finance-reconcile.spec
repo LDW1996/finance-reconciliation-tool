@@ -1,6 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 from pathlib import Path
+import os
 import sys
 
 from PyInstaller.utils.hooks import collect_all
@@ -9,8 +10,14 @@ ROOT = Path(SPECPATH).parent
 sys.path.insert(0,str(ROOT / "packaging"))
 from bundle_assets import validate_runtime_assets, write_bundle_report, NUMPY_RUNTIME_IMPORTS
 
+ACCOUNT_FILE = Path(os.environ.get('FINANCE_PLATFORM_ACCOUNTS', ROOT / 'build' / 'platform_accounts.json'))
+if ACCOUNT_FILE.name != 'platform_accounts.json':
+    raise RuntimeError('Account input must be named platform_accounts.json')
+if not ACCOUNT_FILE.is_file():
+    raise RuntimeError('Private platform account input missing; run packaging/prepare_platform_accounts.py first')
+
 datas = [
-    (str(ROOT / "backend" / "app" / "platform_accounts.json"), "."),
+    (str(ACCOUNT_FILE), "."),
     (str(ROOT / "frontend" / "dist"), "frontend_dist"),
 ]
 binaries = []
@@ -23,6 +30,7 @@ hiddenimports = [
     "app.ilog_retention",
     "app.ilog_unlock",
     "app.ilog_query",
+    "app.bill_validation",
     "app.ilog_batch",
     "app.ilog_voyage",
     "app.ilog_session",

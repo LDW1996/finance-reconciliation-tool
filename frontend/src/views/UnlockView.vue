@@ -75,12 +75,7 @@
     </template>
 
     <section v-else-if="view === 'accounts'" class="management-section">
-      <el-table :data="accounts" empty-text="添加第一个业务账号">
-        <el-table-column prop="name" label="账号名称" min-width="180"/>
-        <el-table-column prop="username" label="用户名" min-width="180"/>
-        <el-table-column label="密码状态" min-width="140"><template #default="{ row }"><el-tag :type="row.hasPassword ? 'success' : 'info'">{{ row.hasPassword ? '已保存密码' : '未登记密码' }}</el-tag></template></el-table-column>
-        <el-table-column label="操作" width="160"><template #default="{ row }"><el-button link type="primary" :disabled="busy" @click="openAccount(row)">编辑</el-button><el-button link type="danger" :disabled="busy" @click="removeAccount(row)">删除</el-button></template></el-table-column>
-      </el-table>
+      <UnlockAccountsTable :accounts="accounts" :busy="busy" @edit="openAccount" @remove="removeAccount" />
     </section>
 
     <section v-if="view === 'history'" class="management-section">
@@ -130,12 +125,7 @@
         <el-tab-pane v-for="kind in kinds" :key="kind.key" :name="kind.key" :label="`${kind.title} · ${parsed[kind.key].length} 条`"/>
       </el-tabs>
       <p style="margin:0 0 12px">本页：有效 {{ parsed[reviewKind].length }} 项 · 重复 {{ duplicateCount(reviewKind) }} 项 · 异常 {{ inspections[reviewKind].filter(r => r.status === 'invalid').length }} 项</p>
-      <el-table :key="reviewKind" :data="inspections[reviewKind]" max-height="360" border empty-text="此类型暂无单号">
-        <el-table-column type="index" label="#" width="50"/>
-        <el-table-column prop="raw" label="粘贴原文" min-width="170"/>
-        <el-table-column label="识别单号" min-width="170"><template #default="{ row }">{{ row.status === 'invalid' ? '—' : row.bill }}</template></el-table-column>
-        <el-table-column label="校验结果" min-width="170"><template #default="{ row }"><el-tag :type="row.status === 'invalid' ? 'danger' : row.status === 'duplicate' ? 'warning' : 'success'">{{ row.status === 'invalid' ? '格式异常' : row.status === 'duplicate' ? '重复，已排除' : '格式通过' }}</el-tag><div v-if="row.suggestion" style="margin-top:6px;overflow-wrap:anywhere">建议修改为：{{ row.suggestion }}</div></template></el-table-column>
-      </el-table>
+      <BillInspectionTable :key="reviewKind" :rows="inspections[reviewKind]" />
       <el-checkbox v-model="reviewAcknowledged" style="margin-top:16px;white-space:normal">我已核对主账号、兜底账号、单号及大小锁类型，并授权本次真实解锁</el-checkbox>
       <el-text v-if="total > 2000" type="danger">每批最多 2000 项，请返回拆分。</el-text>
       <p class="demo-note">将实际修改 iLog 锁状态。单笔异常不阻断后续项，解锁提交不自动重试；{{ verifyAfter ? '标准模式：提交后复查锁状态。' : '快速模式：平台明确成功即记录成功（未复查），不查询最终锁状态。' }}响应不明确则待人工核实。暂停仅停止后续项。</p>
@@ -156,6 +146,8 @@
 <script setup lang="ts">
 import { computed, ref, onBeforeUnmount, onMounted, watch } from 'vue'
 import axios from 'axios'
+import UnlockAccountsTable from '../components/unlock/UnlockAccountsTable.vue'
+import BillInspectionTable from '../components/unlock/BillInspectionTable.vue'
 import MailStorageSettings from '../components/MailStorageSettings.vue'
 import { User, Unlock, VideoPlay, VideoPause, Download, RefreshRight, InfoFilled, List, Plus, ArrowLeft, Clock, Setting } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'

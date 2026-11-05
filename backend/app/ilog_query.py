@@ -7,13 +7,14 @@ from urllib.parse import unquote_plus
 from uuid import uuid4
 
 from app.accounts import AccountStore, account_data_dir
+from app.bill_validation import valid_bill
 
 URL = 'https://logistics.sitc.com/ilog/desktop/kanbanm/booking.html'
 
 
 def validate_bill(value: str) -> str:
     value = value.strip()
-    if not re.fullmatch(r'[A-Za-z0-9_/-]{1,80}', value):
+    if not valid_bill(value):
         raise ValueError('Invalid bill number')
     return value
 

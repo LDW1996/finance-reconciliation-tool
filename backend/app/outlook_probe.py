@@ -74,6 +74,23 @@ def mail_sections(body):
                 quoted_body=''.join(lines[boundary:]).strip())
 
 
+
+def attachment_read_failure(asset, error, *, source, mail_id='', attachment_index=0):
+    """Keep actionable evidence without copying exception text or mail content."""
+    if isinstance(error, PermissionError):
+        code, reason = 'attachment_permission_denied', '附件读取被拒绝，请检查 Outlook 和临时目录的访问权限。'
+    elif isinstance(error, FileNotFoundError):
+        code, reason = 'attachment_file_missing', '附件临时文件未生成或已消失，请重新读取该邮件。'
+    elif isinstance(error, OSError):
+        code, reason = 'attachment_io_error', '附件文件读写失败，请检查磁盘空间和临时目录后重试。'
+    else:
+        code, reason = 'attachment_read_error', 'Outlook 或邮件解析器未能读取该附件，请在 Outlook 检查原件后重新读取。'
+    asset.update(status='failed', raw=b'', error=reason + '（' + type(error).__name__ + '）',
+                 error_code=code, error_type=type(error).__name__, failed_stage='read_attachment')
+    diagnostic_record('attachment_read_failed', error, source=source, mail_id=mail_id,
+                      attachment_index=attachment_index, error_code=code)
+    return asset
+
 def parse_msg(raw):
     if len(raw) > MAX_MAIL_BYTES: raise ValueError('邮件不能超过 25 MB')
     if not raw.startswith(bytes.fromhex('D0CF11E0A1B11AE1')):
@@ -95,8 +112,9 @@ def parse_msg(raw):
                         content = a.data
                         assets.append(capture_attachment(name, content if isinstance(content, bytes) else None))
                     else: assets.append(capture_attachment(name))
-                except Exception:
-                    assets.append(capture_attachment(name))
+                except Exception as error:
+                    assets.append(attachment_read_failure(capture_attachment(name), error,
+                                  source='msg', mail_id=hashlib.sha256(raw).hexdigest(), attachment_index=len(assets)+1))
             return dict(id=hashlib.sha256(raw).hexdigest(), source='msg', folder='导入样例',
                         subject=subject, sender=str(mail.sender or ''), received=str(mail.date or ''),
                         body=body[:200000], truncated=len(body)>200000,
@@ -476,7 +494,8 @@ def scan_folder(folder, store_id, cutoff, limit, known_unchanged=None):
                                 total_bytes+=len(content)
                                 scan_bytes+=len(content)
                                 asset=capture_attachment(name, content)
-                    except Exception: pass
+                    except Exception as error:
+                        attachment_read_failure(asset, error, source='outlook', mail_id=mail_id, attachment_index=i)
                     finally: attachment_seconds += perf_counter()-download_started
                 elif asset['status']=='failed' and total_bytes+size>MAX_MAIL_BYTES:
                     asset.update(status='skipped',error='本封邮件附件累计超过 25 MB。')

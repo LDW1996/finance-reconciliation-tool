@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import assert from 'node:assert/strict'
+import { transform } from 'esbuild'
 
 // The platform (and excel) editions translate at runtime: every authored UI
 // literal is wrapped in $platformText() and resolved against the merged
@@ -56,7 +57,13 @@ for (const file of files) {
 
 assert.equal(failures.length, 0, `英文目录缺口 ${failures.length} 处：\n${failures.join('\n')}`)
 
-// End-to-end sample: the iLog and login screens that the voyage work touched.
+// Exercise the actual runtime function, without booting Vue or reading user data.
+const localeSource = readFileSync(new URL('src/platformLocale.ts', root), 'utf8')
+const functionSource = localeSource.slice(localeSource.indexOf('export function platformText'), localeSource.indexOf('declare module'))
+const compiled = await transform(functionSource.replace('export function', 'function'), { loader: 'ts' })
+const language = { value: 'en' }
+const platformText = Function('platformLanguage', 'catalog', `${compiled.code}; return platformText`)(language, catalog)
+// String-level regression samples, not a browser end-to-end test.
 const samples = [
   '查询航次并核对',
   '选择航次分组',
@@ -67,9 +74,12 @@ const samples = [
   '当前任务正在处理，请等待完成后再登录',
 ]
 for (const sample of samples) {
-  const translated = resolve(sample) ?? sample.replace(SEGMENT, segment => resolve(segment) ?? segment)
+  const translated = platformText(sample)
   assert.ok(!CJK.test(translated), `未翻译：${sample} -> ${translated}`)
 }
 
 const segments = files.filter(file => !SKIP.has(file)).reduce((total, file) => total + (readFileSync(new URL(file, root), 'utf8').match(SEGMENT) || []).length, 0)
-console.log(`Platform English catalog covers ${segments} source segments across ${files.length - SKIP.size} files; ${samples.length} rendered samples have no Chinese left.`)
+console.log(`Platform English catalog covers ${segments} source segments across ${files.length - SKIP.size} files; ${samples.length} runtime translation samples have no Chinese left.`)
+
+language.value = 'zh-CN'
+assert.equal(platformText('查询航次并核对'), '查询航次并核对')
