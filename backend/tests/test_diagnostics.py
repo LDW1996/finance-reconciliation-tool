@@ -117,3 +117,15 @@ def test_error_codes_and_cause_are_actionable_without_sensitive_text(tmp_path,mo
     assert row['error_code']==5 and row['failure_reason']=='database_busy'
     assert row['causes'][0]['error_code']==28
     assert 'secret' not in json.dumps(row)
+
+
+def test_normal_steps_are_not_logged_and_varying_item_errors_are_aggregated(tmp_path,monkeypatch):
+    monkeypatch.setenv('FINANCE_RECONCILE_DATA_DIR',str(tmp_path));d._seen.clear()
+    for i in range(100):
+        d.record('mail_read_metadata',index=i)
+        d.record('outlook_snapshot_item',AttributeError('private'),index=i,store_id='store')
+    rows=[json.loads(line) for p in (tmp_path/'logs').glob('*.jsonl') for line in p.read_text().splitlines()]
+    assert len(rows)==1
+    with zipfile.ZipFile(io.BytesIO(d.export())) as z:
+        summary=json.loads(z.read('重复异常汇总.json'))
+        assert summary[0]['suppressed']==99
