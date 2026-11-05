@@ -1,6 +1,6 @@
-# iLog 单笔解锁与结果核实
+# iLog 解锁与结果核实（单笔 / 批量 / 航次）
 
-单笔脚本已由页面后端串行任务调用；页面确认后执行真实解锁。本脚本只操作单个委托单，不操作 Vessel 菜单或费用明细逐行审核。
+脚本由页面后端串行任务调用；页面确认后执行真实解锁。按提单解锁只操作输入清单中的委托单；按航次解锁调用平台 Vessel 菜单，见「航次解锁」。两种范围都不做费用明细逐行审核。
 
 ## 默认只读
 
@@ -29,7 +29,9 @@ PYTHONPATH=backend .venv/bin/python -m app.ilog_unlock --account ilog-west-indon
 | inspected | 只读检查完成，未解锁 |
 | verified_unlocked | 平台明确成功且重新查询为 U（列表无锁图标） |
 | verified_fee_unlocked | 小锁平台明确成功且复查 A → B，仍可能保留另一层锁 |
+| platform_accepted | 快速模式下平台明确返回成功（`success=true`）但未做提交后复查，不能等同已核实 |
 | platform_confirmed | 平台明确成功且锁状态变化，但仍有锁，不能等同全部解除 |
+| voyage_platform_confirmed | 平台已确认航次操作成功，仅代表单，不表示全航次逐笔核验 |
 | already_unlocked | 原状态 U，未再次提交 |
 | already_fee_unlocked | 小锁原状态 B，未再次提交 |
 | rejected | 平台明确拒绝，附返回说明 |
@@ -51,10 +53,43 @@ PYTHONPATH=backend .venv/bin/python -m app.ilog_unlock --account ilog-west-indon
 ## 页面任务
 
 `POST /api/ilog/tasks` 接受已确认的账号、fee/order 单号清单及唯一 request_id；后台再次校验格式、去重并串行执行。所有写接口需要本机页面请求头和本机 Origin 校验。
+
+可选字段：`scope`（`bill` / `voyage`，默认 `bill`）、`verify_after`（标准/快速模式，默认 `true`）、`screenshot_policy`（`errors` / `all` / `none`，默认 `errors`）、`record_timings`（分阶段耗时，默认关闭）、`preview_token`（航次模式必填）、`fallback_account_id`。这些选项参与请求幂等绑定，同一 request_id 不允许更换模式后重放。
+`POST /api/ilog/voyages/preview` 先只读查询代表提单并归并航次，见「航次解锁」。
 `GET /api/ilog/tasks/latest` 恢复最近任务；`GET /api/ilog/tasks/{id}` 读取逐笔进度。
 `POST /api/ilog/tasks/{id}/control` 支持 pause/resume/cancel。单笔异常记录后继续后续项，不自动重放异常项。手动暂停和重启恢复后的继续操作只执行等待项。
 任务保存在应用数据目录 `ilog-tasks/tasks.sqlite3`；跨线程及进程通过 SQLite 事务和工作锁串行执行。
 页面接线通过请求拦截测试与后端替身执行器测试，没有额外对真实订单执行批量解锁。
+
+## 航次解锁（2026-11-02 实现，11-03 首批真实验证）
+
+页面把解锁范围切到「按航次」后，输入的是该航次的代表提单，不要求手填船名与航次。
+
+两阶段，缺一不可：
+
+1. `POST /api/ilog/voyages/preview` 只读查询：对每条代表提单执行 `execute=False`、`screenshot_policy='none'` 的查询，按账号+船名+航次+类型归并，返回 `groups`（船名、航次、命中业务、合并后的代表提单）、`issues` 与 `can_execute`。
+2. `POST /api/ilog/tasks` 携带 `scope='voyage'` 与 `preview_token` 提交。令牌存入 `voyage_previews` 表，10 分钟有效，绑定账号、兜底账号与输入单号；输入或账号变动、令牌过期、预览存在 issue 或无分组时一律拒绝执行。
+
+范围判定规则：
+
+- 同一账号、同一航次、同一类型（费用/订单）只提交一次，多个代表提单合并为一个分组。
+- 缺少业务记录编号、船名或航次，或船名/航次包含 `/` 时直接报错，不猜测，也不默认取查询结果第一条。
+- 一条号码查出多条记录且分属不同航次时，按航次分别成组，由用户在核对清单中确认范围。
+- 预览阶段主账号 `not_found` 时可改用兜底账号查找；执行阶段按预览落定的实际账号运行，不再切换兜底。
+
+结果口径：航次操作返回 `voyage_platform_confirmed`，含义是平台已确认该次航次操作成功、代表单复查通过。平台不返回全航次影响数量，因此不宣称逐笔核验，也不宣称全航次全部解锁。日志保留输入提单、实际账号、命中业务、船名航次、操作类型、平台响应与复查结果。
+
+首批真实验证（2026-11-03）：5 个代表提单合并为 2 个航次，费用/订单共 4 次航次操作均收到平台成功响应，代表单复查通过；未逐笔核验全航次。
+
+## 执行模式与截图策略（2026-11-04）
+
+- 标准模式（`verify_after=true`，默认）：保留提交后只读复查与有限重试。
+- 快速模式（`verify_after=false`）：保留查询、选中 ID 校验、确认窗口校验和持久化防重复提交，仅取消提交后复查；平台明确 `success=true` 记为 `platform_accepted`，拒绝或响应不明确不记成功。
+- 模式随任务保存，执行时读取任务内的值；旧任务缺该字段按标准模式处理。
+- 单笔、批量、航次均适用，模式参与请求幂等绑定，同一 request_id 不允许切换模式重放。
+- 截图策略：`errors` 仅异常保存（默认）、`all` 每笔保存、`none` 不保存。结构化结果始终保存，`none` 只影响截图。
+- `record_timings` 打开后按浏览器启动、登录、查询、选中、提交、复查、截图、结果保存分阶段计时，仅用于定位瓶颈，不改变执行顺序。
+- 页面、任务详情与 CSV 区分「平台返回成功（未复查）」与已复查结果；CSV 保留原列并追加执行模式。
 
 ## 账号兜底
 
