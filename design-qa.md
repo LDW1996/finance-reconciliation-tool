@@ -22,7 +22,7 @@ final result: passed
 - Assets: no raster artwork is required. Existing product icon library and functional progress bar retained; no invented illustrations.
 - Content: kept existing units, original data and server-driven status. Removed inaccurate AI mock copy, unsupported standalone backup/delete/copy buttons and invented automatic-cleanup behavior. Detailed instructions remain available through disclosures. This intentionally yields more scrolling than the concept, rather than removing existing protections or workflows.
 - Source demo percentage is rounded 46%; fixture's exact bytes yield 45% while displaying 9.10GB. Production percentage still uses the unchanged byte-based calculation; no percentage was hardcoded.
-- Chinese full edition retains the existing management shell and iLog retention controls. Standalone English edition has mail settings only. Paths can contain original Chinese characters and are never translated.
+- The unified platform retains the existing management shell and iLog retention controls in both language modes. Paths can contain original Chinese characters and are never translated.
 
 ## Functional checks
 - English save succeeded with the existing API and success message.
@@ -30,9 +30,9 @@ final result: passed
 - Conservative cleanup preview remained available; no destructive action performed.
 - Section jump preserved the current route hash.
 - Desktop and 390px mobile document bounds checked; no horizontal page overflow or offscreen form controls.
-- Chinese full edition iLog retention section and its controls remain present.
+- The iLog retention section and its controls remain present in the unified platform.
 - Chinese browser console checked: no errors reported.
-- Both production frontend builds and strict English catalog/runtime business-data preservation checks passed.
+- The production frontend build and strict English catalog/runtime business-data preservation checks passed.
 - Compared the existing async load/save/preview/cleanup/restore/poll/unmount function source to HEAD: unchanged.
 
 ## Residual limits

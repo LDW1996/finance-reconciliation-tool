@@ -54,7 +54,7 @@ Windows `.exe` 需要在 Windows 电脑上构建。Mac 不能可靠直接交叉�
 2. 打开仓库页面。
 3. 进入 `Actions`。
 4. 选择 `Build Windows EXE`。
-5. 点击 `Run workflow`，选择版本。默认不勾选“快速打包”，会执行完整测试。
+5. 点击 `Run workflow`。当前只有一个统一平台版本，无需选择；弹窗里只有“快速打包”可勾选。默认不勾选，会执行完整测试。
    - `Windows Tests` 会在推送主分支时独立执行全量 Windows 测试，也支持手动启动。
    - 同一提交的 `Windows Tests` 已通过时，可勾选“快速打包”，跳过重复测试。
    - 没有通过记录、记录不属于当前提交或无法查询时，快速打包会停止并提示；可取消勾选使用完整流程。
@@ -67,14 +67,6 @@ Windows `.exe` 需要在 Windows 电脑上构建。Mac 不能可靠直接交叉�
 财务综合业务平台.exe
 财务人员使用说明.txt
 ```
-
-### 独立英文邮件核销版
-
-`Build Windows EXE` 的 `edition` 可选 `mail_en`。产物为 `邮件核销工具（英文版）.zip`，包含 `邮件核销工具（英文版）.exe` 和 `User Guide.txt`。独立版仅提供邮件核销与存储管理，保留Outlook、OCR、在线银行流水、客户台账、确认回写和导出，不提供Excel对账、iLog或账号管理接口。
-
-界面和程序生成的说明使用英文；客户名称、邮件正文和原始银行表格内容保留原文。同一用户使用原有邮件数据目录和密钥，与原版共用8765端口，请关闭原版后再打开。构建文件不包含本机邮件、账号或Google授权数据。英文专用变更推送后会自动触发 `Build English Mail Reconciliation`，也可手动运行；只有Windows打包和EXE启动检查通过才会上传成品。
-
-本地检查英文界面可使用 `VITE_EDITION=mail_en npm run build --prefix frontend -- --outDir ../build/mail-en-frontend`；普通构建仍为原中文版本。
 
 ### 方案二：Windows 本机打包
 
