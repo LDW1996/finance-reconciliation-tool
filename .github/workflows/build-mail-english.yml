@@ -53,5 +53,4 @@ jobs:
     uses: ./.github/workflows/build-windows-exe.yml
     secrets: inherit
     with:
-      edition: full
       fast_build: false

@@ -3,13 +3,6 @@ name: Build Windows EXE
 on:
   workflow_dispatch:
     inputs:
-      edition:
-        description: "统一平台：内置四角色账号及中英文界面"
-        required: true
-        default: full
-        type: choice
-        options:
-          - full
       fast_build:
         description: "快速打包：复用同一提交已通过的 Windows Tests；仍检查 EXE 启动"
         required: true
@@ -21,10 +14,6 @@ on:
       PLATFORM_SMOKE_ACCOUNTS:
         required: true
     inputs:
-      edition:
-        type: string
-        required: false
-        default: full
       fast_build:
         type: boolean
         required: false
@@ -36,15 +25,11 @@ permissions:
 
 jobs:
   build:
-    name: Build ${{ matrix.edition }}
+    name: Build unified platform
     runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        edition: [full]
     env:
-      EXE_NAME: ${{ matrix.edition == 'excel' && 'Excel对账工具' || matrix.edition == 'mail_en' && '邮件核销工具（英文版）' || '财务综合业务平台' }}
-      GUIDE_NAME: ${{ matrix.edition == 'mail_en' && 'User Guide.txt' || '使用说明.txt' }}
+      EXE_NAME: 财务综合业务平台
+      GUIDE_NAME: 使用说明.txt
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -88,69 +73,37 @@ jobs:
         working-directory: frontend
         env:
           VITE_BUILD_COMMIT: ${{ github.sha }}
-          VITE_EDITION: ${{ matrix.edition }}
+          VITE_EDITION: full
 
       - name: Install Python dependencies
         shell: pwsh
-        run: |
-          if ('${{ matrix.edition }}' -eq 'excel') {
-            python -m pip install --disable-pip-version-check -r packaging\requirements-excel-build.txt
-          } else {
-            python -m pip install --disable-pip-version-check -r packaging\requirements-build.txt
-          }
+        run: python -m pip install --disable-pip-version-check -r packaging\requirements-build.txt
 
       - name: Run tests
         if: ${{ !inputs.fast_build }}
         shell: pwsh
-        run: |
-          if ('${{ matrix.edition }}' -eq 'excel') {
-            python -m pytest backend\tests\test_excel_edition.py backend\tests\test_reconciliation.py backend\tests\test_launcher.py -q --durations=25 --durations-min=0.1
-          } else {
-            python -m pytest backend\tests -q -n 2 --dist=loadfile --durations=25 --durations-min=0.1
-          }
+        run: python -m pytest backend\tests -q -n 2 --dist=loadfile --durations=25 --durations-min=0.1
         env:
           PYTHONPATH: backend
 
       - name: Prepare private platform accounts
-        if: ${{ matrix.edition == 'full' }}
         env:
           PLATFORM_SMOKE_ACCOUNTS: ${{ secrets.PLATFORM_SMOKE_ACCOUNTS }}
         run: python packaging/prepare_platform_accounts.py
 
       - name: Build EXE
         shell: pwsh
-        run: |
-          if ('${{ matrix.edition }}' -eq 'mail_en') {
-            pyinstaller --clean --noconfirm packaging\mail-reconcile.spec
-          } elseif ('${{ matrix.edition }}' -eq 'excel') {
-            pyinstaller --clean --noconfirm packaging\excel-reconcile.spec
-          } else {
-            pyinstaller --clean --noconfirm packaging\finance-reconcile.spec
-          }
+        run: pyinstaller --clean --noconfirm packaging\finance-reconcile.spec
 
       - name: Smoke test EXE
         env:
           PLATFORM_SMOKE_ACCOUNTS: ${{ secrets.PLATFORM_SMOKE_ACCOUNTS }}
         shell: pwsh
-        run: |
-          if ('${{ matrix.edition }}' -eq 'mail_en') {
-            python packaging\smoke_mail_exe.py "dist\$env:EXE_NAME.exe"
-          } elseif ('${{ matrix.edition }}' -eq 'excel') {
-            python packaging\smoke_windows_exe.py "dist\$env:EXE_NAME.exe" --excel-only
-          } else {
-            python packaging\smoke_windows_exe.py "dist\$env:EXE_NAME.exe"
-          }
+        run: python packaging\smoke_windows_exe.py "dist\$env:EXE_NAME.exe"
 
       - name: Copy user guide
         shell: pwsh
-        run: |
-          if ('${{ matrix.edition }}' -eq 'mail_en') {
-            Copy-Item "packaging\Mail-Reconciliation-Guide.txt" "dist\$env:GUIDE_NAME"
-          } elseif ('${{ matrix.edition }}' -eq 'excel') {
-            Copy-Item "packaging\Excel对账使用说明.txt" "dist\使用说明.txt"
-          } else {
-            Copy-Item "packaging\财务人员使用说明.txt" "dist\使用说明.txt"
-          }
+        run: Copy-Item "packaging\财务人员使用说明.txt" "dist\$env:GUIDE_NAME"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -166,11 +119,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: build-diagnostics-${{ matrix.edition }}
+          name: build-diagnostics
           if-no-files-found: ignore
           path: |
             build/bundle-size-report.json
             build/smoke-diagnostics/
             build/finance-reconcile/warn-finance-reconcile.txt
-            build/excel-reconcile/warn-excel-reconcile.txt
-            build/mail-reconcile/warn-mail-reconcile.txt
