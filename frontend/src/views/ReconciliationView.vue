@@ -1,8 +1,8 @@
 <template>
   <el-config-provider :locale="elementLocale">
   <main class="app-shell">
-    <section class="workspace" aria-labelledby="page-title">
-      <header class="page-header">
+    <section class="workspace ds-scope" aria-labelledby="page-title">
+      <header class="page-header ds-head">
         <ModuleTitle :icon="DataAnalysis" title-id="page-title">{{ t('title') }}</ModuleTitle>
         <div v-if="standaloneExcel" class="header-actions">
           <el-select
@@ -47,20 +47,20 @@
       <section class="panel inspection-panel" :aria-label="t('inspection')">
         <div class="inspection-header">
           <h2>{{ t('inspection') }}</h2>
-          <el-tag v-if="!inspectionReport && !isInspecting" effect="plain">{{ t('waitingUpload') }}</el-tag>
-          <el-tag v-else-if="isInspecting" type="warning" effect="plain">{{ t('checking') }}</el-tag>
-          <el-tag v-else-if="inspectionReport?.valid" type="success" effect="plain">{{ t('passed') }}</el-tag>
-          <el-tag v-else type="danger" effect="plain">{{ t('invalid') }}</el-tag>
+          <StatusBadge v-if="!inspectionReport && !isInspecting" tone="neutral" :label="t('waitingUpload')" />
+          <StatusBadge v-else-if="isInspecting" tone="warning" :label="t('checking')" />
+          <StatusBadge v-else-if="inspectionReport?.valid" tone="success" :label="t('passed')" />
+          <StatusBadge v-else tone="danger" :label="t('invalid')" />
         </div>
 
         <el-skeleton v-if="isInspecting" :rows="3" animated />
         <div v-else-if="!inspectionReport" class="quiet-state" role="status"><el-icon><Checked /></el-icon><p>{{ t('emptyInspection') }}</p></div>
         <div v-else class="inspection-content">
-          <dl class="inspection-summary">
-            <div><dt>{{ t('recognizeCompanies') }}</dt><dd>{{ inspectionReport.companyCodes.join(' / ') || '-' }}</dd></div>
-            <div><dt>{{ t('detailRows') }}</dt><dd>{{ inspectionReport.rowCount }} {{ t('rows') }}</dd></div>
-            <div><dt>{{ t('allocationCount') }}</dt><dd>{{ inspectionReport.allocationCount }} {{ t('items') }}</dd></div>
-          </dl>
+          <div class="ds-metric-row">
+            <MetricCard :label="t('recognizeCompanies')" :value="inspectionReport.companyCodes.join(' / ') || '-'" />
+            <MetricCard :label="t('detailRows')" :value="inspectionReport.rowCount + ' ' + t('rows')" />
+            <MetricCard :label="t('allocationCount')" :value="inspectionReport.allocationCount + ' ' + t('items')" />
+          </div>
 
           <el-alert
             v-if="inspectionReport.valid"
@@ -171,14 +171,14 @@
           <div v-if="!result" class="quiet-state result-empty" role="status"><el-icon><Document /></el-icon><p>{{ resultEmptyText }}</p></div>
           <div v-else class="result-box">
             <div class="result-title">{{ t('analysisDone') }}</div>
-            <dl class="metrics">
-              <div><dt>{{ t('processedDetails') }}</dt><dd>{{ result.total }} {{ t('rows') }}</dd></div>
-              <div><dt>{{ t('matchSuccess') }}</dt><dd>{{ result.matchedAllocations }} {{ t('allocationRows') }} {{ result.matched }} {{ t('rows') }}</dd></div>
-              <div><dt>{{ t('exactMatch') }}</dt><dd>{{ result.exactAllocations }} {{ t('items') }}</dd></div>
-              <div><dt>{{ t('toleranceMatch') }}</dt><dd>{{ result.toleranceAllocations }} {{ t('items') }}</dd></div>
-              <div><dt>{{ t('amountDifference') }}</dt><dd>{{ result.differenceAllocations }} {{ t('allocationRows') }} {{ result.differences }} {{ t('rows') }}</dd></div>
-              <div><dt>{{ t('unmatched') }}</dt><dd>{{ result.unmatchedAllocations }} {{ t('allocationRows') }} {{ result.unmatched }} {{ t('rows') }}</dd></div>
-            </dl>
+            <div class="ds-metric-row ds-result-metrics">
+              <MetricCard :label="t('processedDetails')" :value="result.total + ' ' + t('rows')" />
+              <MetricCard :label="t('matchSuccess')" :value="result.matchedAllocations + ' ' + t('allocationRows') + ' ' + result.matched + ' ' + t('rows')" />
+              <MetricCard :label="t('exactMatch')" :value="result.exactAllocations + ' ' + t('items')" />
+              <MetricCard :label="t('toleranceMatch')" :value="result.toleranceAllocations + ' ' + t('items')" />
+              <MetricCard :label="t('amountDifference')" tone="danger" :value="result.differenceAllocations + ' ' + t('allocationRows') + ' ' + result.differences + ' ' + t('rows')" />
+              <MetricCard :label="t('unmatched')" tone="warning" :value="result.unmatchedAllocations + ' ' + t('allocationRows') + ' ' + result.unmatched + ' ' + t('rows')" />
+            </div>
             <el-button type="primary" plain :icon="Download" @click="downloadResult">
               {{ outputMode === 'marked' ? t('downloadMarked') : t('downloadDetailed') }}
             </el-button>
@@ -191,6 +191,8 @@
 </template>
 
 <script setup lang="ts">
+import StatusBadge from '../components/StatusBadge.vue'
+import MetricCard from '../components/MetricCard.vue'
 import ModuleTitle from '../components/ModuleTitle.vue'
 import { computed, ref, watch } from 'vue'
 import { Brush, Checked, Cpu, DataAnalysis, Document, Download, QuestionFilled } from '@element-plus/icons-vue'
@@ -365,4 +367,34 @@ function downloadResult() {
 
 <style scoped>
 .mode-description { margin: -8px 0 24px; color: var(--el-text-color-secondary); font-size: 14px; line-height: 1.6; }
+.ds-scope .layout-grid { gap: var(--ds-sp-6); }
+.ds-scope .panel { border-radius: var(--ds-radius-card); box-shadow: var(--ds-shadow-1); }
+.ds-scope .page-header { padding-bottom: var(--ds-sp-2); }
+.ds-scope .inspection-header, .ds-scope .section-title-row { min-height: var(--ds-control-h); margin-bottom: var(--ds-sp-4); }
+.ds-result-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--ds-sp-3); margin-bottom: var(--ds-sp-5); }
+.ds-result-metrics :deep(.ds-metric) { padding: var(--ds-sp-3); }
+.ds-result-metrics :deep(.ds-metric__value) { font-size: 20px; }
+.ds-scope .status-panel { padding-top: var(--ds-sp-6); margin-top: var(--ds-sp-8); }
+.ds-scope .status-column .el-steps { padding-bottom: var(--ds-sp-6); }
+@media (max-width: 760px) { .ds-result-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 420px) { .ds-result-metrics { grid-template-columns: 1fr; } }
+
+/* v4 - 1:1 redesign: section headings get one consistent accent + rule */
+.ds-scope .inspection-header h2,
+.ds-scope .section-title-row h2,
+.ds-scope .status-column h2,
+.ds-scope .result-column h2 {
+  display: flex; align-items: center; gap: 9px; margin: 0;
+  color: var(--ds-text); font-size: 16px; font-weight: 650;
+}
+.ds-scope .inspection-header h2::before,
+.ds-scope .section-title-row h2::before,
+.ds-scope .status-column h2::before,
+.ds-scope .result-column h2::before {
+  content: ""; flex: 0 0 4px; width: 4px; height: 16px;
+  border-radius: 2px; background: var(--ds-primary);
+}
+.ds-scope .section-title-row { padding-bottom: 14px; border-bottom: 1px solid var(--ds-border); }
+.ds-scope .status-panel { margin-top: 24px; padding-top: 24px; }
+.ds-scope .quiet-state.result-empty { margin-top: 8px; }
 </style>

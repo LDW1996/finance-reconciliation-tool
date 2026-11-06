@@ -1,6 +1,6 @@
 <template>
   <main class="mail-page">
-    <header class="mail-heading">
+    <header class="mail-heading ds-head">
       <div><ModuleTitle :icon="Message">邮件收款匹配</ModuleTitle><p>{{ status?.enabled ? '自动读取已开启' : '自动读取未开启' }}<span v-if="status?.analysis_busy"> · 正在识别付款附件</span></p></div>
       <div class="mail-actions">
         <input ref="fileInput" type="file" accept=".eml,.msg" class="mail-file-input" @change="importSample" />
@@ -82,7 +82,15 @@
     <el-alert v-if="status?.partial" :title="status.enabled ? '本批已保存，后台将继续读取下一批。' : '本批已保存，可继续读取下一批，或开启定时读取自动补扫。'" type="info" :closable="false" show-icon class="mail-alert" />
     <el-alert v-for="(error,i) in warnings" :key="i" :title="error" type="warning" :closable="false" show-icon class="mail-alert" />
 
-    <div class="mail-workspace">
+    <TaskBar
+      v-if="status?.busy"
+      class="ds-task--page"
+      :phase="readPhase(status.read_progress?.phase)"
+      :current="status.read_progress?.folder_number || 0"
+      :total="status.read_progress?.folders_total || 0"
+      :state="status.read_progress?.stalled ? 'paused' : 'running'"
+    />
+    <div class="mail-workspace ds-scope">
       <section class="mail-list" aria-label="已读取邮件">
         <div class="mail-section-heading"><h2>本地邮件 <span>{{ savedTotal }}</span></h2><el-input v-model="filter" clearable :prefix-icon="Search" placeholder="搜索付款人、金额、日期或邮件" aria-label="筛选本地邮件" /></div>
         <div class="mail-filters" aria-label="付款信息筛选"><button v-for="chip in filterChips" :key="chip.value" :aria-pressed="paymentFilter === chip.value" @click="paymentFilter = chip.value">{{ chip.label }}</button></div>
@@ -93,7 +101,7 @@
             <span>{{ row.payment_summary?.payers?.join('、') || '付款人待补充' }}</span>
             <span>付款日期：{{ row.payment_summary?.dates?.join('、') || '待补充' }}</span>
             <span class="mail-card-meta">{{ row.sender || '发件人未提供' }} · {{ formatDate(row.received) }}</span>
-            <span class="mail-card-status">{{ $platformText(summaryStatus(row)) }}</span>
+            <StatusBadge class="ds-card-status" :tone="row.payment_summary?.payers?.length ? 'success' : 'neutral'" :label="$platformText(summaryStatus(row))" />
           </button>
           <p v-if="!filteredRows.length" class="mail-muted">{{ savedTotal ? '没有符合筛选条件的邮件' : '暂无邮件，可导入 MSG / EML 邮件' }}</p>
         </div>
@@ -112,6 +120,8 @@
 </template>
 
 <script setup lang="ts">
+import StatusBadge from '../components/StatusBadge.vue'
+import TaskBar from '../components/TaskBar.vue'
 import ModuleTitle from '../components/ModuleTitle.vue'
 import MailStorageSettings from '../components/MailStorageSettings.vue'
 import { platformText } from '../platformLocale'
@@ -310,4 +320,26 @@ onBeforeUnmount(()=>{disposed=true;detailRequest++;relatedRequest++;clearTimeout
 .mail-performance{border-top:1px solid var(--border);padding:12px 24px;font-size:12px;color:var(--ink-muted)}.mail-performance summary{cursor:pointer;color:var(--ink);line-height:1.7;overflow-wrap:anywhere}.mail-performance-totals{display:flex;flex-wrap:wrap;gap:8px 20px;margin-top:12px}.mail-performance-footer{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-top:12px}.mail-performance-footer p{margin:0;flex:1;min-width:180px;line-height:1.7}.mail-queue-note{margin:0;padding:12px 24px;border-top:1px solid var(--border);color:var(--ink-muted);font-size:12px}
 @media(max-width:1000px){.mail-setup-grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.mail-auto-row .el-checkbox{width:100%}.mail-setup-footer{align-items:flex-start;flex-wrap:wrap}}@media(max-width:720px){.mail-setup-grid{grid-template-columns:minmax(0,1fr)}.mail-source-pane{border-right:0;border-bottom:1px solid var(--border)}.mail-source-pane,.mail-options-pane{padding:20px}.mail-settings>summary{padding:16px 20px 12px}.mail-connection-line{padding:0 20px 16px;align-items:flex-start}.mail-setup-footer{padding:16px 20px;gap:16px}.mail-setup-actions{width:100%;justify-content:flex-end}.mail-auto-row .el-checkbox{width:auto}.mail-reading-note{padding:12px 20px}}@media(max-width:380px){.mail-connection-line{flex-direction:column;gap:8px}.mail-directory-footer{align-items:flex-start;flex-direction:column}.mail-setting-row{gap:8px}.mail-setting-row>label{width:64px}.mail-setting-row .el-input-number{width:130px}}
 .mail-list-pagination{display:flex;flex-direction:column;gap:10px;align-items:flex-start;border-top:1px solid var(--border);padding-top:12px;margin-top:12px;font-size:12px;color:var(--ink-muted)}.mail-list-pagination :deep(.el-pagination){max-width:100%;flex-wrap:wrap}
+.ds-task--page { margin-bottom: 20px; }
+.ds-scope .mail-list, .ds-scope .mail-detail { border-radius: var(--ds-radius-card); box-shadow: var(--ds-shadow-1); }
+.ds-scope .mail-card { border-radius: var(--ds-radius-control); padding: 14px; }
+.ds-scope .mail-card.selected { box-shadow: inset 3px 0 0 var(--ds-primary); }
+.ds-scope .ds-card-status { align-self: flex-start; }
+.ds-scope .mail-section-heading { min-height: var(--ds-control-h); }
+.ds-scope .mail-list-pagination, .ds-scope .mail-list-footer { font-variant-numeric: tabular-nums; }
+@media (max-width: 720px) { .ds-scope .mail-card { padding: 12px; } }
+
+/* v4 - 1:1 redesign: list heading becomes a numeric anchor */
+.ds-scope .mail-section-heading { padding-bottom: 12px; margin-bottom: 14px; border-bottom: 1px solid var(--ds-border); }
+.ds-scope .mail-section-heading h2 { font-size: 15px; font-weight: 650; }
+.ds-scope .mail-section-heading h2 > span {
+  margin-left: 6px; color: var(--ds-primary); font-size: 24px; font-weight: 700;
+  font-variant-numeric: tabular-nums; letter-spacing: -.02em;
+}
+.ds-scope .mail-card-amount { color: var(--ds-text); font-size: 18px; font-weight: 650; }
+.ds-scope .mail-filters button[aria-pressed=true] {
+  background: var(--ds-primary-50); border-color: var(--ds-primary-100);
+  color: var(--ds-primary); font-weight: 600;
+}
+.ds-scope .mail-list-footer { padding-top: 12px; border-top: 1px solid var(--ds-border); }
 </style>

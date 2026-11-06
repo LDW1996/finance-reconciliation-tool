@@ -1,5 +1,5 @@
 <template>
-  <section ref="root" class="receipt-matching" aria-label="收款匹配" :aria-busy="busy">
+  <section ref="root" class="receipt-matching ds-scope" aria-label="收款匹配" :aria-busy="busy">
     <el-dialog v-model="sourcesOpen" :append-to-body="true" title="流水与台账设置" width="min(1160px, 96vw)" class="receipt-source-dialog" align-center :destroy-on-close="false" :close-on-click-modal="!busy">
       <p class="source">两个来源独立配置，更新后统一生成匹配结果。保存配置不会读取在线表。</p>
     <section class="online-sources" aria-label="在线数据来源">
@@ -423,4 +423,35 @@ defineExpose({ refresh, openMail, openReceipt })
 
 <style scoped>
 :global(.receipt-source-dialog){height:min(880px,calc(100dvh - 48px));max-height:calc(100dvh - 48px);margin:auto!important}:global(.receipt-source-dialog .el-dialog__body){min-height:0;overflow:auto;overscroll-behavior:contain}
+
+/* v4 - 1:1 redesign: the four existing review tabs become metric cards.
+   Labels and counts are the shipped data; nothing new is rendered. */
+.ds-scope .receipt-list-tools { display:flex; flex-direction:column; align-items:stretch; gap:14px; margin:22px 0 18px; }
+.ds-scope .review-tabs { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; overflow:visible; }
+.ds-scope .review-tabs button {
+  display:flex; flex-direction:column; align-items:flex-start; gap:8px;
+  min-height:88px; padding:14px 16px;
+  border:1px solid var(--ds-border); border-bottom:1px solid var(--ds-border);
+  border-radius:8px; background:#fff; box-shadow:var(--ds-shadow-1);
+  color:var(--ds-muted); font-size:12px; font-weight:500; line-height:1.4;
+  white-space:normal; text-align:left;
+  transition:border-color .15s ease, box-shadow .15s ease;
+}
+.ds-scope .review-tabs button > span {
+  margin:0; color:var(--ds-text); font-size:28px; font-weight:700; line-height:1;
+  font-variant-numeric:tabular-nums; letter-spacing:-.02em;
+}
+.ds-scope .review-tabs button[aria-selected=true] {
+  border-color:var(--ds-primary); background:var(--ds-primary-50);
+  box-shadow:inset 3px 0 0 var(--ds-primary);
+  color:var(--ds-text-2); font-weight:600;
+}
+.ds-scope .review-tabs button[aria-selected=true] > span { color:var(--ds-primary); }
+.ds-scope .review-tabs button:hover:not([aria-selected=true]) { border-color:var(--ds-primary-100); }
+.ds-scope .compact-search { min-width:0; max-width:none; width:100%; }
+.ds-scope .results-caption { border-top:1px solid var(--ds-border); padding-top:14px; margin-top:16px; }
+.ds-scope .review-workspace { border-color:var(--ds-border); border-radius:10px; box-shadow:var(--ds-shadow-1); }
+.ds-scope .snapshot-status { color:var(--ds-muted); }
+@media (max-width:900px) { .ds-scope .review-tabs { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media (max-width:480px) { .ds-scope .review-tabs { grid-template-columns:1fr; } .ds-scope .review-tabs button { min-height:72px; } }
 </style>

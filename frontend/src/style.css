@@ -339,3 +339,198 @@ button:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outli
 .management-section{padding:0 8px}
 }
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;transition-duration:.01ms!important}}
+
+/* ==========================================================================
+   Design system v3 — 2026-11-06 (additive layer)
+   Rules for this block:
+   1. Nothing above this line is modified. Primary #0066cc and its light/dark
+      scale stay exactly as shipped.
+   2. Every visual rule is either a --ds-* token or scoped under .ds-* /
+      .ds-scope, so the already-QA'd login, header and retention settings
+      surfaces keep their existing appearance.
+   3. All text comes from props/slots; no new language strings are added,
+      so zh/en/id catalogs and the English isolation checks are untouched.
+   ========================================================================== */
+:root {
+  --ds-primary: #0066cc;
+  --ds-primary-hover: #0052a3;
+  --ds-primary-100: #d6e7f8;
+  --ds-primary-50: #edf5fd;
+  --ds-bg: #f5f5f7;
+  --ds-surface: #ffffff;
+  --ds-border: #e5e5ea;
+  --ds-text: #1d1d1f;
+  --ds-text-2: #48484a;
+  --ds-muted: #6e6e73;
+  --ds-success: #326b4b;
+  --ds-success-bg: #f0f7f2;
+  --ds-warning: #946000;
+  --ds-warning-bg: #fff8eb;
+  --ds-danger: var(--el-color-danger);
+  --ds-danger-bg: var(--el-color-danger-light-9);
+  --ds-info: #636368;
+  --ds-info-bg: #f5f5f7;
+  --ds-sp-1: 4px;
+  --ds-sp-2: 8px;
+  --ds-sp-3: 12px;
+  --ds-sp-4: 16px;
+  --ds-sp-5: 20px;
+  --ds-sp-6: 24px;
+  --ds-sp-8: 32px;
+  --ds-sp-10: 40px;
+  --ds-sp-12: 48px;
+  --ds-radius-control: 6px;
+  --ds-radius-card: 8px;
+  --ds-radius-dialog: 10px;
+  --ds-control-h: 40px;
+  --ds-row-h: 40px;
+  --ds-shadow-1: 0 1px 2px rgb(29 29 31 / .06);
+  --ds-shadow-2: 0 8px 24px rgb(29 29 31 / .12);
+}
+.ds-num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+.ds-muted { color: var(--ds-muted); }
+
+/* Page rhythm — applies only where a view opts in with .ds-scope */
+.ds-scope { --ds-local-gap: var(--ds-sp-6); }
+.ds-head { align-items: center; gap: var(--ds-sp-4); }
+.ds-kicker { margin: 0 0 var(--ds-sp-2); color: var(--ds-primary); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.ds-section-head { display: flex; align-items: center; justify-content: space-between; gap: var(--ds-sp-3); min-height: var(--ds-control-h); margin: 0 0 var(--ds-sp-4); }
+.ds-section-head h2, .ds-section-head h3 { margin: 0; font-size: 16px; font-weight: 600; line-height: 1.5; }
+.ds-section-head .ds-lede { margin: 0; color: var(--ds-muted); font-size: 12px; line-height: 1.6; }
+.ds-panel { background: var(--ds-surface); border: 1px solid var(--ds-border); border-radius: var(--ds-radius-card); box-shadow: var(--ds-shadow-1); padding: var(--ds-sp-5); }
+.ds-panel + .ds-panel { margin-top: var(--ds-sp-5); }
+.ds-overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--ds-sp-4); margin: 0 0 var(--ds-sp-6); padding: var(--ds-sp-5); background: var(--ds-surface); border: 1px solid var(--ds-border); border-radius: var(--ds-radius-card); }
+.ds-rule { height: 1px; margin: var(--ds-sp-6) 0; border: 0; background: var(--ds-border); }
+
+/* Status badge — four business states + neutral/processing */
+.ds-badge { display: inline-flex; align-items: center; gap: 6px; min-height: 22px; padding: 2px 9px; border: 1px solid transparent; border-radius: 20px; font-size: 12px; font-weight: 600; line-height: 1.5; white-space: nowrap; }
+.ds-badge__dot { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: currentColor; }
+.ds-badge--success { color: var(--ds-success); background: var(--ds-success-bg); border-color: var(--ds-success-bg); }
+.ds-badge--warning { color: var(--ds-warning); background: var(--ds-warning-bg); border-color: var(--ds-warning-bg); }
+.ds-badge--danger { color: var(--ds-danger); background: var(--ds-danger-bg); border-color: var(--ds-danger-bg); }
+.ds-badge--info, .ds-badge--neutral { color: var(--ds-info); background: var(--ds-info-bg); border-color: var(--ds-info-bg); }
+.ds-badge--processing, .ds-badge--primary { color: var(--ds-primary); background: var(--ds-primary-50); border-color: var(--ds-primary-100); }
+
+/* Metric card */
+.ds-metric-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--ds-sp-4); margin: 0 0 var(--ds-sp-6); }
+.ds-metric { min-width: 0; padding: var(--ds-sp-4); background: var(--ds-surface); border: 1px solid var(--ds-border); border-radius: var(--ds-radius-card); }
+.ds-metric__label { margin: 0 0 var(--ds-sp-2); color: var(--ds-muted); font-size: 12px; font-weight: 500; line-height: 1.5; }
+.ds-metric__value { margin: 0; color: var(--ds-text); font-size: 24px; font-weight: 650; line-height: 1.3; overflow-wrap: anywhere; }
+.ds-metric__hint { margin: var(--ds-sp-1) 0 0; color: var(--ds-muted); font-size: 11px; line-height: 1.5; }
+.ds-metric--danger .ds-metric__value { color: var(--ds-danger); }
+.ds-metric--warning .ds-metric__value { color: var(--ds-warning); }
+.ds-metric--success .ds-metric__value { color: var(--ds-success); }
+
+/* Task bar — shared mental model for mail scan / iLog unlock */
+.ds-task { padding: var(--ds-sp-4); background: var(--ds-primary-50); border: 1px solid var(--ds-primary-100); border-radius: var(--ds-radius-card); }
+.ds-task__head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--ds-sp-3); margin-bottom: var(--ds-sp-3); }
+.ds-task__phase { font-size: 13px; font-weight: 600; color: var(--ds-text); }
+.ds-task__count { font-size: 12px; color: var(--ds-muted); }
+.ds-task__bar { height: 6px; border-radius: 6px; background: var(--ds-primary-100); overflow: hidden; }
+.ds-task__fill { height: 100%; border-radius: 6px; background: var(--ds-primary); transition: width 240ms ease; }
+.ds-task--paused .ds-task__fill { background: var(--ds-warning); }
+.ds-task__foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--ds-sp-2); margin-top: var(--ds-sp-3); }
+.ds-task__note { color: var(--ds-muted); font-size: 11px; line-height: 1.6; }
+.ds-task__actions { display: flex; flex-wrap: wrap; gap: var(--ds-sp-2); }
+
+/* Confirm dialog wrapper (trigger slot keeps parent state untouched) */
+.ds-confirm-trigger { display: inline-flex; }
+.ds-confirm__desc { margin: 0; color: var(--ds-text-2); font-size: 14px; line-height: 1.7; }
+.ds-confirm__detail { margin: var(--ds-sp-4) 0 0; padding: var(--ds-sp-3); background: var(--ds-warning-bg); border-radius: var(--ds-radius-control); color: var(--ds-warning); font-size: 12px; line-height: 1.7; }
+.ds-confirm-dialog { border-radius: var(--ds-radius-dialog); }
+
+/* Element Plus alignment inside opted-in containers only */
+.ds-scope .el-button--primary:not(.is-plain):not(.is-text):not(.is-link) {
+  --el-button-bg-color: var(--ds-primary);
+  --el-button-border-color: var(--ds-primary);
+  --el-button-hover-bg-color: var(--ds-primary-hover);
+  --el-button-hover-border-color: var(--ds-primary-hover);
+  --el-button-active-bg-color: var(--ds-primary-hover);
+  --el-button-active-border-color: var(--ds-primary-hover);
+}
+.ds-scope .el-button { min-height: var(--ds-control-h); }
+.ds-scope .el-input__wrapper, .ds-scope .el-select__wrapper { min-height: var(--ds-control-h); border-radius: var(--ds-radius-control); }
+.ds-scope .el-table { --el-table-border-color: var(--ds-border); --el-table-header-text-color: var(--ds-muted); --el-table-row-hover-bg-color: var(--ds-primary-50); }
+.ds-scope .el-table th.el-table__cell { height: var(--ds-row-h); padding: 0; background: var(--ds-bg); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.ds-scope .el-table td.el-table__cell { height: var(--ds-row-h); padding: var(--ds-sp-1) 0; }
+.ds-scope .el-table .ds-num, .ds-scope .el-table .ds-amount { text-align: right; font-variant-numeric: tabular-nums; }
+.ds-scope .el-table .ds-row-diff > td.el-table__cell { background: var(--ds-danger-bg) !important; }
+.ds-scope .el-tabs__item { font-weight: 600; }
+.ds-scope .el-pagination { flex-wrap: wrap; }
+.ds-scope :focus-visible { outline: 2px solid var(--ds-primary); outline-offset: 2px; }
+.ds-scope .ds-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--ds-sp-3); min-height: 160px; padding: var(--ds-sp-6); color: var(--ds-muted); font-size: 13px; text-align: center; }
+
+@media (max-width: 720px) {
+  .ds-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: var(--ds-sp-4); gap: var(--ds-sp-3); }
+  .ds-metric-row { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--ds-sp-3); }
+  .ds-metric__value { font-size: 20px; }
+  .ds-panel { padding: var(--ds-sp-4); }
+  .ds-section-head { flex-wrap: wrap; }
+}
+@media (max-width: 420px) {
+  .ds-overview, .ds-metric-row { grid-template-columns: 1fr; }
+  .ds-scope .el-table th.el-table__cell { font-size: 10px; }
+}
+@media (prefers-reduced-motion: reduce) { .ds-task__fill { transition: none; } }
+
+/* ==========================================================================
+   Design system v4 - 2026-11-06 (1:1 redesign landing, additive layer)
+   1. Nothing above is modified. Primary #0066cc and all shipped scales stay.
+   2. Opt-in only: .ds-scope is present on the four work surfaces (Excel,
+      mail list, receipt matching, unlock). Login, the unified header and
+      retention settings never carry it, so their QA evidence stays valid.
+   3. No Chinese text, no API calls, no data binding and no script changes.
+      Every label still comes from the existing catalogs.
+   ========================================================================== */
+:root {
+  --ds-hero-top: #f2f8ff;
+  --ds-hero-bottom: #eaf4ff;
+  --ds-row-h-lg: 44px;
+}
+
+/* The standalone page title was dropped after review: the global product nav
+   already labels the active surface. Keep header actions on the right. */
+.unlock-heading.ds-no-title { justify-content: flex-end; }
+
+/* Shared table + button rhythm across all opted-in surfaces */
+.ds-scope .el-table th.el-table__cell {
+  height: var(--ds-row-h-lg); background: #f7f8fa;
+  border-bottom: 1px solid var(--ds-border);
+  font-size: 11px; font-weight: 600; letter-spacing: .04em;
+}
+.ds-scope .el-table td.el-table__cell { height: var(--ds-row-h-lg); }
+.ds-scope .el-table .row-amount,
+.ds-scope .el-table .row-reference,
+.ds-scope .el-table .score-pill { font-variant-numeric: tabular-nums; }
+.ds-scope .el-button--primary:not(.is-plain):not(.is-text):not(.is-link) {
+  font-weight: 600; box-shadow: 0 1px 2px rgb(0 102 204 / .18);
+}
+.ds-scope .el-button--primary:not(.is-plain):not(.is-text):not(.is-link):hover { box-shadow: 0 2px 6px rgb(0 102 204 / .22); }
+
+/* Quiet / empty state surfaces */
+.ds-scope .quiet-state {
+  min-height: 88px; padding: 16px 20px;
+  background: var(--ds-primary-50);
+  border: 1px solid var(--ds-primary-100);
+  border-radius: var(--ds-radius-card);
+}
+.ds-scope .quiet-state .el-icon { color: var(--ds-primary); }
+.ds-scope .quiet-state p { font-size: 13px; }
+
+/* Flush table header: .management-section's 16px side padding left a white
+   gutter at both ends of the grey header row. Table-only panels drop that
+   padding so the header reaches the card edge; the inset is restored on the
+   first/last cell and the pagination footer so text never touches the border.
+   0,2,0 specificity also wins over the 720px rule that sets padding:0 8px. */
+.management-section.ds-flush-table { padding: 0; }
+.management-section.ds-flush-table .el-table th.el-table__cell:first-child .cell,
+.management-section.ds-flush-table .el-table td.el-table__cell:first-child .cell { padding-left: 28px; }
+.management-section.ds-flush-table .el-table th.el-table__cell:last-child .cell,
+.management-section.ds-flush-table .el-table td.el-table__cell:last-child .cell { padding-right: 28px; }
+.management-section.ds-flush-table .management-footer { padding-left: 16px; padding-right: 16px; }
+
+@media (max-width: 720px) {
+  .ds-scope .quiet-state { padding: 12px 14px; }
+}
+
+
