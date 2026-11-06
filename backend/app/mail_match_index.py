@@ -21,6 +21,7 @@ class MatchResourceError(ValueError):
 
 
 class MatchIndex:
+    BATCH_SIZE=200
     VERSION=3
 
     def __init__(self,workspace):
@@ -134,9 +135,9 @@ class MatchIndex:
             with self.lock:self.running=(key,window);self.total=len(data['entries'])
             derived_bytes=0
             entries=data['entries']
-            for start in range(0,len(entries),1):
+            for start in range(0,len(entries),self.BATCH_SIZE):
                 while self.background_load()[1]:Event().wait(.5)
-                rows=rank_receipts(entries[start:start+1],[],day_window=window,limit=None,mapping=mapping,_groups=groups,_by_date=by_date)
+                rows=rank_receipts(entries[start:start+self.BATCH_SIZE],[],day_window=window,limit=None,mapping=mapping,_groups=groups,_by_date=by_date)
                 from .mail_workspace import signature
                 encoded=[];links=[]
                 for i,row in enumerate(rows):
@@ -149,10 +150,10 @@ class MatchIndex:
                 with self.store.db() as db:
                     db.executemany('INSERT INTO mail_match_row VALUES(?,?,?,?,?)',encoded)
                     db.executemany('INSERT INTO mail_match_related VALUES(?,?,?)',links)
-                with self.lock:self.completed=min(start+1,len(entries))
+                with self.lock:self.completed=min(start+len(rows),len(entries))
                 derived_bytes+=sum(len(item[2])+len(item[3]) for item in encoded)
                 if derived_bytes>512*1024**2:raise MatchResourceError('匹配候选过多，临时结果超过 512MB，请缩小付款日期容差后重试。')
-                if start%32==0:
+                if start % self.BATCH_SIZE == 0:
                     from .mail_storage import MailStorage
                     reason=MailStorage(self.store).block_reason(reserve_bytes=4*1024**2)
                     if reason:raise MatchResourceError('匹配结果保存空间不足，请检查保存容量和磁盘剩余空间后重试。')

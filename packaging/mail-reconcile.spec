@@ -22,6 +22,7 @@ datas = [
 ]
 binaries = []
 hiddenimports = [
+    "app.mail_list_index",
     "app.mail_main",
     "app.web_common",
     "app.mail_routes",

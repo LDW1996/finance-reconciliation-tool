@@ -3,6 +3,8 @@ from io import BytesIO
 from urllib.parse import quote
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
+from starlette.concurrency import run_in_threadpool
+from .excel_upload import read_excel_upload, run_excel
 from .reconciliation import (ReconciliationError, inspect_combined_workbook, localize_message,
                              reconcile_combined_workbook, reconcile_workbooks)
 router=APIRouter()
@@ -15,9 +17,9 @@ async def analyze(
     amount_field: str = Form("原币金额"),
 ):
     try:
-        result = reconcile_workbooks(
-            BytesIO(await company_a.read()),
-            BytesIO(await company_b.read()),
+        result = await run_in_threadpool(run_excel, reconcile_workbooks,
+            BytesIO(await read_excel_upload(company_a)),
+            BytesIO(await read_excel_upload(company_b)),
             company_a.filename or "company_a.xlsx",
             company_b.filename or "company_b.xlsx",
             match_field=match_field,
@@ -54,8 +56,8 @@ async def analyze_combined(
     locale: str = Form("zh-CN"),
 ):
     try:
-        result = reconcile_combined_workbook(
-            BytesIO(await workbook.read()),
+        result = await run_in_threadpool(run_excel, reconcile_combined_workbook,
+            BytesIO(await read_excel_upload(workbook)),
             workbook.filename or "往来.xlsx",
             match_field=match_field,
             amount_field=amount_field,
@@ -100,8 +102,8 @@ async def inspect_combined(
     amount_field: str = Form("原币金额"),
     locale: str = Form("zh-CN"),
 ):
-    return inspect_combined_workbook(
-        BytesIO(await workbook.read()),
+    return await run_in_threadpool(run_excel, inspect_combined_workbook,
+        BytesIO(await read_excel_upload(workbook)),
         workbook.filename or "往来.xlsx",
         match_field=match_field,
         amount_field=amount_field,

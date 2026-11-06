@@ -92,6 +92,8 @@ def test_failed_build_publishes_nothing(workspace, monkeypatch):
     real = mail_matching.rank_receipts
     calls = []
 
+    monkeypatch.setattr(workspace.matches, "BATCH_SIZE", 1)
+
     def explode_on_second(*args, **kwargs):
         calls.append(1)
         if len(calls) > 1:

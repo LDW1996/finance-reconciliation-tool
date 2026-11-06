@@ -509,6 +509,7 @@ def _write_marked_data_excel(
         buffer = BytesIO()
         with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
             raw_data.to_excel(writer, sheet_name="Data", index=False)
+            _literal_export_strings(writer.book)
         workbook = load_workbook(BytesIO(buffer.getvalue()))
         data_sheet = workbook.active
 
@@ -586,6 +587,7 @@ def _write_combined_result_excel(
         exceptions_out.to_excel(writer, sheet_name="异常明细", index=False)
         difference_summary_out.to_excel(writer, sheet_name="金额差异汇总", index=False)
         raw_data_out.to_excel(writer, sheet_name="原始数据", index=False)
+        _literal_export_strings(writer.book)
         _write_rule_section(writer.book["处理汇总"], summary_df, tolerance, locale)
         _style_combined_workbook(writer.book, summary_df)
         _translate_export_workbook(writer.book, locale)
@@ -991,4 +993,14 @@ def _write_result_excel(
         differences.to_excel(writer, sheet_name="金额差异", index=False)
         unmatched.to_excel(writer, sheet_name="未匹配", index=False)
         raw_data.to_excel(writer, sheet_name="原始数据", index=False)
+        _literal_export_strings(writer.book)
     return buffer.getvalue()
+
+
+def _literal_export_strings(workbook):
+    """Generated tables contain external text, not executable Excel formulas."""
+    for sheet in workbook.worksheets:
+        for row in sheet:
+            for cell in row:
+                if isinstance(cell.value, str):
+                    cell.data_type = 's'

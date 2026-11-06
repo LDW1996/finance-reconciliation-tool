@@ -22,6 +22,8 @@ datas = [
 ]
 binaries = []
 hiddenimports = [
+    "app.mail_list_index",
+    "app.excel_upload",
     "app.main",
     "app.web_common",
     "app.reconciliation",

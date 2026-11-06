@@ -171,6 +171,8 @@ class MailStore:
             db.execute('CREATE TABLE IF NOT EXISTS mail_state (key TEXT PRIMARY KEY, payload TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS mail_payments (mail_id TEXT PRIMARY KEY, payload TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS mail_payment_summary (mail_id TEXT PRIMARY KEY, payload TEXT NOT NULL)')
+        from .mail_list_index import MailListIndex
+        self.list_index = MailListIndex(self)
         try: self.path.chmod(0o600)
         except OSError: pass
     @contextmanager
@@ -278,33 +280,12 @@ class MailStore:
     def message_page(self,page=1,page_size=50,keyword='',payment_filter='all'):
         keyword=keyword.strip().casefold()
         offset=(page-1)*page_size
+        if keyword or payment_filter!='all':
+            return self.list_index.page(page,page_size,keyword,payment_filter)
         with self.db(write=False) as db:
             total_saved=db.execute('SELECT COUNT(*) FROM mail').fetchone()[0]
-            if not keyword and payment_filter=='all':
-                items=db.execute('SELECT payload FROM mail ORDER BY seen DESC,id LIMIT ? OFFSET ?',(page_size,offset)).fetchall()
-                rows=[self.decode(payload) for payload, in items];total=total_saved
-            else:
-                rows=[];total=0
-                items=db.execute('SELECT m.payload,s.payload FROM mail m LEFT JOIN mail_payment_summary s ON m.id=s.mail_id ORDER BY m.seen DESC,m.id')
-                for payload,summary_payload in items:
-                    summary=self.decode(summary_payload) if summary_payload else {}
-                    if not summary_payload:
-                        # Legacy mail may already have payment results but no
-                        # materialized summary. Use the same fallback as details.
-                        from .mail_insights import mail_summary
-                        legacy=self.decode(payload)
-                        indexed=db.execute('SELECT payload FROM mail_payments WHERE mail_id=?',(legacy['id'],)).fetchone()
-                        legacy['attachment_details']=[self.decode(value) for value, in db.execute('SELECT metadata FROM mail_attachment WHERE mail_id=?',(legacy['id'],))]
-                        summary=mail_summary(legacy,self.decode(indexed[0]) if indexed else [],indexed=indexed is not None)
-                    status=summary.get('status','pending')
-                    matches=(payment_filter=='all' or (payment_filter=='payment' and status=='ready') or payment_filter==status)
-                    if not matches:continue
-                    row=self.decode(payload)
-                    fields=[row.get('subject',''),row.get('sender',''),*row.get('candidates',[]),*summary.get('payers',[]),*summary.get('dates',[]),*summary.get('business_ids',[])]
-                    fields.extend(str(a.get('currency',''))+' '+str(a.get('amount','')) for a in summary.get('amounts',[]))
-                    if keyword and keyword not in ' '.join(fields).casefold():continue
-                    if offset<=total<offset+page_size:rows.append(row)
-                    total+=1
+            items=db.execute('SELECT payload FROM mail ORDER BY seen DESC,id LIMIT ? OFFSET ?',(page_size,offset)).fetchall()
+            rows=[self.decode(payload) for payload, in items];total=total_saved
             for row in rows:
                 for field in ('body','latest_body','signature','quoted_body'):row.pop(field,None)
             return dict(rows=rows,total=total,total_saved=total_saved,page=page,page_size=page_size)

@@ -20,7 +20,7 @@ datas = [
     (str(ROOT / "frontend" / "dist"), "frontend_dist"),
 ]
 binaries = []
-hiddenimports = ['app.excel_main', 'app.web_common', 'app.excel_routes', 'app.excel_probe', 'app.reconciliation', 'uvicorn.logging', 'uvicorn.loops', 'uvicorn.loops.auto', 'uvicorn.protocols', 'uvicorn.protocols.http', 'uvicorn.protocols.http.auto', 'uvicorn.protocols.websockets', 'uvicorn.protocols.websockets.auto', 'uvicorn.lifespan', 'uvicorn.lifespan.on', 'pandas', 'openpyxl', 'xlrd']
+hiddenimports = ['app.excel_upload', 'app.excel_main', 'app.web_common', 'app.excel_routes', 'app.excel_probe', 'app.reconciliation', 'uvicorn.logging', 'uvicorn.loops', 'uvicorn.loops.auto', 'uvicorn.protocols', 'uvicorn.protocols.http', 'uvicorn.protocols.http.auto', 'uvicorn.protocols.websockets', 'uvicorn.protocols.websockets.auto', 'uvicorn.lifespan', 'uvicorn.lifespan.on', 'pandas', 'openpyxl', 'xlrd']
 
 # Preserve complete NumPy/pandas collection. Native
 # extensions can import Python modules that static analysis cannot discover.

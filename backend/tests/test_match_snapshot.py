@@ -26,7 +26,7 @@ def test_views_reverse_lookup_and_export_reuse_same_generation(tmp_path,monkeypa
     assert ws.matching(scope='all',keyword='closed-ref',sort_by='score')['total_rows']==1
     assert related_receipts(ws,'mail')['total_rows']==2
     ws.export()
-    assert len(calls)==2
+    assert len(calls)==1  # both ledger rows now share one batch
 
 
 def test_snapshot_survives_restart_and_invalidates_on_payment_change(tmp_path,monkeypatch):
@@ -40,7 +40,7 @@ def test_snapshot_survives_restart_and_invalidates_on_payment_change(tmp_path,mo
     assert not calls
     ws.store.set_payments('mail',[{**payment(),'payer':'NEW PAYER'}])
     assert reopened.matching()['rows'][0]['candidates'][0]['payer']=='NEW PAYER'
-    assert len(calls)==2
+    assert len(calls)==1  # both ledger rows now share one batch
 
 
 def test_nonblocking_snapshot_shares_worker_and_preserves_success_on_failure(tmp_path,monkeypatch):
