@@ -115,9 +115,20 @@ def test_packaging_artifact_names_and_guide_agree(monkeypatch):
         return original_read_text(path,encoding=encoding or 'cp1252',errors=errors)
     monkeypatch.setattr(Path,'read_text',windows_read_text)
     root=Path(__file__).resolve().parents[2]
-    tree=ast.parse((root/'packaging/mail-reconcile.spec').read_text(encoding='utf-8'))
-    names=[kw.value.value for node in ast.walk(tree) if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id=='EXE' for kw in node.keywords if kw.arg=='name']
-    assert names==['邮件核销工具（英文版）']
-    assert names[0] in (root/'.github/workflows/build-windows-exe.yml').read_text(encoding='utf-8')
-    guide=(root/'packaging/Mail-Reconciliation-Guide.txt').read_text(encoding='utf-8')
-    assert names[0]+'.exe' in guide
+    def exe_names(spec):
+        tree=ast.parse((root/'packaging'/spec).read_text(encoding='utf-8'))
+        return [kw.value.value for node in ast.walk(tree) if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id=='EXE' for kw in node.keywords if kw.arg=='name']
+    # The unified workflow builds finance-reconcile.spec only; its EXE/GUIDE
+    # names must agree with the shipping guide.
+    workflow=(root/'.github/workflows/build-windows-exe.yml').read_text(encoding='utf-8')
+    assert exe_names('finance-reconcile.spec')==['财务综合业务平台']
+    assert 'EXE_NAME: 财务综合业务平台' in workflow
+    assert 'GUIDE_NAME: 使用说明.txt' in workflow
+    guide=(root/'packaging/财务人员使用说明.txt').read_text(encoding='utf-8')
+    assert '财务综合业务平台.exe' in guide
+    # The standalone mail edition is no longer built by CI, but its spec and
+    # guide still describe the same local artifact.
+    mail_names=exe_names('mail-reconcile.spec')
+    assert mail_names==['邮件核销工具（英文版）']
+    mail_guide=(root/'packaging/Mail-Reconciliation-Guide.txt').read_text(encoding='utf-8')
+    assert mail_names[0]+'.exe' in mail_guide
