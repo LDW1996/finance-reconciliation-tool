@@ -233,3 +233,41 @@
 - **不采用**负 margin / header-wrapper padding 方案：会挤压 Element Plus 表头内部 table 宽度，造成表头与表体列错位。
 - **验收**：build / check 通过；8765 与 dist MD5 一致，CSS 含 `ds-flush-table`；真实 8765 渲染（伪造一条历史数据）诊断：卡片 `l=32,r=1408`、表头 `l=33,r=1407`，**左右 gap 由 16px 降为 1px（仅 1px 边框）**，首列 padding-left 28px、footer padding-left 16px、无横向溢出；业务账号页同样 gap=1px；390px `scrollWidth == clientWidth == 390`。
 - **截图留档**：`output/ui-redesign/landed-history-flush.png`。
+
+
+## 13. 登录页 A 方案落地（2026-11-08 20:47）
+
+- **背景**：用户先问 `tree.js`，纠正为 **three.js** 后，问「登录页能否用上做酷炫效果」。核实 three.js 现状（npm `0.187.0` = r187，2026-10-30 发布，约 8–11 周一个破坏性版本；项目未安装）。结论：**不建议引入**——登录页是首屏入口，离线 Windows EXE 目标机 WebGL/GPU 不可控，现有 1.7MB 品牌背景图质感已足够，且有无障碍降级、双语隔离、EXE 体积、频繁升级等成本。
+- **方案对比**：产出 `output/ui-redesign/login-motion-options.html`（自包含 72KB，四档可切换，背景图压成 43.7KB JPEG 内嵌）：现状 / A 纯 CSS 光感（推荐 ★★★）/ B Canvas 2D 数据流（★★）/ C three.js 真 3D（不建议 ★）。截图 `login-motion-{static,glow,flow,three}.png`。用户选 **A**。
+- **改动（仅 1 个文件 `frontend/src/components/PlatformLogin.vue`，+18 / -1，纯 template / style）**：
+  | 项 | 实现 |
+  | --- | --- |
+  | template | 品牌区在 `<img>` 后加两个 `aria-hidden="true"` 装饰层 `.login-brand-grid` / `.login-brand-sheen`，零新增文案 |
+  | 光感 | 48px 细网格（`rgb(255 255 255 / .05)`）＋ 115° 斜向光带，`background-size:260% 100%`，`login-sheen` 16s 线性循环 |
+  | 漂移 | 背景图 `login-drift` 24s ease-in-out alternate，`scale(1.045)` + 微位移，避免露边 |
+  | 入场 | 品牌区 h1 / 描述 / 分隔线 / 英文小字 stagger 0.05→0.38s，表单 heading / form 0.16→0.26s，`login-rise` 0.7s |
+  | 降级 | `prefers-reduced-motion: reduce` 下光带 `display:none`、全部 `animation:none`；入场动画用 `animation:none` 移除，元素恢复默认 `opacity:1`，无残留透明 |
+- **刻意取舍**：效果图中「鼠标跟随视差」落地改为**自动缓慢漂移**。原因：视差需要 `mousemove` 监听，会往 `<script>` 里加逻辑，违反业务零改动；CSS 无法追踪指针坐标，不做 9 宫格 `:hover` 分区那类重 DOM 近似。
+- **不动的部分**：`<script>` 登录逻辑、中英切换、`$platformText` 词条、密码显隐、主色 `#0066cc`、表单结构与响应式断点一律不变。入场动画只加在**原本没有 transform** 的元素上，避开 `.login-form-region` 已有的 `translate(0,-12px)` 及其 760px / 矮屏 media query 覆盖。
+- **验收**：`<script>` 区块 SHA 与 HEAD **完全一致**（`715272c2…`）；`npm run build` 通过；`frontend` 下 `npm run check` 通过（mail 953 / platform 1377 段双语覆盖不变）；8765 首页与 `frontend/dist/index.html` MD5 一致（`1a040eae…`），构建 CSS 含 `login-brand-sheen` / `login-sheen`，assets 返回 200；真实 8765 无头渲染：`login-sheen` / `login-drift` / `login-rise` 三个动画均生效、背景图加载成功、表单 2 输入、装饰层 2 个 `aria-hidden`、桌面 1440/1440 与 390/390 无横向溢出、390px 品牌区高 220px；`prefers-reduced-motion` 模拟下光带 `display:none`、标题 `animation:none`、heading `opacity:1`。控制台只有未登录时 `/api/platform/session` 返回 401（预期行为，App.vue 据此判定未登录），无 JS 异常。
+- **截图留档**：`output/ui-redesign/landed-login-glow.png`、`landed-login-390.png`、`landed-login-reduced.png`。
+- **状态**：改动留在工作区，**未提交 / 未推送**；8765 由本轮启动，用户在已登录浏览器 Cmd+Shift+R 强刷即可看到（退出登录也能看到）。
+
+
+## 14. 登录页评审修订：去网格 + 强化动效（2026-11-08 21:20）
+
+- **反馈**：「网格去掉试试，动态效果做的明显一点」。A 方案初版偏克制，网格是静态纹理，光带 16s / `.16` 峰值在真实页面上存在感弱。
+- **改动（仍只改 `PlatformLogin.vue`，1 个文件，+18 / −1，纯 template / style）**：
+  | 项 | 初版 | 本轮 |
+  | --- | --- | --- |
+  | 网格 | `.login-brand-grid`（48px / `.05`）DOM + CSS | **整层删除**，源码与构建产物均无残留 |
+  | 光带 | 元素本体，16s，峰值 `rgb(160 205 255 / .16)` + `.09` | 移入 `::before`，**9s**，峰值 `.38` / `.24`，亮带加宽（30%→71%）；`background-size:260% 100%` 不变 |
+  | 光晕 | 无 | `::after` 新增 92% 径向蓝色光斑（峰值 `rgb(56 142 232 / .34)`），`login-aurora` **10s** alternate 位移 + 缩放 + 透明度呼吸 |
+  | 背景漂移 | 24s，`scale(1.045)` ±0.6% | **16s**，`scale(1.09)→(1.13)` ±1.6%；提高打底 scale 保证加大位移后不露边 |
+  | 入场 | `login-rise` 0.7s / 14px，delay 0.05→0.38s | **0.85s / 24px**，delay 拉到 0.05→0.5s |
+  | 可读性 | — | `.login-brand-copy` 加 `text-shadow: 0 2px 16px rgb(6 24 42 / .5)`，光带扫过文字区时白字仍清晰 |
+- **结构取舍**：装饰层从 2 个 div 收敛为 **1 个 `.login-brand-sheen` + 两个伪元素**，没有新增 DOM、没有新增 `aria-hidden`，也不需要碰 `<script>`； sheen 加 `overflow:hidden` 裁掉光晕溢出。
+- **降级**：`prefers-reduced-motion: reduce` 保持 `.login-brand-sheen{display:none}`，并补 `::before` / `::after{animation:none}`，避免不可见层仍在跑动画。
+- **验收**：`<script>` 区块 SHA 与 HEAD 一致（`715272c2…`）；`npm run build` / `frontend` 下 `npm run check` 通过（mail 953 / platform 1377 段）；8765 首页与 dist MD5 一致（`379d8f11…`），构建 CSS 含 `login-brand-sheen`、无 `login-brand-grid`。真实 8765 无头渲染：`login-sheen / 9s`、`login-aurora / 10s`、`login-drift / 16s`、`login-rise / 0.85s` 全部生效，背景图加载成功，桌面 1440/1440 与 390/390 无横向溢出、390px 品牌区 220px；**两帧间隔 1.5s 的品牌区像素差：RGB 平均 27.97 / 26.23 / 21.53，75.6% 像素变化 >8/255**，客观证明动效可见；截图对比可见光带由下向左上扫过、蓝色光晕同步扩散，标题位置稳定且清晰。reduced-motion 下 sheen `display:none`、伪元素 `animation:none`、标题 `animation:none`、heading `opacity:1`。控制台仅 `/api/platform/session` 401（未登录预期），无 JS 异常。
+- **截图留档**：`output/ui-redesign/landed-login-glow.png`、`landed-login-glow-frame2.png`（1.5s 后第二帧，用于对比动效）、`landed-login-390.png`、`landed-login-reduced.png`。
+- **状态**：与 §13 相同，改动仍留在工作区，**未提交 / 未推送**；8765 实时读 dist，用户 Cmd+Shift+R 强刷即可。
