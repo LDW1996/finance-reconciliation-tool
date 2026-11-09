@@ -56,15 +56,154 @@ def finish_submission(result, reply):
         result.setdefault('next_action', '平台响应未确认，请人工核实；不要重复提交')
 
 
+# Hit-test the search trigger exactly the way a click would: whatever sits on top
+# decides whether the next bill can be queried at all.
+_HIT_TEST = '''pt => {
+  const el = document.elementFromPoint(pt.x, pt.y);
+  if (!el) return 'unknown';
+  if (el.closest('.x-form-search-trigger')) return 'trigger';
+  if (el.closest('.x-mask, .ext-el-mask, .x-mask-msg')) return 'mask';
+  const win = el.closest('.x-window');
+  if (win) {
+    const title = win.querySelector('.x-window-header-text, .x-title-text');
+    return 'window:' + ((title && title.textContent) || '').trim().slice(0, 24);
+  }
+  return 'other:' + el.tagName;
+}'''
+
+_CLOSE_MSG = '''() => {
+  if (!window.Ext) return false;
+  if (Ext.Msg && Ext.Msg.isVisible && Ext.Msg.isVisible()) { Ext.Msg.hide(); return true; }
+  return false;
+}'''
+
+# A window that is already gone can leave its Ext 3 modal mask behind; it is safe
+# to hide that leftover mask only when no window is visible any more.
+_HIDE_ORPHAN_MASK = '''() => {
+  const shown = el => {
+    const s = getComputedStyle(el);
+    if (s.display === 'none' || s.visibility === 'hidden') return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  };
+  if ([...document.querySelectorAll('.x-window')].some(shown)) return 0;
+  let hidden = 0;
+  document.querySelectorAll('.ext-el-mask').forEach(mask => {
+    if (mask.style.display !== 'none' && shown(mask)) { mask.style.display = 'none'; hidden += 1; }
+  });
+  return hidden;
+}'''
+
+
+def search_trigger_hit(page):
+    """Describe what a click on the search icon would actually hit."""
+    try:
+        trigger = page.locator('input[name=search]').locator('..').locator('.x-form-search-trigger').first
+        try:
+            trigger.scroll_into_view_if_needed(timeout=2000)
+        except Exception:
+            pass
+        box = trigger.bounding_box()
+        if not box:
+            return 'unknown'
+        point = {'x': box['x'] + box['width'] / 2, 'y': box['y'] + box['height'] / 2}
+        return str(page.evaluate(_HIT_TEST, point))
+    except Exception:
+        return 'unknown'
+
+
+def close_result_overlays(page):
+    """Close the message box and the platform's asynchronous Tips window."""
+    closed = False
+    try:
+        closed = bool(page.evaluate(_CLOSE_MSG))
+    except Exception:
+        pass
+    for text in ('Tips', '提示'):
+        try:
+            window = page.locator('.x-window:visible').filter(has_text=text)
+            if window.count() == 0:
+                continue
+            button = window.first.get_by_role('button', name='Close', exact=True)
+            if button.count() == 0:
+                continue
+            button.first.click(timeout=2500)
+            closed = True
+            page.wait_for_timeout(300)
+        except Exception:
+            continue
+    try:
+        if page.evaluate(_HIDE_ORPHAN_MASK):
+            closed = True
+    except Exception:
+        pass
+    return closed
+
+
+def wait_for_clickable_list(page, seconds=5.0, confirmations=1):
+    """Wait until the search icon is really clickable; None means it is."""
+    deadline = time.time() + seconds
+    stable = 0
+    last = 'unknown'
+    while time.time() < deadline:
+        hit = search_trigger_hit(page)
+        last = hit
+        if hit == 'trigger':
+            stable += 1
+            if stable >= confirmations:
+                return None
+        else:
+            stable = 0
+            if hit.startswith(('mask', 'window')):
+                close_result_overlays(page)
+        time.sleep(0.6)
+    return last
+
+
+def reset_order_list(page):
+    """Return the authenticated session to a known list state without logging in again."""
+    page.goto(URL)
+    page.get_by_text('委托单列表', exact=True).click()
+    page.locator('input[name=search]').wait_for()
+
+
 def dismiss_result_dialog(page, result):
-    # Keep the authenticated list usable for the next bill, without navigating
-    # or issuing a second order query. Only dismiss the standard ExtJS message.
+    # Keep the authenticated list usable for the next bill, without navigating or
+    # issuing a second order query. The platform shows its unlock result in a
+    # separate "Tips" window that appears after the confirmation box is hidden, so
+    # hiding Ext.Msg alone leaves a modal mask that swallows the next search click.
     try:
         page.wait_for_function('() => !Ext.Ajax.isLoading()')
-        page.evaluate('() => { if (Ext.Msg && Ext.Msg.isVisible()) Ext.Msg.hide(); }')
     except Exception as error:
         result['session_dirty'] = True
-        result['session_cleanup_note'] = {'error_type':type(error).__name__}
+        result['session_cleanup_note'] = {'error_type': type(error).__name__}
+        return
+    close_result_overlays(page)
+    leftover = wait_for_clickable_list(page, seconds=5.0, confirmations=2)
+    # Only a positively identified blocker makes the session dirty; an unreadable
+    # probe is left to the next bill's pre-flight check instead of forcing a relogin.
+    if leftover is not None and leftover.startswith(('mask', 'window', 'other')):
+        result['session_dirty'] = True
+        result['session_cleanup_note'] = {'reason': 'result dialog still blocks the list',
+                                          'hit': leftover[:80]}
+
+
+def ensure_clickable_list(pool, page, account_id, account, password, channel, headed):
+    """Guarantee a clickable list before every bill, whatever the page was left in."""
+    hit = search_trigger_hit(page)
+    if hit == 'trigger' or not hit.startswith(('mask', 'window')):
+        return page, None
+    close_result_overlays(page)
+    if wait_for_clickable_list(page, seconds=4.0) is None:
+        return page, 'dialog_closed'
+    try:
+        reset_order_list(page)
+        if wait_for_clickable_list(page, seconds=8.0) is None:
+            return page, 'list_reloaded'
+    except Exception:
+        pass
+    pool.invalidate(account_id)
+    return pool.page(account_id, account, password, channel, headed), 'relogin'
 
 
 def reserve_operation(directory, account, bill, kind, *, current_lock=None, legacy_bill=None):
@@ -284,6 +423,10 @@ def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed
             step('login')
             page = pool.page(account_id, account, password, channel, headed)
             authenticated = True
+            page, recovery = ensure_clickable_list(pool, page, account_id, account, password, channel, headed)
+            if recovery:
+                result['page_recovery'] = recovery
+                private_report(report_path, result)
             page.on('request', request_started)
             page.on('requestfinished', request_finished)
             page.on('requestfailed', request_failed)
