@@ -1,7 +1,6 @@
 """Reviewed vessel/voyage targets; platform scope is broader than query results."""
 import hashlib
 import json
-import os
 from urllib.parse import parse_qs, urlparse
 
 
@@ -39,7 +38,7 @@ def voyage_reply_status(reply):
 
 
 def execute_voyage(page, found, result, report_path, directory, step, target, *, verify_after=True):
-    from .ilog_unlock import private_report, parse_reply, search_bill, retry_verification, dismiss_result_dialog
+    from .ilog_unlock import private_report, parse_reply, search_bill, retry_verification, dismiss_result_dialog, reserve_operation
     from .ilog_query import URL
     seed = validate_target(found, target)
     if target['account_id'] != result['account'] or target['kind'] != result['kind']:
@@ -47,18 +46,9 @@ def execute_voyage(page, found, result, report_path, directory, step, target, *,
     action = '33' if result['kind'] == 'fee' else '44'
     scope_id = target['ship'] + '/' + target['voyage']
     result.update(voyage=target, before=seed, action=action)
-    journal_dir = directory / 'submitted-voyages'; journal_dir.mkdir(parents=True, exist_ok=True)
-    journal = journal_dir / (hashlib.sha256(json.dumps([result['account'], scope_id, action]).encode()).hexdigest()+'.json')
-    # An uncertain prior submission must never be automatically replayed.
-    previous = None
-    if journal.exists():
-        previous = json.loads(journal.read_text(encoding='utf-8'))
-        if previous.get('status') != 'voyage_platform_confirmed':
-            result.update(status='blocked_duplicate', reason='该航次存在尚未核实的历史提交，请先核对平台')
-            return
-        journal.unlink()
-    fd = os.open(journal, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600); os.close(fd)
-    result['previous_submission'] = ({k:previous.get(k) for k in ('time','status','report','platform_success')} if previous else None)
+    # The representative bill locates the voyage. Its lock cannot determine whether every bill is unlocked.
+    journal = reserve_operation(directory / 'submitted-voyages', result['account'], scope_id, action)
+    result['previous_submission'] = json.loads(journal.read_text(encoding='utf-8'))['previous_submission']
     private_report(journal, result)
     try:
         step('select_record')

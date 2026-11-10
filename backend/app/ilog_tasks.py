@@ -383,7 +383,7 @@ class TaskManager:
                                 elif detail.get('failure_cause'):
                                     message=detail['failure_cause']+'；'+detail.get('next_action','请人工核实')
                                 if detail.get('relocked_resubmission'):
-                                    message='历史已成功，当前再次有锁，本次重新解锁；'+message
+                                    message='已有历史记录，本次查询仍有目标锁；'+message
                                 child_attempts=[]
                                 for attempt in attempts:
                                     matched=next((r for r in attempt.get('records',[]) if r.get('before',{}).get('id')==detail.get('before',{}).get('id')),None)
@@ -396,7 +396,7 @@ class TaskManager:
                         else:
                             latest['rows'][index].update(status='success' if ok else 'attention', detail=result,
                             actualAccount=actual_account,actualAccountName=actual_name,attempts=attempts,
-                            message=('历史已成功，当前再次有锁，本次重新解锁；' if result.get('relocked_resubmission') else '') + notes.get(result.get('status'),'执行异常，请人工核实') + ('；'+str(result['message']) if not ok and result.get('message') else ''),
+                            message=('已有历史记录，本次查询仍有目标锁；' if result.get('relocked_resubmission') else '') + notes.get(result.get('status'),'执行异常，请人工核实') + ('；'+str(result['message']) if not ok and result.get('message') else ''),
                             time=datetime.now(timezone.utc).isoformat())
                         if not any(r['status']=='waiting' for r in latest['rows']): latest['state']='completed'
                         self.save(db,latest)

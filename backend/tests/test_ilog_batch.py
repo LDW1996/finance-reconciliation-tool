@@ -114,16 +114,17 @@ def test_batch_verification_retry_never_repeats_submission(tmp_path,monkeypatch)
     assert page.events.count(('click','Yes'))==1
 
 
-def test_batch_duplicate_guard_is_per_record(tmp_path,monkeypatch):
+def test_batch_resubmits_locked_record_with_unverified_history(tmp_path,monkeypatch):
     from app.ilog_unlock import reserve_operation
     first=reserve_operation(tmp_path/'submitted','east','one','order')
     old=first.read_text()
-    found=records();page=FakePage(['two'])
+    found=records();page=FakePage(['one','two'])
     monkeypatch.setattr('app.ilog_unlock.search_bill',lambda *a,**kw:[{**r,'lock':'U'} for r in found])
     result={'account':'east','bill':'BILL123456','kind':'order','submitted':False}
     execute_batch(page,found,result,tmp_path/'report.json',tmp_path,lambda stage:result.update(stage=stage))
-    assert [r['status'] for r in result['records']]==['blocked_duplicate','verified_unlocked']
+    assert [r['status'] for r in result['records']]==['verified_unlocked','verified_unlocked']
     assert first.read_text()==old
+    assert result['records'][0]['previous_submission']==first.name
     assert page.events.count(('click','Yes'))==1
 
 

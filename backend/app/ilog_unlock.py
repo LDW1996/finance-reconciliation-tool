@@ -211,33 +211,17 @@ def reserve_operation(directory, account, bill, kind, *, current_lock=None, lega
     key = hashlib.sha256(json.dumps([account, bill, kind]).encode()).hexdigest()
     path = directory / f'{key}.json'
     previous = None
-    candidates = []
     if legacy_bill is not None:
         legacy_key = hashlib.sha256(json.dumps([account, legacy_bill, kind]).encode()).hexdigest()
         legacy = directory / f'{legacy_key}.json'
         if legacy != path and legacy.exists():
-            candidates.append(legacy)
-    if path.exists():
-        candidates.append(path)
+            previous = legacy.name
     index = 1
-    while (directory / f'{key}.{index}.json').exists():
-        candidates.append(directory / f'{key}.{index}.json')
-        index += 1
-    for candidate in candidates:
-        try:
-            prior = json.loads(candidate.read_text(encoding='utf-8'))
-            after = prior.get('after') or {}
-            allowed = (kind == 'order' and current_lock in ('A', 'B')
-                       and prior.get('status') == 'verified_unlocked'
-                       and prior.get('platform_success') is True
-                       and str(after.get('id')) == str(bill) and after.get('lock') == 'U')
-        except (ValueError, OSError, AttributeError):
-            allowed = False
-        if not allowed:
-            raise FileExistsError('Prior submission is not verified successful')
-        previous = candidate.name
-    if candidates:
+    # The caller checks the live lock state. History only links audit records.
+    while path.exists():
+        previous = path.name
         path = directory / f'{key}.{index}.json'
+        index += 1
     with os.fdopen(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), 'w', encoding='utf-8') as f:
         json.dump({'account': account, 'bill': bill, 'kind': kind,
                    'previous_submission': previous, 'current_lock': current_lock,
@@ -473,6 +457,8 @@ def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed
                 result['status'] = 'already_unlocked'
             elif kind == 'fee' and record['lock'] == 'B':
                 result['status'] = 'already_fee_unlocked'
+            elif record['lock'] not in ('A', 'B'):
+                result['status'] = 'ambiguous'
             else:
                 step('select_record')
                 rows = page.locator('.x-grid3-row:visible')
@@ -521,15 +507,6 @@ def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed
                 reply = _submit_single_order(page, result, step, expected)
                 _finish_single_order(page, bill, record, reply, kind, result, step, verify_after)
 
-        except FileExistsError as error:
-            if result.get('stage') == 'reserve_submission' and not result['submitted']:
-                result.update(
-                    status='blocked_duplicate', failed_stage='reserve_submission', error_type='FileExistsError',
-                    failure_cause='有未核实的历史防重凭据，本条未再次解锁',
-                    next_action='请核对历史记录和当前锁状态',
-                )
-            else:
-                _record_execution_failure(result, error)
         except Exception as error:
             _record_execution_failure(result, error)
         finally:

@@ -34,14 +34,21 @@ def test_voyage_success_does_not_claim_all_orders_verified():
     assert voyage_reply_status(None)=='needs_verification'
 
 
-def test_voyage_submit_uses_scope_not_record_id_and_never_repeats(tmp_path, monkeypatch):
+@pytest.mark.parametrize('kind, action, representative_lock', [('fee', '33', 'B'), ('order', '44', 'U')])
+def test_voyage_submits_once_despite_unverified_history(tmp_path, monkeypatch, kind, action, representative_lock):
     from test_ilog_batch import FakePage
     from types import SimpleNamespace
     from urllib.parse import urlencode
     from app.ilog_voyage import execute_voyage
+    from app.ilog_unlock import reserve_operation
+    journal_dir = tmp_path / 'submitted-voyages'
+    prior = reserve_operation(journal_dir, 'a', 'ORIENTAL BRIGHT/2619S', action)
+    prior.write_text('{"status":"needs_verification","submitted":true}', encoding='utf-8')
+    original = prior.read_bytes()
+
     class Page(FakePage):
         def expect_response(self, predicate):
-            req=SimpleNamespace(method='POST',post_data=urlencode({'query':'44','ids':'ORIENTAL BRIGHT/2619S'}))
+            req=SimpleNamespace(method='POST',post_data=urlencode({'query':action,'ids':'ORIENTAL BRIGHT/2619S'}))
             response=SimpleNamespace(url='https://example.com/order_unlock',request=req,ok=True,status=200,text=lambda:'{"success":true}')
             assert predicate(response)
             assert not predicate(SimpleNamespace(url=response.url,request=SimpleNamespace(method='POST',post_data='query=4&ids=1')))
@@ -50,14 +57,18 @@ def test_voyage_submit_uses_scope_not_record_id_and_never_repeats(tmp_path, monk
                 def __enter__(self):return self
                 def __exit__(self,*a):pass
             return Context()
-    found=[record()];target=build_groups([dict(account_id='a',account_name='a',bill='BILL',kind='order',records=found)])[0]
-    result=dict(account='a',bill='BILL',kind='order',submitted=False)
+    found=[record(lock=representative_lock)]
+    target=build_groups([dict(account_id='a',account_name='a',bill='BILL',kind=kind,records=found)])[0]
+    result=dict(account='a',bill='BILL',kind=kind,submitted=False)
     page=Page(['1'])
     monkeypatch.setattr('app.ilog_unlock.search_bill',lambda *a,**k:[record(lock='U')])
     execute_voyage(page,found,result,tmp_path/'report',tmp_path,lambda s:result.update(stage=s),target)
     assert result['status']=='voyage_platform_confirmed'
     assert result['verification_scope']=='representative_only'
     assert page.events.count(('click','Yes'))==1
+    assert result['previous_submission']==prior.name
+    assert prior.read_bytes()==original
+    assert len(list(journal_dir.glob('*.json')))==2
 
 
 def test_changed_voyage_never_clicks(tmp_path):

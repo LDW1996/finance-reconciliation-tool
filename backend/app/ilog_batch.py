@@ -40,12 +40,8 @@ def execute_batch(page, found, result, report_path, directory, step, *, verify_a
             if row['status'] in SUCCESS:
                 continue
             step('reserve_submission')
-            try:
-                path=reserve_operation(directory/'submitted',result['account'],str(row['before']['id']),result['kind'],
-                                       current_lock=row['before']['lock'],legacy_bill=result['bill'])
-            except FileExistsError:
-                row.update(status='blocked_duplicate',reason='有历史未核实提交，本条未再次解锁')
-                continue
+            path=reserve_operation(directory/'submitted',result['account'],str(row['before']['id']),result['kind'],
+                                   current_lock=row['before']['lock'],legacy_bill=result['bill'])
             row['previous_submission']=json.loads(path.read_text(encoding='utf-8')).get('previous_submission')
             row['relocked_resubmission']=bool(row['previous_submission'])
             journals.append((row,path))
@@ -167,7 +163,7 @@ def _finalize_batch_results(rows, journals, result, report_path):
                 row[key]=result[key]
         if row['status'] not in SUCCESS:
             for key in ('failed_stage','error_type','error_context','failure_cause','next_action'):
-                if key in result and row['status']!='blocked_duplicate':row[key]=result[key]
+                if key in result:row[key]=result[key]
             row['steps']=result.get('steps',[])
             row['verification_attempts']=result.get('verification_attempts',[])
         compact_success(row)
