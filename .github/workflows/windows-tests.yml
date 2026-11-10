@@ -33,10 +33,20 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
       - name: Validate fast-build eligibility checks
         run: node --test .github/scripts/windows-validation.test.cjs
       - name: Install Python dependencies
         run: python -m pip install --disable-pip-version-check -r packaging/requirements-build.txt
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+        env:
+          VITE_EDITION: full
       - name: Run tests
         run: python -m pytest backend/tests -q -n 2 --dist=loadfile --durations=25 --durations-min=0.1
         env:
