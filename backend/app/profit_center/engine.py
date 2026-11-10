@@ -626,9 +626,13 @@ def run_region(spec: RegionSpec, inputs: Inputs, year: int, mon: int,
                          prov, spec, "未来月份合计行补齐")
 
     # ---- 2. 利润简表本月行 ------------------------------------------------
-    prev_row = spec.pl_row - 1
+    # 利润简表按「月」排成行（A 列写月份数字），config.pl_row 固定是 8 月行。
+    # 上报月份变化时整块行号必须跟着平移，否则会覆盖 8 月历史行、
+    # 清掉后续月份行的 E 列，却留空本月行。
+    pl_cur = spec.pl_row + (mon - 8)
+    prev_row = pl_cur - 1
     for col in ("B", "C", "E", "F", "H", "I"):
-        coord = f"{col}{spec.pl_row}"
+        coord = f"{col}{pl_cur}"
         if col in spec.pl_skip:
             continue
         if col in spec.pl_constants:
@@ -647,16 +651,16 @@ def run_region(spec: RegionSpec, inputs: Inputs, year: int, mon: int,
                      f"{col}{prev_row}")
     # D/G/J 增减列模板已正确，保留不动
     for col in ("D", "G", "J"):
-        if ws[f"{col}{spec.pl_row}"].value is not None:
+        if ws[f"{col}{pl_cur}"].value is not None:
             prov.append({
                 "利润中心": spec.label, "工作表": ws.title,
-                "单元格": f"{col}{spec.pl_row}", "类别": "增减列（模板原样保留）",
-                "写入值": str(ws[f"{col}{spec.pl_row}"].value), "来源": "模板",
+                "单元格": f"{col}{pl_cur}", "类别": "增减列（模板原样保留）",
+                "写入值": str(ws[f"{col}{pl_cur}"].value), "来源": "模板",
             })
 
     # 清理本月之后各行 E 列残留错误公式（残留到年底，行数随上报月份变化）
     for ahead in range(1, 12 - mon + 1):
-        coord = f"E{spec.pl_row + ahead}"
+        coord = f"E{pl_cur + ahead}"
         if ws[coord].value is not None:
             prov.append({
                 "利润中心": spec.label, "工作表": ws.title, "单元格": coord,

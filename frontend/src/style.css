@@ -533,4 +533,114 @@ button:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outli
   .ds-scope .quiet-state { padding: 12px 14px; }
 }
 
+/* ==========================================================================
+   Design system v6 - 2026-11-11 (iLog unlock module, additive layer)
+   Landed from output/ui-redesign/unlock-design-v6.css: the "recommended"
+   tier plus both narrow-screen fixes. Pure CSS: no template, script, copy or
+   primary-color changes; the execution-mode / screenshot-mode capsules,
+   the global nav and the result tabs are all untouched.
+
+   Specificity note: UnlockView.vue has <style scoped>, and Vite emits those
+   [data-v-*] rules AFTER this global sheet. The design comp injected its CSS
+   into <head> at runtime, where document order alone was enough. Every rule
+   below therefore carries .ilog-workspace (the App.vue module wrapper) so it
+   beats a same-specificity scoped rule regardless of bundle order.
+   ========================================================================== */
+
+/* P0-1  Readability: result hint 2.30:1 -> 5.07:1, helper copy 11.5 -> 12px */
+.ilog-workspace .ds-scope .results-hint { color: var(--ds-muted); font-size: 12px; }
+.ilog-workspace .ds-scope .config-hint { font-size: 12px; }
+
+/* P0-2  Keyboard focus: the 0x0 radio is hidden, so project the ring onto
+   its label. :has() is progressive enhancement - unsupported browsers simply
+   keep the previous (still functional) radio behaviour. */
+.ilog-workspace .ds-scope .scope-options label:has(input:focus-visible) {
+  outline: 2px solid var(--ds-primary);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* P0-3  Touch targets: clear / expand / secondary buttons >= 32px */
+.ilog-workspace .ds-scope .input-caption button {
+  min-height: 32px; padding: 4px 10px; border-radius: 6px;
+}
+.ilog-workspace .ds-scope .folded-toggle { min-height: 32px; padding: 4px 10px; }
+
+/* P1-1  Complete the step numbering: 01/02 come from .unlock-card-title::before
+   in the scoped view; the counter is reset on .unlock-stack, so these two
+   pseudo-elements naturally become 03 and 04. No template change. */
+.ilog-workspace .ds-scope .unlock-progress-panel { padding-left: 54px; }
+.ilog-workspace .ds-scope .unlock-progress-panel::before,
+.ilog-workspace .ds-scope .unlock-results-panel > .unlock-section-heading h2::before {
+  counter-increment: unlock-step;
+  content: counter(unlock-step, decimal-leading-zero);
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; border-radius: 6px;
+  background: var(--ds-primary-50); border: 1px solid var(--ds-primary-100);
+  color: var(--ds-primary); font-size: 11px; font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.ilog-workspace .ds-scope .unlock-progress-panel::before {
+  position: absolute; left: 20px; top: 50%; transform: translateY(-50%);
+}
+
+/* P1-2  Idle state: the 200px centred illustration ate a third of the first
+   screen. Collapse it into one quiet 67px strip when there is no task. */
+.ilog-workspace .ds-scope .unlock-progress-panel:not(:has(.progress-mode)) {
+  padding-top: 10px; padding-bottom: 10px;
+}
+.ilog-workspace .ds-scope .unlock-results-panel:has(.unlock-empty) { padding: 12px 0 10px; }
+.ilog-workspace .ds-scope .unlock-results-panel:has(.unlock-empty) > .unlock-section-heading {
+  margin-bottom: 8px;
+}
+.ilog-workspace .ds-scope .unlock-results-panel:has(.unlock-empty) > .unlock-empty {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  column-gap: 14px; row-gap: 3px;
+  align-items: center; min-height: 0; text-align: left;
+  padding: 12px 16px;
+  background: var(--ds-bg); border: 1px solid var(--ds-border);
+  border-radius: var(--ds-radius-card);
+}
+.ilog-workspace .ds-scope .unlock-results-panel:has(.unlock-empty) > .unlock-empty > .el-icon {
+  grid-column: 1; grid-row: 1 / 3;
+  width: 40px; height: 40px; margin: 0; font-size: 19px;
+}
+.ilog-workspace .ds-scope .unlock-results-panel:has(.unlock-empty) > .unlock-empty h3 {
+  grid-column: 2; grid-row: 1; margin: 0; font-size: 14px;
+}
+.ilog-workspace .ds-scope .unlock-results-panel:has(.unlock-empty) > .unlock-empty p {
+  grid-column: 2; grid-row: 2; margin: 0; font-size: 12px; color: var(--ds-muted);
+}
+
+/* P2-1  Narrow screens: keep the status badge and "new task" on one row,
+   drop the step badges so they never squeeze the progress bar. */
+@media (max-width: 720px) {
+  .ilog-workspace .unlock-heading.ds-no-title {
+    flex-direction: row; align-items: center; justify-content: flex-end; gap: 8px;
+  }
+  .ilog-workspace .unlock-heading.ds-no-title .ds-badge { flex: 1 1 auto; min-width: 0; }
+  .ilog-workspace .ds-scope .unlock-progress-panel { padding-left: 16px; }
+  .ilog-workspace .ds-scope .unlock-progress-panel::before,
+  .ilog-workspace .ds-scope .unlock-results-panel > .unlock-section-heading h2::before { display: none; }
+  .ilog-workspace .ds-scope .unlock-results-panel:has(.unlock-empty) > .unlock-empty {
+    margin-left: 14px; margin-right: 14px;
+  }
+}
+
+/* P2-2  Narrow screens: lay the four iLog tabs out on a 4-column grid so
+   "保存设置" is no longer clipped and needs no scroll-fade hint. */
+@media (max-width: 680px) {
+  .ilog-workspace .module-tabs.ilog-tabs {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0; overflow: visible; margin-bottom: 16px;
+  }
+  .ilog-workspace .module-tabs.ilog-tabs button {
+    justify-content: center; gap: 5px; padding: 0 2px;
+    height: 44px; font-size: 12px;
+  }
+  .ilog-workspace .module-tabs.ilog-tabs button > .el-icon { font-size: 14px; }
+}
+
 

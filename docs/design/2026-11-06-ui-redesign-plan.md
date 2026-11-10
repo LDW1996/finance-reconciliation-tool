@@ -271,3 +271,30 @@
 - **验收**：`<script>` 区块 SHA 与 HEAD 一致（`715272c2…`）；`npm run build` / `frontend` 下 `npm run check` 通过（mail 953 / platform 1377 段）；8765 首页与 dist MD5 一致（`379d8f11…`），构建 CSS 含 `login-brand-sheen`、无 `login-brand-grid`。真实 8765 无头渲染：`login-sheen / 9s`、`login-aurora / 10s`、`login-drift / 16s`、`login-rise / 0.85s` 全部生效，背景图加载成功，桌面 1440/1440 与 390/390 无横向溢出、390px 品牌区 220px；**两帧间隔 1.5s 的品牌区像素差：RGB 平均 27.97 / 26.23 / 21.53，75.6% 像素变化 >8/255**，客观证明动效可见；截图对比可见光带由下向左上扫过、蓝色光晕同步扩散，标题位置稳定且清晰。reduced-motion 下 sheen `display:none`、伪元素 `animation:none`、标题 `animation:none`、heading `opacity:1`。控制台仅 `/api/platform/session` 401（未登录预期），无 JS 异常。
 - **截图留档**：`output/ui-redesign/landed-login-glow.png`、`landed-login-glow-frame2.png`（1.5s 后第二帧，用于对比动效）、`landed-login-390.png`、`landed-login-reduced.png`。
 - **状态**：与 §13 相同，改动仍留在工作区，**未提交 / 未推送**；8765 实时读 dist，用户 Cmd+Shift+R 强刷即可。
+
+
+## 15. iLog 批量解锁模块 v6 落地（2026-11-11）
+
+设计稿 `output/ui-redesign/unlock-design-v6.html` 评审通过后开始改造，采用**推荐版 + 小屏收口**共 7 项；完整版多出的「配置区分组竖线」（P1-3）本次**未落地**，一根绝对定位 1px 竖线可随时补。
+
+- **改动范围**：只有 `frontend/src/style.css`（+110 行，v6 additive layer）。`<script>`、template、中文文案、主色 `#0066cc`、执行模式 / 截图方式胶囊分段、顶栏、结果页签全部不动。
+- **落地的 7 项**
+  | 优先级 | 改动 | 落地实现 |
+  | --- | --- | --- |
+  | P0 | 结果提示对比度 2.30:1 → 5.07:1，说明 11.5 → 12px | `.results-hint` / `.config-hint` 用 `--ds-muted` + 12px |
+  | P0 | 隐藏 radio 的键盘焦点可见 | `.scope-options label:has(input:focus-visible)` 蓝色 2px 环（渐进增强） |
+  | P0 | 次要按钮触摸目标 ≥32px | `.input-caption button` / `.folded-toggle` |
+  | P1 | 编号补齐 03 / 04 | 复用 `.unlock-stack` 上的 `counter-reset`，两个 `::before` 自动递增 |
+  | P1 | 空任务态收紧 | `:has(.unlock-empty)` 下 200px 居中大空态 → 67px 浅灰横条；无 `.progress-mode` 时进度区收 padding |
+  | P2 | 小屏顶部并排 | 720px 下状态徽标与「新建任务」同行，编号收敛 |
+  | P2 | 小屏页签四项平铺 | 680px 下 `.ilog-tabs` 改 4 等分 grid，不再裁掉「保存设置」 |
+- **关键工程点（设计稿与落地的唯一实质差异）**：设计稿把 CSS 运行时注入 `<head>`，靠文档顺序压过 `UnlockView.vue` 的 `<style scoped>`；Vite 打包时组件 `[data-v-*]` 规则**排在全局 `style.css` 之后**，直接搬运会让同特异性规则失效。因此 v6 层每条规则统一加 `.ilog-workspace`（App.vue 的模块外层容器）提权，与 bundle 顺序无关。实测 `.config-hint` 从 scoped 的 11.5px 变 12px、`.unlock-progress-panel` 从 20px 变 54px，证明提权有效。
+- **验收（真实 8765，无注入样式）**
+  - `npm run build` 通过；`frontend/` 下 `npm run check` 通过（mail 953 / platform 1463 段，本轮零新增文案）；8765 首页与 `frontend/dist/index.html` MD5 一致（`77a072b5…`）；构建 CSS 含 v6 规则、无 `nth-child(3)::before` 分组竖线；5 个 `.vue` 的 `<script>` 区块与 HEAD 逐字节一致。
+  - **同会话 toggle**（临时移除 `.ilog-workspace` 即关闭全部 v6 规则，补偿 App.vue 基础样式后测）：桌面 `scrollH 1403 → 1253`（−150）、空态 `200 → 67`、结果区 `367 → 212`、进度区 `57 → 53`；与设计稿 `desktop_before / desktop_full` 数值完全一致。移动端 `2185 → 2017`（−168），落地实测 2017，与设计稿一致。
+  - 结果提示探针：`.results-hint` 计算色 `rgb(110,110,115)` = `--ds-muted`，12px，白底 **5.07:1 过 WCAG AA**（原 `#a2acb9` 为 2.30:1）。该元素只在有结果行时渲染，故用临时探针节点验证。
+  - 键盘焦点：CDP 真实 Tab 12 次到达被隐藏的 scope radio，`activeElement.matches(':focus-visible') = true`，`label` 计算 `outline: rgb(0,102,204) solid 2px`，`:has()` 匹配成功；截图确认环只套在当前项、不影响相邻选项。
+  - 触摸目标「清空」`42×32`；桌面 1440/1440、390px 390/390 无横向溢出；390px 页签 `display:grid` 且 4/4 可见；「解锁历史」「业务账号」页表头仍铺满卡片（gap = 1px），未被 v6 破坏。
+  - 截图里的「未能读取本机已登记账号」「执行环境未就绪」「无法连接任务服务」是无头浏览器把非 session 的 `/api/*` 伪造成 `{}` 所致，真实登录环境不出现。
+- **截图留档**：`output/ui-redesign/landed-unlock-v6-desktop.png`、`landed-unlock-v6-mobile.png`、`landed-unlock-v6-focus.png`、`landed-unlock-v6-history.png`、`landed-unlock-v6-accounts.png`；度量 `landed-unlock-v6-measures.json` / `landed-unlock-v6-probe.json`。
+- **状态**：2026-11-11 已随本轮提交入库并推送；8765 实时读 dist，用户在已登录浏览器 Cmd+Shift+R 强刷即可看到。
