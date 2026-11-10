@@ -12,6 +12,7 @@
       </div>
     </header>
     <ReconciliationView v-if="page==='excel' && can('excel')"/>
+    <ProfitCenterView v-else-if="page==='profit-center' && can('excel')"/>
     <MailView v-else-if="page==='mail' && can('mail')"/>
     <div v-else-if="can('ilog') && isIlog" class="ilog-workspace"><ModuleTitle class="ilog-title" :icon="Unlock">iLog</ModuleTitle><nav class="ilog-tabs module-tabs" aria-label="iLog功能导航"><button v-for="tab in ilogTabs" :key="tab.page" type="button" :class="{selected:page===tab.page}" :aria-current="page===tab.page ? 'page' : undefined" @click="navigate(tab.page)"><el-icon aria-hidden="true"><component :is="tab.icon"/></el-icon>{{tab.label}}</button></nav>
     <UnlockView v-if="can('ilog') && (page==='unlock'||page==='accounts'||page==='history')" :view="page" @navigate="navigate"/><IlogRetentionSettings v-if="page==='retention'"/></div>
@@ -23,18 +24,19 @@ import { ref, computed, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
 import { OfficeBuilding, User, SwitchButton, Unlock, Clock, Setting } from '@element-plus/icons-vue'
 import ReconciliationView from './views/ReconciliationView.vue'
+import ProfitCenterView from './views/ProfitCenterView.vue'
 import MailView from './views/MailView.vue'
 import UnlockView from './views/UnlockView.vue'
 import PlatformLogin from './components/PlatformLogin.vue'
 import IlogRetentionSettings from './components/IlogRetentionSettings.vue'
 import { getPlatformSession, logoutPlatform, type PlatformSession } from './services/platformAuth'
 const buildCommit=(import.meta.env.VITE_BUILD_COMMIT || 'local').slice(0,8)
-type Page='excel'|'mail'|'unlock'|'accounts'|'history'|'retention'
+type Page='excel'|'profit-center'|'mail'|'unlock'|'accounts'|'history'|'retention'
 const session=ref<PlatformSession>({authenticated:false,capabilities:[]}),loading=ref(true),startupError=ref(''),loggingOut=ref(false),page=ref<Page>('excel')
 const can=(capability:string)=>session.value.capabilities.includes(capability)
 const ilogTabs=[{page:'unlock',label:'批量解锁',icon:Unlock},{page:'accounts',label:'业务账号',icon:User},{page:'history',label:'解锁历史',icon:Clock},{page:'retention',label:'保存设置',icon:Setting}] as const
 const isIlog=computed(()=>ilogTabs.some(tab=>tab.page===page.value))
-const items=computed(()=>[...(can('excel')?[{page:'excel' as Page,label:'Excel对账'}]:[]),...(can('mail')?[{page:'mail' as Page,label:'邮件收款'}]:[]),...(can('ilog')?[{page:'unlock' as Page,label:'iLog'}]:[])])
+const items=computed(()=>[...(can('excel')?[{page:'excel' as Page,label:'Excel对账'},{page:'profit-center' as Page,label:'利润中心上报'}]:[]),...(can('mail')?[{page:'mail' as Page,label:'邮件收款'}]:[]),...(can('ilog')?[{page:'unlock' as Page,label:'iLog'}]:[])])
 function navigate(value:Page){page.value=(items.value.some(i=>i.page===value)||(can('ilog')&&ilogTabs.some(tab=>tab.page===value)))?value:(items.value[0]?.page || 'excel');location.hash=page.value}
 function syncHash(){if(session.value.authenticated)navigate(location.hash.slice(1) as Page)}
 function authenticated(value:PlatformSession){session.value=value;syncHash()}

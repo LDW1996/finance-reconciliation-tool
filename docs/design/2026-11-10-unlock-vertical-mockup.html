@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>批量解锁页重构设计稿 · 上下结构</title>
+<style>
+  :root{
+    --accent:#0066cc; --accent-hover:#0052a3; --accent-light:#d6e7f8; --accent-bg:#edf5fd;
+    --ink:#1f2d3d; --ink-muted:#7a8699; --line:#e5e9f0; --bg:#f5f7fa; --card:#ffffff;
+    --ok:#0a8f4a; --warn:#b7791f; --bad:#c0392b;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);font-size:14px;padding-bottom:60px}
+  /* ── 顶部导航（现状保留） ─────────────────────── */
+  .topnav{background:var(--card);border-bottom:1px solid var(--line);padding:0 32px;display:flex;align-items:center;gap:28px;height:56px;position:sticky;top:0;z-index:10}
+  .brand{display:flex;align-items:center;gap:8px;font-weight:700;font-size:17px}
+  .brand .logo{width:26px;height:26px;border-radius:7px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px}
+  .navtabs{display:flex;gap:4px;flex:1}
+  .navtabs a{padding:8px 14px;border-radius:8px;color:var(--ink-muted);text-decoration:none;font-weight:500}
+  .navtabs a.on{color:var(--accent);background:var(--accent-bg);font-weight:600}
+  .btn{border:1px solid var(--line);background:var(--card);border-radius:8px;padding:7px 14px;font-size:13px;cursor:pointer;color:var(--ink)}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+  .btn.primary:hover{background:var(--accent-hover)}
+  .btn.ghost{border:none;background:transparent;color:var(--accent)}
+  .btn.sm{padding:4px 10px;font-size:12px;border-radius:6px}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+
+  .page{max-width:1440px;margin:20px auto 0;padding:0 32px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 22px;margin-bottom:16px}
+  .step-tag{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--accent);margin-bottom:10px}
+  .step-tag i{font-style:normal;width:18px;height:18px;border-radius:50%;background:var(--accent-bg);color:var(--accent);display:inline-flex;align-items:center;justify-content:center;font-size:11px}
+  .card h3{font-size:15px;margin-bottom:4px}
+
+  /* ── ① 配置行：横向一字排开 ─────────────────── */
+  .config-row{display:flex;flex-wrap:wrap;gap:14px 34px;align-items:flex-start}
+  .field{min-width:200px}
+  .field-label{font-size:12px;color:var(--ink-muted);margin-bottom:6px;display:flex;align-items:center;gap:6px}
+  .select{border:1px solid var(--line);border-radius:8px;padding:8px 12px;background:var(--card);display:flex;justify-content:space-between;align-items:center;min-width:200px;color:var(--ink)}
+  .select .arr{color:var(--ink-muted);font-size:11px}
+  .field .hint{font-size:12px;color:var(--ink-muted);margin-top:5px}
+  .field .hint.warn{color:var(--warn)}
+  .switch{width:36px;height:20px;border-radius:10px;background:var(--accent);position:relative;display:inline-block}
+  .switch::after{content:"";position:absolute;right:2px;top:2px;width:16px;height:16px;border-radius:50%;background:#fff}
+  .switch.off{background:#cdd6e0}
+  .switch.off::after{left:2px;right:auto}
+  /* 胶囊分段（保留现状样式） */
+  .capsule{display:inline-flex;background:#eef1f5;border-radius:8px;padding:3px}
+  .capsule span{padding:5px 13px;border-radius:6px;font-size:13px;color:var(--ink-muted);cursor:pointer;white-space:nowrap}
+  .capsule span.on{background:var(--card);color:var(--accent);font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+
+  /* ── ② 单号输入：两栏并排，高度收紧 ─────────── */
+  .bills-row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .bill-panel{border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .bill-panel-head{display:flex;align-items:center;gap:8px;padding:10px 14px;background:#fafbfc;border-bottom:1px solid var(--line)}
+  .bill-panel-head .ico{width:22px;height:22px;border-radius:6px;background:var(--accent-bg);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:12px}
+  .bill-panel-head b{font-size:14px}
+  .count-pill{margin-left:auto;background:var(--accent-bg);color:var(--accent);border-radius:10px;padding:2px 10px;font-size:12px;font-weight:600}
+  .bill-panel textarea{width:100%;border:none;outline:none;resize:none;padding:10px 14px;font-family:ui-monospace,Menlo,monospace;font-size:13px;line-height:1.7;color:var(--ink);height:120px}
+  .bill-panel-foot{display:flex;justify-content:space-between;padding:7px 14px;border-top:1px solid var(--line);font-size:12px;color:var(--ink-muted)}
+  .bill-panel-foot button{border:none;background:none;color:var(--ink-muted);cursor:pointer;font-size:12px}
+  .bill-panel-foot button:hover{color:var(--accent)}
+  .submit-row{display:flex;align-items:center;gap:16px;margin-top:14px}
+  .submit-row .btn.primary{padding:10px 26px;font-size:14px}
+  .submit-row .note{font-size:12px;color:var(--ink-muted)}
+
+  /* 执行中：输入区折叠为一条摘要 */
+  .collapsed-strip{display:flex;align-items:center;gap:18px;background:#fafbfc;border-radius:8px;padding:9px 14px;font-size:13px;color:var(--ink-muted)}
+  .collapsed-strip b{color:var(--ink)}
+  .collapsed-strip .cap{margin-left:auto;font-size:12px}
+
+  /* ── ③ 进度条：单行黏性 ─────────────────────── */
+  .progress-bar-card{position:sticky;top:56px;z-index:9;display:flex;align-items:center;gap:20px;padding:12px 22px;box-shadow:0 2px 8px rgba(31,45,61,.06)}
+  .progress-num{font-size:26px;font-weight:700;color:var(--accent);letter-spacing:-.5px;white-space:nowrap}
+  .progress-num small{font-size:13px;font-weight:500;color:var(--ink-muted);letter-spacing:0}
+  .progress-num .mode{font-size:12px;font-weight:600;color:var(--ink);display:block;letter-spacing:0}
+  .bar{flex:1;height:10px;border-radius:5px;background:#e8edf3;overflow:hidden}
+  .bar i{display:block;height:100%;width:79%;background:var(--accent);border-radius:5px}
+  .progress-desc{font-size:13px;color:var(--ink-muted);white-space:nowrap}
+  .progress-desc b{color:var(--ink)}
+
+  /* ── ④ 结果表：全宽 + 表内滚动 ───────────────── */
+  .results-head{display:flex;align-items:center;margin-bottom:12px}
+  .results-head h3{font-size:15px}
+  .filter{margin-left:auto;display:flex;gap:10px;align-items:center}
+  .filter .select{min-width:130px;padding:6px 10px;font-size:13px}
+  /* 固定可视高度，超出约 10 行在表内滚动，表头吸顶 */
+  .table-scroll{max-height:520px;overflow-y:auto;overscroll-behavior:contain;margin:0 -22px}
+  .table-scroll::-webkit-scrollbar{width:8px}
+  .table-scroll::-webkit-scrollbar-thumb{background:#cdd6e0;border-radius:4px}
+  table{width:100%;border-collapse:separate;border-spacing:0;font-size:13px}
+  thead th{background:#f5f7fa;color:var(--ink-muted);font-weight:600;text-align:left;padding:9px 12px;white-space:nowrap;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5;box-shadow:0 1px 0 var(--line)}
+  tbody td{padding:10px 12px;border-bottom:1px solid #f0f3f7;vertical-align:top}
+  .table-scroll th:first-child,.table-scroll td:first-child{padding-left:22px}
+  .table-scroll th:last-child,.table-scroll td:last-child{padding-right:22px}
+  tbody tr:hover{background:#f8fafd}
+  td.mono{font-family:ui-monospace,Menlo,monospace;font-size:12.5px}
+  .badge{display:inline-flex;align-items:center;gap:5px;border-radius:20px;padding:3px 10px;font-size:12px;font-weight:600;white-space:nowrap}
+  .badge.ok{background:#e6f5ec;color:var(--ok)}
+  .badge.warn{background:#fdf3e0;color:var(--warn)}
+  .badge.muted{background:#eef1f5;color:var(--ink-muted)}
+  .badge.run{background:var(--accent-bg);color:var(--accent)}
+  .badge i{font-style:normal;font-size:8px}
+  .lock{font-family:ui-monospace,Menlo,monospace;font-size:12px}
+  .lock b{color:var(--ok)}
+  .sub{font-size:12px;color:var(--ink-muted);margin-top:3px}
+  .tag{display:inline-block;background:#eef1f5;color:var(--ink-muted);border-radius:4px;padding:1px 6px;font-size:11px;margin-left:6px}
+  .link{color:var(--accent);text-decoration:none}
+  .results-foot{display:flex;align-items:center;margin-top:12px;font-size:13px;color:var(--ink-muted)}
+  .results-foot .ops{margin-left:auto;display:flex;gap:10px}
+  .timing{font-size:12px;color:var(--ink-muted);line-height:1.6}
+  /* 分阶段耗时：悬停提示（替代独立列） */
+  .tip{position:relative;border-bottom:1px dashed #a9b7c8;cursor:help;white-space:nowrap;font-size:12px;color:var(--ink-muted)}
+  .tip::after{content:attr(data-tip);position:absolute;left:50%;top:calc(100% + 10px);transform:translate(-50%,-4px);
+    background:#1f2d3d;color:#fff;font-size:12px;line-height:1.7;padding:8px 12px;border-radius:8px;white-space:pre;
+    opacity:0;pointer-events:none;transition:.15s;z-index:40;box-shadow:0 8px 22px rgba(0,0,0,.22);
+    font-family:ui-monospace,Menlo,monospace;text-align:left}
+  .tip::before{content:"";position:absolute;left:50%;top:calc(100% + 4px);transform:translateX(-50%);
+    border:5px solid transparent;border-bottom-color:#1f2d3d;opacity:0;transition:.15s;z-index:40;pointer-events:none}
+  .tip:hover::after{opacity:1;transform:translate(-50%,0)}
+  .tip:hover::before{opacity:1}
+
+  /* ── 注释水印 ───────────────────────────────── */
+  .state-label{position:sticky;top:0;z-index:20;display:flex;gap:10px;align-items:center;margin:26px 0 -6px}
+  .state-label b{font-size:13px;color:#fff;background:var(--accent);border-radius:6px;padding:3px 12px}
+  .state-label span{font-size:12px;color:var(--ink-muted)}
+  .divider{border-top:2px dashed var(--line);margin:36px 0 10px}
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="brand"><span class="logo">iL</span>iLog</div>
+  <div class="navtabs">
+    <a class="on">🔒 批量解锁</a><a>👤 业务账号</a><a>🕓 解锁历史</a><a>⚙️ 保存设置</a>
+  </div>
+  <button class="btn">＋ 新建任务</button>
+</nav>
+
+<div class="page">
+
+  <!-- ═══════════ 状态 A：提交前（输入展开） ═══════════ -->
+  <div class="state-label"><b>状态 A · 提交前</b><span>配置与输入占上部约 45%，无结果区</span></div>
+
+  <section class="card">
+    <div class="step-tag"><i>1</i>执行配置 —— 原三块卡片压成一行</div>
+    <div class="config-row">
+      <div class="field">
+        <div class="field-label">👤 首选账号</div>
+        <div class="select">东印尼（物流雅加达）<span class="arr">▾</span></div>
+        <div class="hint">hucongliang</div>
+      </div>
+      <div class="field">
+        <div class="field-label">备用账号 <span class="switch"></span></div>
+        <div class="select">西印尼（物流巴淡）<span class="arr">▾</span></div>
+        <div class="hint">仅首选账号查无订单时使用</div>
+      </div>
+      <div class="field">
+        <div class="field-label">解锁范围</div>
+        <div class="capsule"><span class="on">按提单</span><span>按航次</span></div>
+        <div class="hint">按输入提单逐一处理</div>
+      </div>
+      <div class="field">
+        <div class="field-label">执行模式</div>
+        <div class="capsule"><span class="on">标准（复查）</span><span>快速</span></div>
+      </div>
+      <div class="field">
+        <div class="field-label">截图方式</div>
+        <div class="capsule"><span class="on">仅异常保存</span><span>每笔</span><span>不保存</span></div>
+      </div>
+      <div class="field">
+        <div class="field-label">分阶段耗时 <span class="switch"></span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="step-tag"><i>2</i>单号输入 —— 两个输入框并排，高度收紧到 120px</div>
+    <div class="bills-row">
+      <div class="bill-panel">
+        <div class="bill-panel-head"><span class="ico">🔓</span><b>费用解锁（小锁）</b><span class="count-pill">48 条</span></div>
+        <textarea>SITSKBAR827091
+SITSKBAR827092
+SITSKBAR827093
+SITSKBAR827094
+SITSKBAR827095
+SITGQIBA083068
+SITGQIBA083015
+SITGSHBAZA01024</textarea>
+        <div class="bill-panel-foot"><span>自动去空行、合并同类重复单号</span><button>清空</button></div>
+      </div>
+      <div class="bill-panel">
+        <div class="bill-panel-head"><span class="ico">🔒</span><b>订单解锁（大锁）</b><span class="count-pill">0 条</span></div>
+        <textarea placeholder="粘贴需要订单解锁的提单号，每行一个"></textarea>
+        <div class="bill-panel-foot"><span>自动去空行、合并同类重复单号</span><button>清空</button></div>
+      </div>
+    </div>
+    <div class="submit-row">
+      <button class="btn primary">▶ 校验单号并核对清单</button>
+      <span class="note">提交前会弹出核对清单二次确认</span>
+    </div>
+  </section>
+
+  <!-- ═══════════ 状态 B：执行中（输入折叠，结果全宽） ═══════════ -->
+  <div class="divider"></div>
+  <div class="state-label"><b>状态 B · 执行中</b><span>输入区折叠为一行摘要；进度单行黏性；结果表定高约 10 行，超出表内滚动、表头吸顶</span></div>
+
+  <section class="card">
+    <div class="collapsed-strip">
+      🔓 <b>48 条</b>费用小锁 · 0 条大锁 ｜ 东印尼 → 兜底 西印尼 ｜ 标准（复查）· 仅异常保存
+      <span class="cap">任务 15:15 提交 · <a class="link" href="#">展开修改</a>（执行中不可编辑）</span>
+    </div>
+  </section>
+
+  <section class="card progress-bar-card">
+    <div class="progress-num"><span class="mode">标准模式（复查）</span>38<small> /48</small></div>
+    <div class="bar"><i></i></div>
+    <div class="progress-desc">正在处理 <b>SITSKBAG827577</b></div>
+    <button class="btn sm">⏸ 暂停后续项</button>
+    <button class="btn sm">✕ 取消剩余项</button>
+  </section>
+
+  <section class="card">
+    <div class="results-head">
+      <h3>执行结果</h3>
+      <div class="filter">
+        <div class="select">全部结果 <span class="arr">▾</span></div>
+      </div>
+    </div>
+    <div class="table-scroll">
+    <table>
+      <thead><tr>
+        <th style="width:40px">#</th><th style="width:190px">提单号</th><th style="width:128px">结果</th>
+        <th style="width:145px">业务号</th><th style="width:80px">类型</th><th style="width:190px">实际使用账号</th>
+        <th style="width:92px">平台响应</th><th style="width:108px">锁状态复查</th>
+        <th style="min-width:200px">说明</th>
+        <th style="width:84px">处理时间</th><th style="width:88px">凭证</th>
+      </tr></thead>
+      <tbody>
+        <tr>
+          <td>1</td>
+          <td><div class="mono">SITGNBAD000829</div><span class="tip" data-tip="login      11.05 s&#10;query       1.55 s&#10;screenshot  0.10 s&#10;save        0.01 s">⏱ 合计 12.72 s</span></td>
+          <td><span class="badge ok"><i>●</i>小锁原本已解</span></td>
+          <td class="mono">SLINX2611000829</td><td>费用解锁</td>
+          <td>东印尼（物流雅加达）</td><td>成功</td><td class="lock">A → <b>B</b></td>
+          <td>小锁已处于解锁后状态，未重复提交</td><td>43:03</td><td><a class="link" href="#">查看截图</a></td>
+        </tr>
+        <tr>
+          <td>2</td>
+          <td><div class="mono">SITGQIBA083068</div><span class="tip" data-tip="login      11.05 s&#10;query       0.82 s">⏱ 合计 11.87 s</span></td>
+          <td><span class="badge ok"><i>●</i>小锁原本已解</span></td>
+          <td class="mono">SLINX2610000368</td><td>费用解锁</td>
+          <td>东印尼（物流雅加达）</td><td>成功</td><td class="lock">A → <b>B</b></td>
+          <td>—</td><td>43:04</td><td>—</td>
+        </tr>
+        <tr>
+          <td>3</td>
+          <td><div class="mono">SITGQIBA083015</div><span class="tip" data-tip="query       0.79 s">⏱ 合计 0.79 s</span></td>
+          <td><span class="badge ok"><i>●</i>小锁已解</span></td>
+          <td class="mono">SLINX2610000315</td><td>费用解锁</td>
+          <td>东印尼（物流雅加达）</td><td>成功</td><td class="lock">A → <b>B</b></td>
+          <td>—</td><td>43:04</td><td>—</td>
+        </tr>
+        <tr style="background:#fffdf5">
+          <td>4</td>
+          <td><div class="mono">SITSKBAR827091</div><span class="tip" data-tip="query       1.21 s（两个账号合计）">⏱ 合计 1.21 s</span></td>
+          <td><span class="badge warn"><i>●</i>待人工核实</span></td>
+          <td class="mono">—</td><td>费用解锁</td>
+          <td>东印尼（物流雅加达）<span class="tag">兜底</span><div class="sub">西印尼：当前账号未找到单号</div></td>
+          <td>未提交</td><td class="lock">A → 未复查</td>
+          <td>当前账号未找到单号，未提交；请核对号段（成功批次为 SITSKB<b>AG</b>827xxx）</td><td>43:05</td><td>—</td>
+        </tr>
+        <tr style="background:#fffdf5">
+          <td>5</td>
+          <td><div class="mono">SITSKBAR827092</div><span class="tip" data-tip="query       0.88 s">⏱ 合计 0.88 s</span></td>
+          <td><span class="badge warn"><i>●</i>待人工核实</span></td>
+          <td class="mono">—</td><td>费用解锁</td>
+          <td>东印尼（物流雅加达）<span class="tag">兜底</span></td>
+          <td>未提交</td><td class="lock">A → 未复查</td>
+          <td>当前账号未找到单号，未提交</td><td>43:05</td><td>—</td>
+        </tr>
+        <tr>
+          <td>6</td>
+          <td><div class="mono">SITTAGA698961</div><span class="tip" data-tip="query       0.77 s">⏱ 合计 0.77 s</span></td>
+          <td><span class="badge ok"><i>●</i>小锁已解</span></td>
+          <td class="mono">SLINX2610000961</td><td>费用解锁</td>
+          <td>东印尼（物流雅加达）</td><td>成功</td><td class="lock">A → <b>B</b></td>
+          <td>—</td><td>43:06</td><td>—</td>
+        </tr>
+        <tr>
+          <td>7</td>
+          <td><div class="mono">SITSKBAG827577</div><span class="tip" data-tip="进行中…">⏱ 处理中</span></td>
+          <td><span class="badge run"><i>●</i>真实处理中</span></td>
+          <td class="mono">—</td><td>费用解锁</td>
+          <td>东印尼（物流雅加达）</td>
+          <td colspan="4" style="color:var(--ink-muted)">正在查询并提交解锁…</td>
+          <td>—</td>
+        </tr>
+        <tr>
+          <td>8</td>
+          <td><div class="mono">SITTAGBA700697</div><span class="tip" data-tip="尚未执行">⏱ —</span></td>
+          <td><span class="badge muted"><i>●</i>等待处理</span></td>
+          <td colspan="8" style="color:var(--ink-muted)">—</td>
+        </tr>
+        <tr>
+          <td>9</td>
+          <td><div class="mono">SITTAGBA700698</div><span class="tip" data-tip="尚未执行">⏱ —</span></td>
+          <td><span class="badge muted"><i>●</i>等待处理</span></td>
+          <td colspan="8" style="color:var(--ink-muted)">—</td>
+        </tr>
+        <tr>
+          <td>10</td>
+          <td><div class="mono">SITTAGBA700699</div><span class="tip" data-tip="尚未执行">⏱ —</span></td>
+          <td><span class="badge muted"><i>●</i>等待处理</span></td>
+          <td colspan="8" style="color:var(--ink-muted)">—</td>
+        </tr>
+        <tr>
+          <td>11</td>
+          <td><div class="mono">SITTAGBA700700</div><span class="tip" data-tip="尚未执行">⏱ —</span></td>
+          <td><span class="badge muted"><i>●</i>等待处理</span></td>
+          <td colspan="8" style="color:var(--ink-muted)">—</td>
+        </tr>
+        <tr>
+          <td>12</td>
+          <td><div class="mono">SITTAGBA700701</div><span class="tip" data-tip="尚未执行">⏱ —</span></td>
+          <td><span class="badge muted"><i>●</i>等待处理</span></td>
+          <td colspan="8" style="color:var(--ink-muted)">—</td>
+        </tr>
+        <tr>
+          <td>13</td>
+          <td><div class="mono">SITTAGBA700702</div><span class="tip" data-tip="尚未执行">⏱ —</span></td>
+          <td><span class="badge muted"><i>●</i>等待处理</span></td>
+          <td colspan="8" style="color:var(--ink-muted)">—</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+    <div class="results-foot">
+      <span>核实通过 38 条 · 待核实 6 条 · 已取消 0 条<span style="margin-left:14px;color:#98a3b3">共 48 条，表内滚动查看，表头固定</span></span>
+      <div class="ops">
+        <button class="btn sm">⬇ 导出结果</button>
+        <button class="btn sm">⟳ 刷新结果</button>
+      </div>
+    </div>
+  </section>
+
+</div>
+</body>
+</html>

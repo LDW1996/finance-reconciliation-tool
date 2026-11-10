@@ -24,6 +24,12 @@ binaries = []
 hiddenimports = [
     "app.mail_list_index",
     "app.excel_upload",
+    "app.profit_center",
+    "app.profit_center.config",
+    "app.profit_center.formula",
+    "app.profit_center.engine",
+    "app.profit_center.service",
+    "app.profit_center.routes",
     "app.main",
     "app.web_common",
     "app.reconciliation",

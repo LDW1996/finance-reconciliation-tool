@@ -297,3 +297,301 @@ def test_fast_mode_is_saved_and_legacy_task_defaults_to_verification(tmp_path):
     assert m.get(job['id'])['verify_after'] is False
     with pytest.raises(ValueError):
         m.create('west','West',['TRBTSTZH2606S'],[],'fast',True,verify_after=True)
+
+
+def test_drain_pauses_with_notice_when_platform_switch_is_held(tmp_path,monkeypatch):
+    import threading
+    from app import ilog_tasks
+    monkeypatch.setattr(ilog_tasks,'TRANSITION_WAIT_SECONDS',0.3)
+    monkeypatch.setattr(ilog_tasks,'TRANSITION_POLL_SECONDS',0.1)
+    m=manager(tmp_path)
+    job=m.create('west','West',['TRBTSTZH2606S'],[],'switch-held',True)
+    assert ilog_tasks.platform_transition_lock.acquire(timeout=1)
+    try:
+        worker=threading.Thread(target=m.drain,args=(job['id'],));worker.start();worker.join(5)
+        assert not worker.is_alive()
+    finally:
+        ilog_tasks.platform_transition_lock.release()
+    result=m.get(job['id'])
+    assert result['state']=='paused'
+    assert [r['status'] for r in result['rows']]==['waiting']
+    assert '切换账号' in result['notice']
+    # 用户点“继续”后提示应清掉，避免一直显示已暂停原因。
+    assert 'notice' not in m.control(job['id'],'resume')
+
+
+def test_cancel_releases_thread_waiting_for_platform_switch(tmp_path,monkeypatch):
+    import threading,time
+    from app import ilog_tasks
+    monkeypatch.setattr(ilog_tasks,'TRANSITION_WAIT_SECONDS',30)
+    monkeypatch.setattr(ilog_tasks,'TRANSITION_POLL_SECONDS',0.1)
+    m=manager(tmp_path)
+    job=m.create('west','West',['TRBTSTZH2606S','TRBTSTHP2607S'],[],'switch-cancel',True)
+    assert ilog_tasks.platform_transition_lock.acquire(timeout=1)
+    worker=threading.Thread(target=m.drain,args=(job['id'],));worker.start()
+    try:
+        time.sleep(0.2)
+        m.control(job['id'],'cancel')
+        worker.join(3)
+        assert not worker.is_alive()
+    finally:
+        ilog_tasks.platform_transition_lock.release();worker.join(3)
+    result=m.get(job['id'])
+    assert result['state']=='completed'
+    assert [r['status'] for r in result['rows']]==['cancelled','cancelled']
+
+
+def test_drain_pauses_when_worker_lock_queue_times_out(tmp_path,monkeypatch):
+    import threading,time
+    from app import ilog_tasks
+    monkeypatch.setattr(ilog_tasks,'TRANSITION_WAIT_SECONDS',0.8)
+    held=threading.Event();release=threading.Event()
+    def hold():
+        with ilog_tasks.worker_lock(tmp_path):
+            held.set();release.wait(5)
+    holder=threading.Thread(target=hold,daemon=True);holder.start();assert held.wait(2)
+    m=manager(tmp_path)
+    job=m.create('west','West',['TRBTSTZH2606S'],[],'worker-queue',True)
+    worker=threading.Thread(target=m.drain,args=(job['id'],));worker.start()
+    worker.join(5)
+    release.set();holder.join(2)
+    assert not worker.is_alive()
+    result=m.get(job['id'])
+    assert result['state']=='paused'
+    assert [r['status'] for r in result['rows']]==['waiting']
+    assert '排队等待超过' in result['notice']
+
+
+def test_cancel_exits_thread_queued_on_worker_lock(tmp_path,monkeypatch):
+    import threading,time
+    from app import ilog_tasks
+    monkeypatch.setattr(ilog_tasks,'TRANSITION_WAIT_SECONDS',30)
+    monkeypatch.setattr(ilog_tasks,'WORKER_POLL_SECONDS',0.05)
+    held=threading.Event();release=threading.Event()
+    def hold():
+        with ilog_tasks.worker_lock(tmp_path):
+            held.set();release.wait(5)
+    holder=threading.Thread(target=hold,daemon=True);holder.start();assert held.wait(2)
+    m=manager(tmp_path)
+    job=m.create('west','West',['TRBTSTZH2606S'],[],'worker-cancel',True)
+    worker=threading.Thread(target=m.drain,args=(job['id'],));worker.start()
+    time.sleep(0.2)
+    m.control(job['id'],'cancel')
+    worker.join(3)
+    release.set();holder.join(2)
+    assert not worker.is_alive()
+    result=m.get(job['id'])
+    assert result['state']=='completed'
+    assert [r['status'] for r in result['rows']]==['cancelled']
+    assert 'notice' not in result
+
+
+def test_cancel_keeps_task_closing_until_owner_thread_closes_browser(tmp_path, monkeypatch):
+    import threading
+
+    from app import ilog_tasks, ilog_unlock
+
+    started = threading.Event()
+    finish_item = threading.Event()
+    closing = threading.Event()
+    finish_close = threading.Event()
+    calls = []
+    close_threads = []
+    worker_threads = []
+
+    class Browser:
+        def close(self):
+            close_threads.append(threading.get_ident())
+            closing.set()
+            finish_close.wait(3)
+
+    def run(account, bill, kind, *, session_pool, **kwargs):
+        calls.append(bill)
+        worker_threads.append(threading.get_ident())
+        session_pool._browsers.append(Browser())
+        started.set()
+        finish_item.wait(3)
+        return {'status': 'verified_fee_unlocked'}
+
+    monkeypatch.setattr(ilog_unlock, 'run', run)
+    monkeypatch.setattr(ilog_tasks, 'runtime', lambda: {'channel': 'chrome'})
+    m = manager(tmp_path)
+    job = m.create('west', 'West', ['TRBTSTZH2606S', 'TRBTSTHP2607S'], [], 'key', True)
+    worker = threading.Thread(target=m.drain, args=(job['id'],))
+    worker.start()
+    try:
+        assert started.wait(2)
+        cancelled = m.control(job['id'], 'cancel')
+        assert [row['status'] for row in cancelled['rows']] == ['processing', 'cancelled']
+        finish_item.set()
+        assert closing.wait(2)
+        # 新契约：close 由看门狗线程执行（不在 drain 线程内），任务仍保持 closing 直到收尾完成。
+        assert close_threads and close_threads != worker_threads
+        assert m.get(job['id'])['state'] == 'closing'
+        # 新契约：收尾（closing）期间允许立即建新任务，新任务的 drain 在 worker 锁上排队自动衔接。
+        assert m.create('west', 'West', ['TRBTSTHP2607S'], [], 'next', True)['state'] == 'running'
+    finally:
+        finish_item.set()
+        finish_close.set()
+        worker.join(4)
+
+    assert not worker.is_alive()
+    assert m.get(job['id'])['state'] == 'completed'
+    assert calls == ['TRBTSTZH2606S']
+    with ilog_tasks.worker_lock(tmp_path) as acquired:
+        assert acquired
+    assert m.create('west', 'West', ['TRBTSTHP2607S'], [], 'next', True)['state'] == 'running'
+
+
+def test_create_allowed_while_previous_task_is_closing(tmp_path):
+    # 取消/跑完后的 'closing'（关浏览器、放锁的收尾窗口）不应拦截新任务：新任务排队自动衔接。
+    m=manager(tmp_path, lambda *a, **kw: {'status':'verified_fee_unlocked','platform_success':True,'message':'ok'})
+    first=m.create('west','West',['TRBTSTZH2606S'],[],'closing-a',True)
+    with m.db() as db:
+        db.execute("UPDATE tasks SET state='closing' WHERE id=?",(first['id'],))
+    second=m.create('west','West',['TRBTSTHP2607S'],[],'closing-b',True)
+    assert second['state']=='running'
+    with m.db() as db:
+        assert db.execute("SELECT state FROM tasks WHERE id=?",(first['id'],)).fetchone()[0]=='closing'
+    # 真正未结束的任务（running/paused）仍然拦截，防止并发执行两个任务。
+    with m.db() as db:
+        db.execute("UPDATE tasks SET state='completed' WHERE id=?",(second['id'],))
+    third=m.create('west','West',['TRBTSTHP2607S'],[],'closing-c',True)
+    with m.db() as db:
+        db.execute("UPDATE tasks SET state='paused' WHERE id=?",(third['id'],))
+    import pytest
+    with pytest.raises(RuntimeError):
+        m.create('west','West',['TRBTSTHP2607S'],[],'closing-d',True)
+
+
+
+def test_row_watchdog_kills_stuck_runner(tmp_path,monkeypatch):
+    """A dead browser makes the sync call block forever; the watchdog must kill
+    the automation processes so the blocked call can wake and the row finish."""
+    import threading
+    from app import ilog_tasks, ilog_session
+    monkeypatch.setattr(ilog_tasks,'ROW_MAX_SECONDS',0.3)
+    monkeypatch.setattr(ilog_tasks,'ROW_WATCHDOG_POLL_SECONDS',0.05)
+    monkeypatch.setattr(ilog_tasks,'ROW_KILL_GRACE_SECONDS',1.0)
+    killed=threading.Event()
+    def fake_kill():
+        killed.set(); return [12345]
+    monkeypatch.setattr(ilog_session,'kill_browser_processes',fake_kill)
+    def runner(account,bill,kind,**kwargs):
+        assert killed.wait(5),'看门狗应在超时后强杀自动化进程'
+        return {'status':'needs_verification','reason':'killed'}
+    m=manager(tmp_path, runner)
+    job=m.create('west','West',['TRBTSTZH2606S'],[],'row-watchdog',True)
+    worker=threading.Thread(target=m.drain,args=(job['id'],)); worker.start(); worker.join(10)
+    assert not worker.is_alive()
+    result=m.get(job['id'])
+    assert result['state']=='completed'
+    assert result['rows'][0]['attempts'][-1].get('watchdog_killed')==[12345]
+
+
+def test_session_pool_exit_abandons_hanging_close(tmp_path,monkeypatch):
+    """close() can block forever on a dead driver; __exit__ must stay bounded."""
+    import threading,time
+    from app import ilog_session
+    monkeypatch.setattr(ilog_session,'CLOSE_TIMEOUT_SECONDS',0.3)
+    monkeypatch.setattr(ilog_session,'CLOSE_KILL_GRACE_SECONDS',0.1)
+    release=threading.Event()
+    class StuckRuntime:
+        def stop(self):release.wait(5)
+    pool=ilog_session.SessionPool()
+    pool._runtime=StuckRuntime()
+    started=time.monotonic()
+    with pool:
+        pass
+    assert time.monotonic()-started < 2,'close 挂起时 __exit__ 不应超过看门狗时长'
+    release.set()
+
+
+def test_row_watchdog_kills_stuck_runner(tmp_path,monkeypatch):
+    """A dead browser makes the sync call block forever; the watchdog must kill
+    the automation processes so the blocked call can wake and the row finish."""
+    import threading
+    from app import ilog_tasks, ilog_session
+    monkeypatch.setattr(ilog_tasks,'ROW_MAX_SECONDS',0.3)
+    monkeypatch.setattr(ilog_tasks,'ROW_WATCHDOG_POLL_SECONDS',0.05)
+    monkeypatch.setattr(ilog_tasks,'ROW_KILL_GRACE_SECONDS',1.0)
+    killed=threading.Event()
+    def fake_kill():
+        killed.set(); return [12345]
+    monkeypatch.setattr(ilog_session,'kill_browser_processes',fake_kill)
+    def runner(account,bill,kind,**kwargs):
+        assert killed.wait(5),'看门狗应在超时后强杀自动化进程'
+        return {'status':'needs_verification','reason':'killed'}
+    m=manager(tmp_path, runner)
+    job=m.create('west','West',['TRBTSTZH2606S'],[],'row-watchdog',True)
+    worker=threading.Thread(target=m.drain,args=(job['id'],)); worker.start(); worker.join(10)
+    assert not worker.is_alive()
+    result=m.get(job['id'])
+    assert result['state']=='completed'
+    assert result['rows'][0]['attempts'][-1].get('watchdog_killed')==[12345]
+
+
+def test_session_pool_exit_abandons_hanging_close(tmp_path,monkeypatch):
+    """close() can block forever on a dead driver; __exit__ must stay bounded."""
+    import threading,time
+    from app import ilog_session
+    monkeypatch.setattr(ilog_session,'CLOSE_TIMEOUT_SECONDS',0.3)
+    monkeypatch.setattr(ilog_session,'CLOSE_KILL_GRACE_SECONDS',0.1)
+    release=threading.Event()
+    class StuckRuntime:
+        def stop(self):release.wait(5)
+    pool=ilog_session.SessionPool()
+    pool._runtime=StuckRuntime()
+    started=time.monotonic()
+    with pool:
+        pass
+    assert time.monotonic()-started < 2,'close 挂起时 __exit__ 不应超过看门狗时长'
+    release.set()
+
+
+def test_session_pool_page_failure_close_is_bounded(tmp_path,monkeypatch):
+    """The exception path of page() also closes the browser; a half-dead browser
+    must not block the task thread there either."""
+    import threading,time
+    from app import ilog_session
+    monkeypatch.setattr(ilog_session,'CLOSE_TIMEOUT_SECONDS',0.3)
+    monkeypatch.setattr(ilog_session,'CLOSE_KILL_GRACE_SECONDS',0.1)
+    release=threading.Event()
+    class StuckBrowser:
+        def new_page(self,*a,**k): raise RuntimeError('boom')
+        def close(self): release.wait(5)
+    class FakeChromium:
+        def launch(self,*a,**k): return StuckBrowser()
+    class FakeRuntime:
+        chromium=FakeChromium()
+    pool=ilog_session.SessionPool()
+    pool._runtime=FakeRuntime()
+    started=time.monotonic()
+    with pytest.raises(RuntimeError):
+        pool.page('a',{'username':'u'},'p')
+    assert time.monotonic()-started < 2,'登录失败的收尾同样不应超过看门狗时长'
+    release.set()
+
+
+def test_session_pool_page_failure_close_is_bounded(tmp_path,monkeypatch):
+    """The exception path of page() also closes the browser; a half-dead browser
+    must not block the task thread there either."""
+    import threading,time
+    from app import ilog_session
+    monkeypatch.setattr(ilog_session,'CLOSE_TIMEOUT_SECONDS',0.3)
+    monkeypatch.setattr(ilog_session,'CLOSE_KILL_GRACE_SECONDS',0.1)
+    release=threading.Event()
+    class StuckBrowser:
+        def new_page(self,*a,**k): raise RuntimeError('boom')
+        def close(self): release.wait(5)
+    class FakeChromium:
+        def launch(self,*a,**k): return StuckBrowser()
+    class FakeRuntime:
+        chromium=FakeChromium()
+    pool=ilog_session.SessionPool()
+    pool._runtime=FakeRuntime()
+    started=time.monotonic()
+    with pytest.raises(RuntimeError):
+        pool.page('a',{'username':'u'},'p')
+    assert time.monotonic()-started < 2,'登录失败的收尾同样不应超过看门狗时长'
+    release.set()

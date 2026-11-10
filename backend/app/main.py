@@ -42,6 +42,9 @@ app.include_router(create_ilog_router(require_local_account_write))
 from .excel_routes import router as excel_router
 app.include_router(excel_router)
 
+from .profit_center.routes import router as profit_center_router
+app.include_router(profit_center_router)
+
 
 # The public executable has one authenticated entry point. Legacy isolated apps
 # remain development fixtures and are not included in the unified release.

@@ -23,9 +23,15 @@ outputs/
 tmp/
 .superpowers/
 
+# Local runtime data (profit-center templates uploaded by finance, real files)
+data/
+
 # Local editor files
 .idea/
 .vscode/
+
+# Local agent work logs (never committed)
+.workbuddy/
 
 # Private local platform credentials (injected at build time)
 backend/app/platform_accounts.json

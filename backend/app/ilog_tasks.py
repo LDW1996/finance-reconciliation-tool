@@ -1,5 +1,19 @@
 from threading import RLock
 platform_transition_lock = RLock()
+# 平台切换锁可能被登录/退出/切换账号长时间占用。任务线程等待超过该时长就暂停并说明原因，
+# 不再静默悬挂；期间每 TRANSITION_POLL_SECONDS 检查一次任务是否已被取消。
+TRANSITION_WAIT_SECONDS = 60.0
+TRANSITION_POLL_SECONDS = 5.0
+TRANSITION_BUSY_NOTICE = '平台正在登录、退出或切换账号，任务已暂停；完成后再点“继续剩余项”。'
+# 排队等待 worker 锁（上一个任务收尾中）同样要有上限：收尾线程若卡死，新任务不再无限排队。
+WORKER_POLL_SECONDS = 0.25
+WORKER_BUSY_NOTICE = '前一个任务的收尾尚未完成，排队等待超过 60 秒，任务已自动暂停；请稍等片刻再点“继续剩余项”。'
+# 单条执行也必须有上限：浏览器/驱动进程死亡时同步 playwright 调用永不返回（生产已两次复现），
+# 超时后强杀相关进程唤醒被阻塞的调用；仍不返回则暂停任务并说明，避免静默挂死。
+ROW_MAX_SECONDS = 180.0
+ROW_WATCHDOG_POLL_SECONDS = 5.0
+ROW_KILL_GRACE_SECONDS = 30.0
+ROW_STUCK_NOTICE = '单条执行超过 3 分钟且浏览器已无响应，已强制终止自动化进程并暂停任务；结果待核实，请重启服务后点“继续剩余项”。'
 """Persistent sequential tasks. No automatic retry of uncertain operations."""
 
 from contextlib import contextmanager
@@ -45,9 +59,12 @@ def runtime():
 
 
 @contextmanager
-def worker_lock(directory, blocking=False):
+def worker_lock(directory, blocking=False, timeout=None, give_up=None):
+    """Exclusive worker lock. `timeout`/`give_up` turn an indefinite flock queue
+    into a bounded, cancellable wait so a stuck predecessor cannot freeze new tasks."""
     path = directory / 'worker.lock'
     with path.open('a+b') as handle:
+        acquired = False
         try:
             if os.name == 'nt':
                 import msvcrt
@@ -55,20 +72,36 @@ def worker_lock(directory, blocking=False):
                 if not handle.read(1):
                     handle.write(b'0'); handle.flush()
                 handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK, 1)
+                deadline = None if timeout is None else time.monotonic() + timeout
+                while True:
+                    try:
+                        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1); acquired = True; break
+                    except OSError:
+                        if not blocking and timeout is None: break
+                        if give_up is not None and give_up(): break
+                        if deadline is not None and time.monotonic() >= deadline: break
+                        time.sleep(WORKER_POLL_SECONDS)
             else:
                 import fcntl
-                fcntl.flock(handle, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+                deadline = None if timeout is None else time.monotonic() + timeout
+                while True:
+                    try:
+                        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB); acquired = True; break
+                    except OSError:
+                        if not blocking and timeout is None: break
+                        if give_up is not None and give_up(): break
+                        if deadline is not None and time.monotonic() >= deadline: break
+                        time.sleep(WORKER_POLL_SECONDS)
         except OSError:
-            yield False
-            return
+            acquired = False
         try:
-            yield True
+            yield acquired
         finally:
-            if os.name == 'nt':
-                handle.seek(0); msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                fcntl.flock(handle, fcntl.LOCK_UN)
+            if acquired:
+                if os.name == 'nt':
+                    handle.seek(0); msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 class TaskManager:
@@ -112,12 +145,16 @@ class TaskManager:
 
     def recover(self):
         with self.db() as db:
-            for row in db.execute("SELECT * FROM tasks WHERE state='running'").fetchall():
+            for row in db.execute("SELECT * FROM tasks WHERE state IN ('running','paused','closing')").fetchall():
                 data = json.loads(row['data'])
+                was_active = data.pop('workerActive', False)
                 for item in data['rows']:
                     if item['status'] == 'processing':
+                        was_active = True
                         item.update(status='attention', message='服务中断，执行结果待核实；不会自动重试', detail={'status':'needs_verification'})
-                data['state'] = 'paused'
+                if data['state'] == 'paused' and not was_active:
+                    continue
+                data['state'] = 'completed' if data['state'] == 'closing' else 'paused'
                 self.save(db, data)
 
     @staticmethod
@@ -247,6 +284,8 @@ class TaskManager:
                 inputs=[{'bill':g.get('bill') or g['bills'][0],'kind':g['kind'],'target':g,
                          'actualAccount':g['account_id'],'actualAccountName':g['account_name'],
                          'status':'waiting','message':'等待执行','time':''} for g in preview['groups']]
+            # 'closing' = 上一个任务只剩收尾（关浏览器、放锁，≤15 秒）：允许立即建新任务，
+            # 新任务的 drain 会在 worker 锁上排队，收尾一结束自动开始，不再让用户等待整个收尾窗口。
             if db.execute("SELECT 1 FROM tasks WHERE state IN ('running','paused')").fetchone():
                 raise RuntimeError('已有未结束任务，请先处理或取消剩余项')
             data = {'id':uuid4().hex,'account':account,'accountName':name,'state':'running','rows':inputs,'scope':scope,'screenshot_policy':screenshot_policy,'record_timings':record_timings,'verify_after':verify_after,'createdAt':datetime.now(timezone.utc).isoformat()}
@@ -267,25 +306,120 @@ class TaskManager:
             row = db.execute('SELECT data FROM tasks WHERE id=?',(task_id,)).fetchone()
             if not row: raise LookupError('任务不存在')
             data = json.loads(row['data'])
-            if data['state'] == 'completed': return data
+            if data['state'] in ('closing', 'completed'): return data
             data['state'] = 'running' if action=='resume' else 'paused'
+            data.pop('notice', None)
             if action=='cancel':
                 for item in data['rows']:
                     if item['status']=='waiting': item.update(status='cancelled',message='已取消，未执行')
-                if not any(r['status']=='processing' for r in data['rows']): data['state']='completed'
+                data['state'] = 'closing' if data.get('workerActive') else 'completed'
             self.save(db,data)
         if action=='resume': self.launch(task_id)
         return data
 
+    def is_running(self, task_id):
+        with self.db() as db:
+            row = db.execute('SELECT state FROM tasks WHERE id=?',(task_id,)).fetchone()
+        return row is not None and row[0] == 'running'
+
+    def pause_with_notice(self, task_id, notice):
+        """Pause a running task and surface the reason, without overwriting row results."""
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT data FROM tasks WHERE id=?',(task_id,)).fetchone()
+            if not row: return None
+            data = json.loads(row['data'])
+            if data['state'] != 'running': return data
+            data['state'] = 'paused'
+            data['notice'] = notice
+            self.save(db, data)
+            return data
+
+    def transition_slot(self, task_id):
+        """Wait for the platform switch lock; stop early when the task is no longer running."""
+        deadline = time.monotonic() + TRANSITION_WAIT_SECONDS
+        while True:
+            remaining = deadline - time.monotonic()
+            if platform_transition_lock.acquire(timeout=max(0.05, min(TRANSITION_POLL_SECONDS, remaining))):
+                return 'acquired'
+            # 取消/暂停后无需继续排队：旧线程尽快释放 worker_lock，新任务才不会被一起堵住。
+            if not self.is_running(task_id):
+                return 'stopped'
+            if time.monotonic() >= deadline:
+                return 'timeout'
+
+    @contextmanager
+    def task_session(self, task_id):
+        from contextlib import nullcontext
+        from .ilog_session import SessionPool
+
+        try:
+            with (SessionPool() if self.runner is None else nullcontext(None)) as session_pool:
+                yield session_pool
+        finally:
+            with self.db() as db:
+                db.execute('BEGIN IMMEDIATE')
+                data = json.loads(db.execute('SELECT data FROM tasks WHERE id=?', (task_id,)).fetchone()[0])
+                if data.pop('workerActive', False):
+                    if data['state'] == 'closing' and not any(r['status'] == 'processing' for r in data['rows']):
+                        data['state'] = 'completed'
+                    self.save(db, data)
+
+    def _run_with_watchdog(self, task_id, runner, account, bill, kind, kwargs):
+        """Run one bill with a hard upper bound.
+
+        A dead browser/driver makes the sync Playwright call block forever; a
+        watchdog thread kills those processes after ROW_MAX_SECONDS, which wakes
+        the blocked call. If it still refuses to return, pause the task with an
+        explicit notice instead of hanging silently."""
+        from .ilog_session import kill_browser_processes
+        done = threading.Event()
+        started = time.monotonic()
+        state = {'killed': None, 'noted': False}
+
+        def guard():
+            killed = False
+            while not done.wait(ROW_WATCHDOG_POLL_SECONDS):
+                waited = time.monotonic() - started
+                if waited >= ROW_MAX_SECONDS and not killed:
+                    state['killed'] = kill_browser_processes()
+                    killed = True
+                elif killed and waited >= ROW_MAX_SECONDS + ROW_KILL_GRACE_SECONDS:
+                    if not state['noted']:
+                        state['noted'] = True
+                        self.pause_with_notice(task_id, ROW_STUCK_NOTICE)
+                    return
+
+        threading.Thread(target=guard, daemon=True).start()
+        try:
+            result = runner(account, bill, kind, **kwargs)
+        except Exception as error:
+            result = {'status':'needs_verification','reason':'执行异常，未自动重试',
+                      'error_type': type(error).__name__}
+        finally:
+            done.set()
+        if state['killed']:
+            result = dict(result, watchdog_killed=state['killed'],
+                          reason='执行超时，自动化进程已被强制终止；结果待人工核实')
+        return result
+
     def drain(self, task_id):
         from .ilog_unlock import run
-        from .ilog_session import SessionPool
-        from contextlib import nullcontext
-        with worker_lock(self.directory, blocking=True) as acquired:
-            if not acquired: return
-            with (SessionPool() if self.runner is None else nullcontext(None)) as session_pool:
+        with worker_lock(self.directory, blocking=True, timeout=TRANSITION_WAIT_SECONDS,
+                         give_up=lambda: not self.is_running(task_id)) as acquired:
+            if not acquired:
+                # 排队期间被取消则直接退出；仍处于 running 说明是排队超时，暂停并说明。
+                if self.is_running(task_id):
+                    self.pause_with_notice(task_id, WORKER_BUSY_NOTICE)
+                return
+            with self.task_session(task_id) as session_pool:
                 while True:
-                    with platform_transition_lock:
+                    slot = self.transition_slot(task_id)
+                    if slot == 'stopped': return
+                    if slot == 'timeout':
+                        self.pause_with_notice(task_id, TRANSITION_BUSY_NOTICE)
+                        return
+                    try:
                         if self.permission_check is not None and not self.permission_check():
                             self.control(task_id,'pause')
                             return
@@ -295,10 +429,15 @@ class TaskManager:
                             if data['state']!='running': return
                             index = next((i for i,r in enumerate(data['rows']) if r['status']=='waiting'),None)
                             if index is None:
-                                data['state']='completed'; self.save(db,data); return
+                                data['state'] = 'closing' if data.get('workerActive') else 'completed'
+                                self.save(db, data)
+                                return
                             item = data['rows'][index]
+                            data['workerActive'] = True
                             item.update(status='processing',message='正在查询并提交解锁')
                             self.save(db,data)
+                    finally:
+                        platform_transition_lock.release()
                     attempts=[]
                     actual_account, actual_name = (
                         (item['actualAccount'], item['actualAccountName']) if data.get('scope') == 'voyage'
@@ -322,7 +461,8 @@ class TaskManager:
                                     record_timings=data.get('record_timings', True),
                                     scope=data.get('scope', 'bill'), voyage_target=item.get('target'),
                                     verify_after=data.get('verify_after', True))
-                            result = (self.runner or run)(actual_account,item['bill'],item['kind'],**kwargs)
+                            result = self._run_with_watchdog(task_id, self.runner or run,
+                                actual_account, item['bill'], item['kind'], kwargs)
                         except Exception:
                             result = {'status':'needs_verification','reason':'执行异常，未自动重试'}
                         attempts.append({'account':actual_account,'accountName':actual_name,**result})
@@ -398,8 +538,11 @@ class TaskManager:
                             actualAccount=actual_account,actualAccountName=actual_name,attempts=attempts,
                             message=('已有历史记录，本次查询仍有目标锁；' if result.get('relocked_resubmission') else '') + notes.get(result.get('status'),'执行异常，请人工核实') + ('；'+str(result['message']) if not ok and result.get('message') else ''),
                             time=datetime.now(timezone.utc).isoformat())
-                        if not any(r['status']=='waiting' for r in latest['rows']): latest['state']='completed'
+                        if not any(r['status']=='waiting' for r in latest['rows']):
+                            latest['state'] = 'closing'
                         self.save(db,latest)
+                    if latest['state'] == 'closing':
+                        return
 
 
 _manager = None

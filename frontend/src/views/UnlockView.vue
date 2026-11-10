@@ -8,66 +8,139 @@
     </header>
 
     <template v-if="view === 'unlock'">
-      <div class="unlock-layout ds-scope">
-        <aside class="unlock-inputs unlock-workspace-card">
-      <h3 class="workspace-card-title">选择账号</h3>
-      <div class="unlock-account-strip">
-        <div class="unlock-account-field">
-        <div class="unlock-account-label"><span><el-icon><User /></el-icon>首选账号</span></div>
-        <el-select v-model="accountId" aria-label="首选账号" :disabled="busy" placeholder="选择账号">
-          <el-option v-for="a in accounts" :key="a.id" :label="a.name" :value="a.id" />
-        </el-select>
-        <span class="account-caption">{{ selectedAccount?.username || '请先添加业务账号' }}</span>
-        </div>
-        <div class="unlock-account-field">
-        <div class="unlock-account-label"><span>备用账号</span><el-switch v-model="fallbackEnabled" :disabled="busy" aria-label="启用备用账号"/></div>
-        <el-select v-model="selectedFallbackId" :disabled="busy || !fallbackEnabled || !fallbackCandidates.length" aria-label="备用账号" placeholder="没有可用备用账号">
-          <el-option v-for="a in fallbackCandidates" :key="a.id" :label="a.name" :value="a.id"/>
-        </el-select>
-        <span class="account-caption" :class="{ 'account-warning': fallbackEnabled && !fallbackCandidates.length }">{{ !fallbackEnabled ? '未启用，仅使用首选账号' : fallbackCandidates.length ? '仅首选账号查无订单时使用' : '没有可用备用账号，仅使用首选账号' }}</span>
-        </div>
-      </div>
-      <h3 class="workspace-card-title">解锁范围</h3><div class="scope-options"><label v-for="item in [{value:'bill',label:'按提单'},{value:'voyage',label:'按航次'}]" :key="item.value" :class="{selected:scope===item.value}"><input v-model="scope" type="radio" :value="item.value" :disabled="busy"/><span><strong>{{ $platformText(item.label) }}</strong><small>{{ item.value === 'bill' ? '按输入提单逐一处理' : '输入代表提单，解锁其所在整个航次' }}</small></span></label></div>
-          <div class="bill-input-grid"><section v-for="kind in kinds" :key="kind.key" class="unlock-input-panel">
-            <div class="unlock-section-heading"><h2><el-icon><Unlock /></el-icon>{{ kind.title }}</h2><span class="count-pill">{{ parsed[kind.key].length }} 条</span></div>
-            <label :for="`bills-${kind.key}`">{{ scope === 'voyage' ? '每行输入一个航次的代表提单，支持批量处理' : '每行一个提单号，也支持逗号、空格分隔' }}</label>
-            <textarea :id="`bills-${kind.key}`" v-model="input[kind.key]" :disabled="busy" spellcheck="false" :placeholder="kind.placeholder" />
-            <div class="input-caption"><span>{{ duplicateCount(kind.key) ? `已合并 ${duplicateCount(kind.key)} 条重复单号` : '自动去空行、合并同类重复单号' }}</span><button :disabled="busy || !input[kind.key]" @click="input[kind.key] = ''">清空</button></div>
-            <div v-if="duplicates[kind.key].length" class="duplicate-bills" role="status">
-              <strong>重复单号（每个仅保留一次）</strong>
-              <ul><li v-for="item in duplicates[kind.key]" :key="item.bill"><code>{{ item.bill }}</code><span>出现 {{ item.count }} 次 · 重复 {{ item.count - 1 }} 次</span></li></ul>
-            </div>
-            <el-text v-if="inspections[kind.key].some(r => r.status === 'invalid')" type="danger">有格式异常的单号，请在核对清单中查看并返回修改。</el-text>
-          </section>
-          </div><div class="execution-options"><label>执行模式 <el-radio-group v-model="verifyAfter" :disabled="busy" aria-label="执行模式" size="small"><el-radio-button :value="true">标准模式（复查）</el-radio-button><el-radio-button :value="false">快速模式（不复查）</el-radio-button></el-radio-group></label><label class="screenshot-options">截图方式 <el-radio-group v-model="screenshotPolicy" :disabled="busy" aria-label="截图方式" size="small"><el-radio-button value="errors">仅异常保存</el-radio-button><el-radio-button value="all">每笔保存</el-radio-button><el-radio-button value="none">不保存</el-radio-button></el-radio-group></label><label class="timing-option">分阶段耗时 <el-switch v-model="recordTimings" :disabled="busy"/></label></div><div class="unlock-input-actions"><el-button class="unlock-start" size="large" type="primary" :disabled="busy || resetting || !taskSyncReady || !reviewRows.length || !selectedAccount" :icon="VideoPlay" :loading="previewLoading" @click="scope === 'voyage' ? queryVoyages() : openReview()">{{ scope === 'voyage' ? '查询航次并核对' : '校验单号并核对清单' }}</el-button></div>
-          <p v-if="!runtimeAvailable" class="demo-note">{{ runtimeMessage }}</p>
-        </aside>
+      <div class="unlock-layout ds-scope unlock-stack">
 
-        <section class="unlock-execution"><section v-if="scope==='voyage'" class="voyage-review" aria-live="polite"><h3>航次核对</h3><el-alert title="本次操作影响整个航次，不仅是输入提单。" type="warning" :closable="false"/><p v-if="!preview">输入代表提单并查询后核对实际账号、船名航次及类型。</p><template v-else><el-alert v-for="(issue,i) in preview.issues" :key="i" :title="issue.bill+' · '+issue.kind+'：'+issue.message" type="error" :closable="false"/><el-select v-model="groupKey" aria-label="选择航次分组"><el-option v-for="g in preview.groups" :key="g.key" :value="g.key" :label="g.account_name+' · '+g.ship+'/'+g.voyage+' · '+(g.kind==='fee'?'费用小锁':'订单大锁')"/></el-select><template v-if="group"><dl><dt>输入代表提单</dt><dd>{{ group.bills?.join('、') || group.bill }}</dd><dt>实际账号</dt><dd>{{ group.account_name }}</dd><dt>船名 / 航次</dt><dd>{{ group.ship || '—' }} / {{ group.voyage || '—' }}</dd><dt>类型</dt><dd>{{ group.kind==='fee'?'费用小锁':'订单大锁' }}</dd><dt>查询匹配条数</dt><dd>{{ group.records.length }} 条（非全航次数）</dd></dl><details><summary>查看查询匹配明细</summary><el-table :data="group.records" max-height="260"><el-table-column v-for="c in ['id','booking','mbl','hbl','lock','ship','voyage']" :key="c" :prop="c" :label="({id:'记录ID',booking:'业务号',mbl:'主提单',hbl:'分提单',lock:'锁状态',ship:'船名',voyage:'航次'} as Record<string,string>)[c]" min-width="120"/></el-table></details></template><p>实际影响数量尚未确定，请核对全部分组。</p><p v-if="expired">预览已过期，请重新查询。</p><el-checkbox v-model="voyageAcknowledged" :disabled="!preview.can_execute || !!preview.issues.length || expired">已核对全部分组，确认按航次执行</el-checkbox></template><el-button type="primary" :loading="submitting" :disabled="!canExecuteVoyage || busy || !taskSyncReady || !runtimeAvailable" @click="start">确认按航次解锁</el-button></section>
+        <!-- Step 1 - execution settings: one horizontal row of controls -->
+        <section class="unlock-card unlock-config-card">
+          <div class="unlock-card-head">
+            <h2 class="unlock-card-title">执行配置</h2>
+          </div>
+          <div class="config-row">
+            <div class="config-field config-field--wide">
+              <div class="config-label"><span><el-icon><User /></el-icon>首选账号</span></div>
+              <el-select v-model="accountId" aria-label="首选账号" :disabled="busy" placeholder="选择账号">
+                <el-option v-for="a in accounts" :key="a.id" :label="a.name" :value="a.id" />
+              </el-select>
+              <span class="config-hint">{{ selectedAccount?.username || '请先添加业务账号' }}</span>
+            </div>
+            <div class="config-field config-field--wide">
+              <div class="config-label"><span>备用账号</span><el-switch v-model="fallbackEnabled" :disabled="busy" aria-label="启用备用账号"/></div>
+              <el-select v-model="selectedFallbackId" :disabled="busy || !fallbackEnabled || !fallbackCandidates.length" aria-label="备用账号" placeholder="没有可用备用账号">
+                <el-option v-for="a in fallbackCandidates" :key="a.id" :label="a.name" :value="a.id"/>
+              </el-select>
+              <span class="config-hint" :class="{ 'account-warning': fallbackEnabled && !fallbackCandidates.length }">{{ !fallbackEnabled ? '未启用，仅使用首选账号' : fallbackCandidates.length ? '仅首选账号查无订单时使用' : '没有可用备用账号，仅使用首选账号' }}</span>
+            </div>
+            <div class="config-field config-field--scope config-field--wide">
+              <div class="config-label"><span>解锁范围</span></div>
+              <div class="scope-options"><label v-for="item in [{value:'bill',label:'按提单'},{value:'voyage',label:'按航次'}]" :key="item.value" :class="{selected:scope===item.value}"><input v-model="scope" type="radio" :value="item.value" :disabled="busy"/><span><strong>{{ $platformText(item.label) }}</strong></span></label></div>
+              <span class="config-hint">{{ scope === 'bill' ? '按输入提单逐一处理' : '输入代表提单，解锁其所在整个航次' }}</span>
+            </div>
+            <div class="config-field">
+              <div class="config-label"><span>执行模式</span></div>
+              <el-radio-group v-model="verifyAfter" :disabled="busy" aria-label="执行模式"><el-radio-button :value="true">标准模式（复查）</el-radio-button><el-radio-button :value="false">快速模式（不复查）</el-radio-button></el-radio-group>
+            </div>
+            <div class="config-field">
+              <div class="config-label"><span>截图方式</span></div>
+              <el-radio-group v-model="screenshotPolicy" :disabled="busy" aria-label="截图方式"><el-radio-button value="errors">仅异常保存</el-radio-button><el-radio-button value="all">每笔保存</el-radio-button><el-radio-button value="none">不保存</el-radio-button></el-radio-group>
+            </div>
+            <div class="config-field config-field--switch">
+              <div class="config-label"><span>分阶段耗时</span></div>
+              <div class="config-switch-line"><el-switch v-model="recordTimings" :disabled="busy"/></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Step 2 - bill input: two panels side by side, folded to one line after submit -->
+        <section class="unlock-card unlock-inputs">
+          <div v-if="inputFolded" class="folded-strip">
+            <span class="folded-count"><b>{{ rows.length || total }}</b> 条单号</span>
+            <span class="folded-item">{{ selectedAccount?.name || '—' }}<template v-if="fallbackEnabled && fallbackAccount"> → {{ fallbackAccount.name }}</template></span>
+            <span class="folded-item">{{ verifyAfter ? '标准模式（复查）' : '快速模式（不复查）' }}</span>
+            <span class="folded-item">{{ screenshotPolicy === 'errors' ? '仅异常保存' : screenshotPolicy === 'all' ? '每笔保存' : '不保存' }}</span>
+            <button type="button" class="folded-toggle" @click="inputFolded = false">展开修改</button>
+          </div>
+          <div v-show="!inputFolded" class="input-body">
+            <div class="unlock-card-head">
+              <h2 class="unlock-card-title">单号输入</h2>
+            </div>
+            <div class="bill-input-grid"><section v-for="kind in kinds" :key="kind.key" class="unlock-input-panel">
+              <div class="unlock-section-heading"><h2><el-icon><Unlock /></el-icon>{{ kind.title }}</h2><span class="count-pill">{{ parsed[kind.key].length }} 条</span></div>
+              <label :for="`bills-${kind.key}`">{{ scope === 'voyage' ? '每行输入一个航次的代表提单，支持批量处理' : '每行一个提单号，也支持逗号、空格分隔' }}</label>
+              <textarea :id="`bills-${kind.key}`" v-model="input[kind.key]" :disabled="busy" spellcheck="false" :placeholder="kind.placeholder" />
+              <div class="input-caption"><span>{{ duplicateCount(kind.key) ? `已合并 ${duplicateCount(kind.key)} 条重复单号` : '自动去空行、合并同类重复单号' }}</span><button :disabled="busy || !input[kind.key]" @click="input[kind.key] = ''">清空</button></div>
+              <div v-if="duplicates[kind.key].length" class="duplicate-bills" role="status">
+                <strong>重复单号（每个仅保留一次）</strong>
+                <ul><li v-for="item in duplicates[kind.key]" :key="item.bill"><code>{{ item.bill }}</code><span>出现 {{ item.count }} 次 · 重复 {{ item.count - 1 }} 次</span></li></ul>
+              </div>
+              <el-text v-if="inspections[kind.key].some(r => r.status === 'invalid')" type="danger">有格式异常的单号，请在核对清单中查看并返回修改。</el-text>
+            </section>
+            </div>
+            <div class="unlock-input-actions">
+              <el-button class="unlock-start" size="large" type="primary" :disabled="busy || resetting || !taskSyncReady || !reviewRows.length || !selectedAccount" :icon="VideoPlay" :loading="previewLoading" @click="scope === 'voyage' ? queryVoyages() : openReview()">{{ scope === 'voyage' ? '查询航次并核对' : '校验单号并核对清单' }}</el-button>
+            </div>
+            <p v-if="!runtimeAvailable" class="demo-note">{{ runtimeMessage }}</p>
+          </div>
+        </section>
+
+        <section class="unlock-execution">
+          <section v-if="scope==='voyage'" class="voyage-review" aria-live="polite"><h3>航次核对</h3><el-alert title="本次操作影响整个航次，不仅是输入提单。" type="warning" :closable="false"/><p v-if="!preview">输入代表提单并查询后核对实际账号、船名航次及类型。</p><template v-else><el-alert v-for="(issue,i) in preview.issues" :key="i" :title="issue.bill+' · '+issue.kind+'：'+issue.message" type="error" :closable="false"/><el-select v-model="groupKey" aria-label="选择航次分组"><el-option v-for="g in preview.groups" :key="g.key" :value="g.key" :label="g.account_name+' · '+g.ship+'/'+g.voyage+' · '+(g.kind==='fee'?'费用小锁':'订单大锁')"/></el-select><template v-if="group"><dl><dt>输入代表提单</dt><dd>{{ group.bills?.join('、') || group.bill }}</dd><dt>实际账号</dt><dd>{{ group.account_name }}</dd><dt>船名 / 航次</dt><dd>{{ group.ship || '—' }} / {{ group.voyage || '—' }}</dd><dt>类型</dt><dd>{{ group.kind==='fee'?'费用小锁':'订单大锁' }}</dd><dt>查询匹配条数</dt><dd>{{ group.records.length }} 条（非全航次数）</dd></dl><details><summary>查看查询匹配明细</summary><el-table :data="group.records" max-height="260"><el-table-column v-for="c in ['id','booking','mbl','hbl','lock','ship','voyage']" :key="c" :prop="c" :label="({id:'记录ID',booking:'业务号',mbl:'主提单',hbl:'分提单',lock:'锁状态',ship:'船名',voyage:'航次'} as Record<string,string>)[c]" min-width="120"/></el-table></details></template><p>实际影响数量尚未确定，请核对全部分组。</p><p v-if="expired">预览已过期，请重新查询。</p><el-checkbox v-model="voyageAcknowledged" :disabled="!preview.can_execute || !!preview.issues.length || expired">已核对全部分组，确认按航次执行</el-checkbox></template><el-button type="primary" :loading="submitting" :disabled="!canExecuteVoyage || busy || !taskSyncReady || !runtimeAvailable" @click="start">确认按航次解锁</el-button></section>
+
+          <!-- Step 3 - progress: one sticky line while the page scrolls -->
           <section v-if="scope === 'bill' || rows.length" class="unlock-progress-panel">
-            <div class="unlock-section-heading"><h2>执行进度</h2><div v-if="taskState === 'running' || taskState === 'paused'"><el-button :disabled="controlling" :icon="paused ? VideoPlay : VideoPause" @click="controlTask(paused ? 'resume' : 'pause')">{{ paused ? '继续剩余项' : '暂停后续项' }}</el-button><el-button :disabled="controlling" @click="cancelRemaining">取消剩余项</el-button></div><StatusBadge v-else :tone="attentionCount ? 'warning' : rows.length ? 'success' : 'neutral'" :label="rows.length ? '任务已结束' : '等待开始'" /></div>
-            <p v-if="taskId">{{ taskVerifyAfter ? '标准模式（复查）' : '快速模式（不复查）' }}</p><div class="progress-number">{{ done }}<span>/ {{ rows.length || total }}</span><small>{{ paused ? '已暂停后续项' : taskState === 'running' ? '真实处理中' : rows.length ? '条已处理' : '条待处理' }}</small></div>
-            <el-progress :percentage="percentage" :show-text="false" :stroke-width="12" color="var(--accent)" />
-            <div class="progress-description"><span>{{ currentRow ? `正在处理 ${currentRow.bill}` : paused ? '已暂停，继续将跳过待核实项。' : rows.length ? `任务账号：${taskAccountName}` : '等待提交任务' }}</span><span v-if="pollError" class="progress-tip" role="alert"><el-icon><InfoFilled /></el-icon>{{ pollError }}</span></div>
+            <div class="progress-inline">
+              <div class="progress-count"><strong>{{ done }}</strong><span>/ {{ rows.length || total }}</span></div>
+              <div class="progress-body">
+                <el-progress :percentage="percentage" :show-text="false" :stroke-width="8" color="var(--accent)" />
+                <div class="progress-line">
+                  <span v-if="taskId" class="progress-mode">{{ taskVerifyAfter ? '标准模式（复查）' : '快速模式（不复查）' }}</span>
+                  <span class="progress-text">{{ currentRow ? `正在处理 ${currentRow.bill}` : paused ? '已暂停，继续将跳过待核实项。' : rows.length ? `任务账号：${taskAccountName}` : '等待提交任务' }}</span>
+                  <span v-if="pollError" class="progress-tip" role="alert"><el-icon><InfoFilled /></el-icon>{{ pollError }}</span>
+                  <span v-else-if="taskNotice || waitingHint" class="progress-tip" role="status"><el-icon><InfoFilled /></el-icon>{{ taskNotice || $platformText('正在等待平台切换或上一个任务收尾（关闭浏览器），稍候几秒即可开始；无需重复提交') }}</span>
+                </div>
+              </div>
+              <div class="progress-actions">
+                <template v-if="taskState === 'running' || taskState === 'paused'">
+                  <el-button size="small" :disabled="controlling" :icon="paused ? VideoPlay : VideoPause" @click="controlTask(paused ? 'resume' : 'pause')">{{ paused ? '继续剩余项' : '暂停后续项' }}</el-button>
+                  <el-button size="small" :disabled="controlling" @click="cancelRemaining">取消剩余项</el-button>
+                </template>
+                <StatusBadge v-else :tone="attentionCount ? 'warning' : rows.length ? 'success' : 'neutral'" :label="rows.length ? '任务已结束' : '等待开始'" />
+              </div>
+            </div>
           </section>
+
+          <!-- Step 4 - results: full width, capped height with its own scroll -->
           <section v-if="scope === 'bill' || rows.length" class="unlock-results-panel">
             <div class="unlock-section-heading"><h2>执行结果</h2><el-select v-model="filter" aria-label="筛选结果" style="width:150px" size="small"><el-option label="全部结果" value="all"/><el-option label="处理成功" value="success"/><el-option label="待人工处理" value="attention"/><el-option label="等待处理" value="waiting"/><el-option label="已取消" value="cancelled"/></el-select></div>
             <el-alert v-if="taskState === 'completed' && attentionCount" class="unlock-attention-summary" type="warning" :closable="false" :title="`本批已结束，${attentionCount} 项需人工核实，未自动重提解锁。`"><template #default><el-button link type="primary" @click="filter = 'attention'">只看待处理项</el-button></template></el-alert>
             <div v-if="!rows.length" class="unlock-empty"><el-icon><List /></el-icon><h3>逐笔结果将在这里显示</h3><p>平台响应、锁状态与异常原因都会保留；是否复查取决于任务模式。</p></div>
-            <el-table v-else :data="filteredRows" height="420" empty-text="没有符合条件的结果" :row-class-name="rowClassName">
+            <el-table v-else :data="filteredRows" max-height="520" empty-text="没有符合条件的结果" :row-class-name="rowClassName">
               <el-table-column type="index" label="#" width="44" fixed="left"/>
-              <el-table-column prop="bill" label="提单号" width="185" fixed="left"/>
-              <el-table-column label="结果" width="150" fixed="left"><template #default="{ row }"><StatusBadge :tone="statusStyle(row.status)" :label="statusText(row.status,row.detail)" /></template></el-table-column>
-              <el-table-column prop="businessNo" label="业务号" min-width="160"><template #default="{row}">{{ row.businessNo || row.detail?.before?.booking || '—' }}</template></el-table-column>
-              <el-table-column label="类型" min-width="100"><template #default="{ row }">{{ row.kind === 'fee' ? '费用解锁' : '订单解锁' }}</template></el-table-column>
-              <el-table-column label="实际使用账号" min-width="180"><template #default="{ row }">{{ row.actualAccountName || '—' }}<el-tag v-if="(row.attempts?.length || 0) > 1" size="small" type="info">兜底</el-tag><div v-for="(attempt,i) in row.attempts || []" :key="i" style="font-size:12px;color:var(--ink-muted)">{{ attempt.accountName }}：{{ attemptText(attempt.status) }}</div></template></el-table-column>
-              <el-table-column label="平台响应" min-width="120"><template #default="{ row }">{{ platformResponseText(row.detail) }}</template></el-table-column>
-              <el-table-column label="锁状态复查" min-width="120"><template #default="{ row }">{{ row.detail?.before?.lock || '—' }} → {{ lockRecheckText(row.detail) }}</template></el-table-column>
-              <el-table-column label="分阶段耗时" min-width="160"><template #default="{row}"><div v-for="(timing,i) in row.detail?.detail?.timings || row.detail?.timings || []" :key="i">{{ timing.stage }}：{{ timing.seconds }} 秒</div><span v-if="!(row.detail?.detail?.timings || row.detail?.timings)?.length">—</span></template></el-table-column><el-table-column label="说明" min-width="180"><template #default="{row}">{{ row.detail?.status === 'voyage_platform_confirmed' ? cleanMessage(row.detail?.reason || '航次平台确认，全航次影响数量未提供') : row.message }}</template></el-table-column>
-              <el-table-column prop="time" label="处理时间" width="100"/>
-              <el-table-column label="凭证" width="110"><template #default="{ row }"><el-link v-if="row.detail?.screenshot" :href="`/api/ilog/tasks/${encodeURIComponent(taskId)}/evidence/${row.evidenceIndex}`" target="_blank" rel="noopener" type="primary">查看截图</el-link><span v-else>{{ row.detail?.screenshotExpired ? '已过期清理' : '—' }}</span></template></el-table-column>
+              <el-table-column prop="bill" label="提单号" width="178" fixed="left">
+                <template #default="{ row }">
+                  <div class="bill-cell">
+                    <span class="bill-no">{{ row.bill }}</span>
+                    <el-tooltip v-if="(row.detail?.detail?.timings || row.detail?.timings || []).length" placement="right" :show-after="120">
+                      <template #content>
+                        <div class="timing-pop">
+                          <div v-for="(t, i) in (row.detail?.detail?.timings || row.detail?.timings || [])" :key="i" class="timing-pop__row"><span>{{ t.stage }}</span><b>{{ t.seconds.toFixed(2) }} s</b></div>
+                        </div>
+                      </template>
+                      <span class="bill-timing"><el-icon><Clock /></el-icon>{{ $platformText('合计') }} {{ (row.detail?.total_seconds ?? (row.detail?.detail?.timings || row.detail?.timings || []).reduce((s: number, t: any) => s + t.seconds, 0)).toFixed(2) }} s</span>
+                    </el-tooltip>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column label="结果" width="132" fixed="left"><template #default="{ row }"><StatusBadge :tone="statusStyle(row.status)" :label="statusText(row.status,row.detail)" /></template></el-table-column>
+              <el-table-column prop="businessNo" label="业务号" min-width="150"><template #default="{row}">{{ row.businessNo || row.detail?.before?.booking || '—' }}</template></el-table-column>
+              <el-table-column label="类型" width="96"><template #default="{ row }">{{ row.kind === 'fee' ? '费用解锁' : '订单解锁' }}</template></el-table-column>
+              <el-table-column label="实际使用账号" min-width="170"><template #default="{ row }">{{ row.actualAccountName || '—' }}<el-tag v-if="(row.attempts?.length || 0) > 1" size="small" type="info">兜底</el-tag><div v-for="(attempt,i) in row.attempts || []" :key="i" style="font-size:12px;color:var(--ink-muted)">{{ attempt.accountName }}：{{ attemptText(attempt.status) }}</div></template></el-table-column>
+              <el-table-column label="平台响应" width="104"><template #default="{ row }">{{ platformResponseText(row.detail) }}</template></el-table-column>
+              <el-table-column label="锁状态复查" width="116"><template #default="{ row }">{{ row.detail?.before?.lock || '—' }} → {{ lockRecheckText(row.detail) }}</template></el-table-column>
+              <el-table-column label="说明" min-width="200"><template #default="{row}">{{ row.detail?.status === 'voyage_platform_confirmed' ? cleanMessage(row.detail?.reason || '航次平台确认，全航次影响数量未提供') : row.message }}</template></el-table-column>
+              <el-table-column prop="time" label="处理时间" width="92"/>
+              <el-table-column label="凭证" width="100"><template #default="{ row }"><el-link v-if="row.detail?.screenshot" :href="`/api/ilog/tasks/${encodeURIComponent(taskId)}/evidence/${row.evidenceIndex}`" target="_blank" rel="noopener" type="primary">查看截图</el-link><span v-else>{{ row.detail?.screenshotExpired ? '已过期清理' : '—' }}</span></template></el-table-column>
             </el-table>
-            <footer class="unlock-results-footer"><span>{{ rows.length ? `核实通过 ${successCount} 条 · 待核实 ${attentionCount} 条` : '结果可导出为 CSV' }}</span><div><el-button :icon="Download" :disabled="!rows.length" @click="exportResults()">导出结果</el-button><el-button :icon="RefreshRight" :disabled="!taskId" @click="refreshTask">刷新结果</el-button></div></footer>
+            <footer class="unlock-results-footer"><span>{{ rows.length ? `核实通过 ${successCount} 条 · 待核实 ${attentionCount} 条` : '结果可导出为 CSV' }}<span v-if="rows.length" class="results-hint">{{ $platformText('悬停提单号可查看分阶段耗时') }}</span></span><div><el-button :icon="Download" :disabled="!rows.length" @click="exportResults()">导出结果</el-button><el-button :icon="RefreshRight" :disabled="!taskId" @click="refreshTask">刷新结果</el-button></div></footer>
           </section>
         </section>
       </div>
@@ -82,7 +155,7 @@
         <el-table-column label="创建时间" min-width="170"><template #default="{ row }">{{ formatDate(row.createdAt) }}</template></el-table-column>
         <el-table-column prop="accountName" label="主账号" min-width="180"/>
         <el-table-column prop="fallbackAccountName" label="兜底账号" min-width="180"/>
-        <el-table-column label="状态" width="100"><template #default="{ row }">{{ {running:'执行中',paused:'已暂停',completed:'已结束'}[row.state as Task['state']] }}</template></el-table-column>
+        <el-table-column label="状态" width="100"><template #default="{ row }">{{ {running:'执行中',paused:'已暂停',closing:'收尾中',completed:'已结束'}[row.state as Task['state']] }}</template></el-table-column>
         <el-table-column prop="total" label="总项数" width="80"/>
         <el-table-column prop="attention" label="待核实" width="80"/>
         <el-table-column label="操作" width="90"><template #default="{ row }"><el-button link type="primary" @click="viewHistory(row.id)">查看</el-button></template></el-table-column>
@@ -156,10 +229,10 @@ import { downloadBlob } from '../services/api'
 import { inspectBills, duplicateBills } from '../services/billValidation.mjs'
 type Kind = 'fee' | 'order'
 type Status = 'waiting' | 'processing' | 'success' | 'attention' | 'cancelled'
-type Detail = { submitted?: boolean; verification_performed?: boolean; reason?:string; detail?:{timings?:{stage:string;seconds:number}[]}; timings?:{stage:string;seconds:number}[]; status?: string; platform_success?: boolean; before?: {lock?: string;booking?:string}; after?: {lock?: string}; screenshot?: string; screenshotExpired?: boolean }
+type Detail = { submitted?: boolean; verification_performed?: boolean; reason?:string; detail?:{timings?:{stage:string;seconds:number}[]}; timings?:{stage:string;seconds:number}[]; total_seconds?: number; status?: string; platform_success?: boolean; before?: {lock?: string;booking?:string}; after?: {lock?: string}; screenshot?: string; screenshotExpired?: boolean }
 type Attempt = { account: string; accountName: string; status: string }
 type Row = { bill: string; businessNo?:string; kind: Kind; status: Status; message: string; time: string; detail?: Detail; evidenceIndex?: number; actualAccountName?: string; attempts?: Attempt[] }
-type Task = { id: string; account: string; accountName: string; fallbackAccount?: string; fallbackAccountName?: string; state: 'running' | 'paused' | 'completed'; rows: Row[]; verify_after?: boolean; createdAt?: string; completedAt?: string }
+type Task = { id: string; account: string; accountName: string; fallbackAccount?: string; fallbackAccountName?: string; state: 'running' | 'paused' | 'closing' | 'completed'; rows: Row[]; verify_after?: boolean; createdAt?: string; completedAt?: string; notice?: string }
 type HistoryItem = Omit<Task,'rows'> & {total:number;attention:number}
 const historyOpen=ref(false), historyDetailOpen=ref(false), historyLoading=ref(false)
 const historyItems=ref<HistoryItem[]>([]), historyTask=ref<Task|null>(null)
@@ -237,7 +310,7 @@ onMounted(async () => {
     const latest = await axios.get<Task | null>('/api/ilog/tasks/latest')
     if (latest.data && latest.data.state !== 'completed') applyTask(latest.data)
     taskSyncReady.value = true
-  } catch { pollError.value = '无法连接任务服务，请检查本地服务状态' }
+  } catch (error) { pollError.value = axios.isAxiosError(error) && error.response?.status === 401 ? '登录已失效，请重新登录' : '无法连接任务服务，请检查本地服务状态' }
 })
 const selectedAccount = computed(() => accounts.value.find(a => a.id === accountId.value))
 const fallbackEnabled = ref(true)
@@ -293,9 +366,16 @@ const controlling = ref(false)
 const resetting = ref(false)
 const taskSyncReady = ref(false)
 const pollError = ref('')
+const taskNotice = ref('')
+const taskStartedAt = ref(0)
+let currentTaskId = ''
 const busy = computed(() => submitting.value || resetting.value || taskState.value === 'running' || taskState.value === 'paused')
 const paused = computed(() => taskState.value === 'paused')
 const filter = ref('all')
+// Presentation only: the bill input folds to a one-line summary once a task
+// exists, and unfolds again when the workspace is cleared for a new task.
+const inputFolded = ref(false)
+watch(() => rows.value.length > 0, hasRows => { inputFolded.value = hasRows })
 const reviewOpen = ref(false)
 const done = computed(() => rows.value.filter(r => !['waiting','processing'].includes(r.status)).length)
 const successCount = computed(() => rows.value.filter(r => r.status === 'success').length)
@@ -303,11 +383,15 @@ const attentionCount = computed(() => rows.value.filter(r => r.status === 'atten
 const percentage = computed(() => rows.value.length ? Math.round(done.value / rows.value.length * 100) : 0)
 const currentRow = computed(() => rows.value.find(r => r.status === 'processing'))
 const filteredRows = computed(() => filter.value === 'all' ? rows.value : rows.value.filter(r => r.status === filter.value))
+// A platform switch or queue can leave rows waiting for tens of seconds; explain it instead of looking stuck.
+const waitingHint = computed(() => taskState.value === 'running' && rows.value.length > 0 && !rows.value.some(r => r.status === 'processing') && now.value - taskStartedAt.value >= 8000)
 let timer: ReturnType<typeof setTimeout> | undefined
 let disposed = false
 function applyTask(task: Task) {
   taskVerifyAfter.value=task.verify_after !== false
   taskId.value = task.id; taskState.value = task.state; taskAccountName.value = task.accountName
+  taskNotice.value = task.notice || ''
+  if (task.id !== currentTaskId) { currentTaskId = task.id; taskStartedAt.value = Date.now() }
   accountId.value = task.account
   fallbackEnabled.value = !!task.fallbackAccount; fallbackId.value = task.fallbackAccount || ''
   taskFallbackName.value = task.fallbackAccountName || ''
@@ -322,9 +406,9 @@ async function refreshTask() {
     const response = await axios.get<Task>(`/api/ilog/tasks/${encodeURIComponent(requestedId)}`)
     if (taskId.value !== requestedId || disposed) return
     pollError.value = ''; applyTask(response.data)
-  } catch {
+  } catch (error) {
     if (taskId.value !== requestedId || disposed) return
-    pollError.value = '连接中断，结果尚未同步；请勿重新提交'
+    pollError.value = axios.isAxiosError(error) && error.response?.status === 401 ? '登录已失效，请重新登录' : '连接中断，结果尚未同步；请勿重新提交'
     clearTimeout(timer); if (!disposed) timer = setTimeout(refreshTask,4000)
   }
 }
@@ -332,15 +416,18 @@ async function newTask() {
   if (busy.value || controlling.value || resetting.value || !taskSyncReady.value) return
   resetting.value = true
   try {
+    // Soft hint only: the pending receipt never blocks resetting the workspace.
     if (localStorage.getItem('finance-ilog-pending-task')) {
-      ElMessage.warning('上次提交结果尚未确认，请先核对历史记录，当前凭据不会清除')
-      return
+      ElMessage.info('上次提交结果尚未确认；再次提交相同单号会沿用凭据，不会重复解锁')
     }
     if (input.value.fee.trim() || input.value.order.trim()) {
       await ElMessageBox.confirm('将清空当前单号、进度和结果；历史记录、截图和防重复凭据仍保留。', '新建任务', { confirmButtonText: '新建任务', cancelButtonText: '取消' })
     }
     const latest = (await axios.get<Task | null>('/api/ilog/tasks/latest')).data
-    if (latest && latest.state !== 'completed') {
+    if (latest && latest.state === 'closing') {
+      // Teardown (closing) only takes seconds: keep the workspace open, a new task queues automatically.
+      ElMessage.info('上一个任务正在收尾（约几秒）；现在提交新任务会自动排队衔接，无需等待')
+    } else if (latest && latest.state !== 'completed') {
       applyTask(latest)
       ElMessage.warning('有尚未结束的任务，已恢复；请先完成或取消剩余项')
       return
@@ -348,6 +435,7 @@ async function newTask() {
     clearTimeout(timer)
     taskId.value = ''; taskState.value = ''; rows.value = []
     taskAccountName.value = ''; taskFallbackName.value = ''
+    taskNotice.value = ''; taskStartedAt.value = 0; currentTaskId = ''
     input.value = { fee: '', order: '' }; filter.value = 'all'
     pollError.value = ''; reviewOpen.value = false; reviewAcknowledged.value = false
     ElMessage.success('可以开始新任务，上次结果可在管理 → 解锁历史中查看')
@@ -370,7 +458,15 @@ async function start() {
     applyTask(response.data); reviewOpen.value = false; filter.value = 'all'
     ElMessage.success('任务已提交')
   } catch (error) {
-    ElMessage.error(axios.isAxiosError(error) ? error.response?.data?.detail || '提交结果未确认，请刷新任务状态，不要重复新建' : '无法保存提交凭据，未建立任务')
+    if (axios.isAxiosError(error)) {
+      // A definite 4xx rejection means the task was never created: clear the receipt so the
+      // hint cannot get stuck. Unknown outcomes (network error / 5xx) keep the receipt so a
+      // retry reuses the same request id and cannot unlock twice.
+      if (error.response && error.response.status >= 400 && error.response.status < 500) {
+        localStorage.removeItem('finance-ilog-pending-task')
+      }
+      ElMessage.error(error.response?.data?.detail || '提交结果未确认，请刷新任务状态，不要重复新建')
+    } else ElMessage.error('无法保存提交凭据，未建立任务')
   } finally { submitting.value = false }
 }
 async function controlTask(action: 'pause' | 'resume' | 'cancel') {
@@ -449,57 +545,186 @@ onBeforeUnmount(() => { disposed = true; clearTimeout(timer);clearInterval(expir
 </script>
 
 <style scoped>
-.scope-options,.execution-options,.bill-input-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-bottom:16px}.scope-options label{display:flex;align-items:center;gap:12px;padding:16px;border:1px solid var(--el-border-color);border-radius:8px;cursor:pointer}.scope-options .selected{border-color:var(--accent);background:var(--el-fill-color-light)}.execution-options label{display:flex;align-items:center;gap:12px}.execution-options .el-select{width:140px}.unlock-layout{grid-template-columns:minmax(0,1.2fr) minmax(0,1fr)}.unlock-inputs,.unlock-execution,.unlock-input-panel{min-width:0}.bill-input-grid textarea{min-height:240px}.voyage-review{padding:20px;border:1px solid var(--el-border-color);border-radius:8px;margin-bottom:16px;background:var(--el-bg-color)}.voyage-review dl{display:grid;grid-template-columns:110px minmax(0,1fr);gap:12px}.voyage-review dd{margin:0;overflow-wrap:anywhere}.voyage-review p,.voyage-review dt{color:var(--ink-muted);font-size:13px}.voyage-review summary{padding:12px 0;cursor:pointer;color:var(--accent)}.voyage-review .el-select{width:100%}.voyage-review .el-checkbox{white-space:normal;height:auto;margin-bottom:16px}@media(max-width:1100px){.unlock-layout{grid-template-columns:minmax(0,1fr)}}@media(max-width:600px){.scope-options,.execution-options,.bill-input-grid{grid-template-columns:minmax(0,1fr)}}
+/* ============================================================
+   v5 - vertical stack: settings -> input -> progress -> results
+   Only layout and appearance change here; every state, request and
+   control still comes from the same script bindings.
+   ============================================================ */
 
-.unlock-workspace-card{display:block;background:var(--el-bg-color);border:1px solid var(--el-border-color-lighter);border-radius:10px;padding:22px;align-self:start}.workspace-card-title{font-size:16px;margin:0 0 16px}.unlock-workspace-card .unlock-account-strip{padding:0;border:0;background:transparent;box-shadow:none;gap:20px;margin-bottom:24px}.unlock-workspace-card .unlock-input-panel{padding:16px}.unlock-workspace-card .unlock-section-heading h2{font-size:16px}.unlock-workspace-card .bill-input-grid textarea{min-height:170px}.unlock-workspace-card .execution-options{padding-top:18px;border-top:1px solid var(--el-border-color-lighter)}.unlock-workspace-card .scope-options{margin-bottom:20px}.unlock-execution .voyage-review{padding:22px}.unlock-input-actions .el-button{width:100%}.unlock-workspace-card .unlock-input-actions{padding:0;margin-top:18px}.unlock-workspace-card .bill-input-grid{margin-bottom:20px}@media(max-width:600px){.unlock-workspace-card{padding:16px}}
-.scope-options strong{font-size:14px;font-weight:600}.scope-options small{display:block;margin-top:5px;font-size:12px;line-height:1.5;color:var(--ink-muted)}
-.execution-options{display:flex;flex-wrap:wrap;align-items:center;gap:16px 24px}.execution-options>label{display:inline-flex;flex:0 0 auto;flex-wrap:nowrap;align-items:center;gap:10px;font-size:13px;white-space:nowrap}.execution-options .el-radio-group{display:inline-flex;flex-wrap:nowrap}.execution-options .el-switch{flex-shrink:0}.execution-options>.screenshot-options{margin-left:auto}.execution-options>.timing-option{flex-basis:100%}@media(max-width:600px){.execution-options{gap:16px}.execution-options>label{max-width:100%;flex-wrap:wrap}.execution-options>.screenshot-options{margin-left:0}}
-.voyage-review h3{margin:0 0 16px;font-size:18px}.voyage-review>.el-alert{margin-bottom:18px}.voyage-review>.el-button{width:100%;margin-top:18px}
-.ds-scope .unlock-progress-panel, .ds-scope .unlock-results-panel { border-radius: var(--ds-radius-card); box-shadow: var(--ds-shadow-1); }
-.ds-scope .unlock-section-heading { min-height: var(--ds-control-h); }
-.ds-scope .unlock-results-footer, .ds-scope .count-pill, .ds-scope .progress-number { font-variant-numeric: tabular-nums; }
-.ds-scope .el-table .ds-badge { font-size: 11px; }
-.ds-scope .unlock-empty { min-height: 220px; }
-
-/* v4 - 1:1 redesign: hero progress, numbered sections, result rhythm.
-   The execution-mode / screenshot segmented controls are intentionally
-   untouched: they keep the shipped appearance. */
-.ds-scope .unlock-progress-panel {
-  background: linear-gradient(180deg, var(--ds-hero-top) 0%, var(--ds-hero-bottom) 100%);
-  border-color: var(--ds-primary-100); padding: 22px 24px;
+/* ---------- page stack ---------- */
+.unlock-layout.unlock-stack { display: block; }
+.unlock-stack { counter-reset: unlock-step; }
+.unlock-stack > * + * { margin-top: 14px; }
+.unlock-card {
+  background: var(--ds-surface); border: 1px solid var(--ds-border);
+  border-radius: var(--ds-radius-card); box-shadow: var(--ds-shadow-1);
+  padding: 18px 22px; min-width: 0;
 }
-.ds-scope .unlock-progress-panel .unlock-section-heading { margin-bottom: 18px; }
-.ds-scope .unlock-progress-panel .unlock-section-heading h2 { font-size: 15px; font-weight: 650; }
-.ds-scope .progress-number {
-  font-size: 48px; letter-spacing: -.04em; color: var(--ds-text); margin: 4px 0 18px;
-}
-.ds-scope .progress-number span { font-size: 26px; font-weight: 500; color: #9fb6d1; }
-.ds-scope .progress-number small { font-size: 12px; color: var(--ds-muted); }
-.ds-scope .unlock-progress-panel .el-progress-bar__outer { height: 8px !important; border-radius: 8px; background: var(--ds-primary-100); }
-.ds-scope .unlock-progress-panel .el-progress-bar__inner { border-radius: 8px; }
-.ds-scope .unlock-progress-panel .progress-description { color: var(--ds-muted); }
-
-.ds-scope .unlock-inputs { counter-reset: ds-section; }
-.ds-scope .unlock-inputs > .workspace-card-title {
-  counter-increment: ds-section; display: flex; align-items: center; gap: 10px;
-  margin: 0 0 16px; padding-top: 18px; border-top: 1px solid var(--ds-border);
+.unlock-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.unlock-card-title {
+  display: flex; align-items: center; gap: 10px; margin: 0;
   font-size: 15px; font-weight: 650; color: var(--ds-text);
 }
-.ds-scope .unlock-inputs > .workspace-card-title:first-child { padding-top: 0; border-top: 0; }
-.ds-scope .unlock-inputs > .workspace-card-title::before {
-  content: counter(ds-section, decimal-leading-zero);
+.unlock-card-title::before {
+  counter-increment: unlock-step; content: counter(unlock-step, decimal-leading-zero);
   display: inline-flex; align-items: center; justify-content: center;
-  flex: 0 0 26px; height: 26px; border-radius: 6px;
+  width: 24px; height: 24px; border-radius: 6px;
   background: var(--ds-primary-50); border: 1px solid var(--ds-primary-100);
   color: var(--ds-primary); font-size: 11px; font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
-.ds-scope .scope-options label.selected {
-  background: var(--ds-primary-50); border-color: var(--ds-primary-100);
-  box-shadow: inset 3px 0 0 var(--ds-primary);
-}
 
-.ds-scope .unlock-results-panel { background: var(--ds-surface); border-color: var(--ds-border); padding: 22px 24px; }
+/* ---------- settings: one horizontal row ---------- */
+.config-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 16px 30px; }
+/* the three left-side fields get extra breathing room; the capsule groups
+   on the right stay closer so everything fits on one line */
+.config-field--wide { margin-right: 16px; }
+.config-field { display: flex; flex-direction: column; gap: 7px; min-width: 0; flex: 0 1 auto; }
+/* every control sits on the same 32px line so the row reads aligned;
+   Element Plus internals are rendered by child components, so they must be
+   reached through :deep() or the scoped attribute never matches */
+.config-field > .el-select { width: 198px; }
+.config-field :deep(.el-select__wrapper) { min-height: 32px; height: 32px; padding-top: 3px; padding-bottom: 3px; border-radius: 6px; }
+/* thin capsule look for the radio groups, same shell as the scope capsule */
+.config-field :deep(.el-radio-group.el-radio-group) { display: inline-flex; height: 32px; padding: 3px; background: #eef1f5; border-radius: 8px; }
+.config-field :deep(.el-radio-button__inner) {
+  height: 26px; padding: 0 13px; border: 0; background: transparent;
+  display: inline-flex; align-items: center; font-size: 12.5px;
+  color: var(--ds-muted); border-radius: 6px; box-shadow: none;
+}
+.config-field :deep(.el-radio-button:first-child .el-radio-button__inner) { border-radius: 6px 0 0 6px; }
+.config-field :deep(.el-radio-button:last-child .el-radio-button__inner) { border-radius: 0 6px 6px 0; }
+.config-field :deep(.el-radio-button__original-radio:checked + .el-radio-button__inner) {
+  background: var(--ds-surface); color: var(--accent); font-weight: 600;
+  box-shadow: 0 1px 3px rgb(0 0 0 / .08);
+}
+.config-field--scope .scope-options { padding: 3px; }
+.config-field--scope .scope-options label { height: 26px; padding: 0 14px; }
+.config-switch-line { display: flex; align-items: center; height: 32px; }
+.config-switch-line :deep(.el-switch.el-switch) { height: 22px; }
+.config-switch-line :deep(.el-switch__core) { min-width: 42px; height: 22px; border-radius: 11px; }
+.config-label :deep(.el-switch) { height: 20px; }
+.config-label :deep(.el-switch__core) { min-width: 38px; height: 20px; border-radius: 10px; }
+.config-field--switch { justify-content: flex-start; }
+.config-label {
+  display: flex; align-items: center; gap: 8px; min-height: 24px;
+  font-size: 12px; font-weight: 600; color: var(--ds-text-2); white-space: nowrap;
+}
+.config-label .el-icon { color: var(--accent); font-size: 15px; }
+.config-hint {
+  max-width: 230px; font-size: 11.5px; line-height: 1.5; color: var(--ds-muted);
+  min-height: 17px; overflow-wrap: anywhere;
+}
+.config-hint.account-warning { color: var(--el-color-warning); }
+
+/* scope: same capsule language as the execution-mode controls */
+.config-field--scope .scope-options {
+  display: inline-flex; gap: 4px; padding: 3px; border-radius: 8px; background: #eef1f5;
+}
+.config-field--scope .scope-options label {
+  display: inline-flex; align-items: center; gap: 6px; padding: 5px 14px;
+  border: 0; border-radius: 6px; background: transparent; cursor: pointer;
+  font-size: 13px; color: var(--ds-muted); box-shadow: none;
+}
+.config-field--scope .scope-options label.selected {
+  background: var(--ds-surface); color: var(--accent);
+  font-weight: 600; box-shadow: 0 1px 3px rgb(0 0 0 / .08);
+}
+.config-field--scope .scope-options input { position: absolute; width: 0; height: 0; opacity: 0; }
+.scope-options strong { font-size: 13px; font-weight: inherit; }
+
+/* ---------- bill input ---------- */
+.unlock-inputs { display: block; }
+.bill-input-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 0; }
+.unlock-input-panel {
+  min-width: 0; padding: 14px 16px; background: var(--ds-surface);
+  border: 1px solid var(--ds-border); border-radius: 10px;
+}
+.unlock-input-panel label { margin-bottom: 8px; }
+.unlock-input-panel textarea { min-height: 120px; max-height: 220px; }
+.bill-input-grid .unlock-section-heading { margin-bottom: 12px; }
+.bill-input-grid .unlock-section-heading h2 { font-size: 14px; }
+.bill-input-grid .unlock-section-heading h2 .el-icon { font-size: 17px; }
+.unlock-input-actions { display: flex; align-items: center; gap: 14px; margin-top: 14px; }
+.unlock-input-actions .unlock-start.el-button { width: auto; height: 40px; padding: 0 26px; }
+.unlock-inputs > .demo-note { margin-top: 10px; }
+
+/* folded summary shown once a task exists */
+.folded-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; font-size: 13px; color: var(--ds-muted); }
+.folded-count { color: var(--ds-text); }
+.folded-count b { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.folded-item { position: relative; padding-left: 20px; }
+.folded-item::before { content: ""; position: absolute; left: 0; top: 50%; width: 4px; height: 4px; margin-top: -2px; border-radius: 50%; background: #c7d0dc; }
+.folded-toggle {
+  margin-left: auto; padding: 4px 2px; border: 0; background: none;
+  color: var(--accent); font: inherit; font-size: 12.5px; cursor: pointer;
+}
+.folded-toggle:hover { color: var(--ds-primary-hover); }
+
+/* ---------- progress: one sticky line ---------- */
+.unlock-progress-panel {
+  position: sticky; top: 0; z-index: 6;
+  background: var(--ds-surface); border: 1px solid var(--ds-border);
+  border-radius: var(--ds-radius-card); box-shadow: var(--ds-shadow-1);
+  padding: 12px 20px;
+}
+.progress-inline { display: flex; align-items: center; gap: 18px; }
+.progress-count { display: flex; align-items: baseline; gap: 2px; white-space: nowrap; }
+.progress-count strong {
+  font-size: 26px; font-weight: 700; color: var(--ds-primary);
+  letter-spacing: -.5px; font-variant-numeric: tabular-nums;
+}
+.progress-count span { font-size: 13px; color: var(--ds-muted); }
+.progress-body { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 6px; }
+.progress-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; min-height: 16px; font-size: 12px; color: var(--ds-muted); }
+.progress-mode { font-weight: 600; color: var(--ds-text-2); }
+.progress-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.progress-actions { display: flex; align-items: center; gap: 8px; }
+.progress-actions .el-button + .el-button { margin-left: 0; }
+
+/* ---------- results ---------- */
+.unlock-results-panel {
+  display: block; padding: 18px 0;
+  background: var(--ds-surface); border: 1px solid var(--ds-border);
+  border-radius: var(--ds-radius-card); box-shadow: var(--ds-shadow-1);
+}
+.unlock-results-panel > .unlock-section-heading,
+.unlock-results-panel > .unlock-attention-summary,
+.unlock-results-panel > .unlock-empty,
+.unlock-results-panel > .unlock-results-footer { margin-left: 22px; margin-right: 22px; }
+.unlock-results-panel > .unlock-section-heading { min-height: 32px; }
+.unlock-results-panel > .unlock-section-heading h2 { font-size: 15px; font-weight: 650; }
+.bill-cell { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.bill-no { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; overflow-wrap: anywhere; }
+.bill-timing {
+  display: inline-flex; align-items: center; gap: 4px; align-self: flex-start;
+  border-bottom: 1px dashed #b9c3d1; color: var(--ds-muted); font-size: 11px;
+  font-variant-numeric: tabular-nums; cursor: help; white-space: nowrap;
+}
+.bill-timing .el-icon { font-size: 12px; }
+.timing-pop { display: grid; gap: 2px; min-width: 132px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.timing-pop__row { display: flex; justify-content: space-between; gap: 18px; }
+.timing-pop__row span { color: rgb(255 255 255 / .72); }
+.timing-pop__row b { font-weight: 600; }
+.results-hint { margin-left: 14px; color: #a2acb9; }
+
+/* ---------- voyage review (unchanged appearance) ---------- */
+.voyage-review { padding: 20px; border: 1px solid var(--ds-border); border-radius: var(--ds-radius-card); background: var(--ds-surface); }
+.voyage-review h3 { margin: 0 0 16px; font-size: 17px; }
+.voyage-review dl { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 12px; }
+.voyage-review dd { margin: 0; overflow-wrap: anywhere; }
+.voyage-review p, .voyage-review dt { color: var(--ink-muted); font-size: 13px; }
+.voyage-review summary { padding: 12px 0; cursor: pointer; color: var(--accent); }
+.voyage-review .el-select { width: 100%; }
+.voyage-review .el-checkbox { height: auto; margin-bottom: 16px; white-space: normal; }
+.voyage-review > .el-alert { margin-bottom: 18px; }
+.voyage-review > .el-button { width: 100%; margin-top: 18px; }
+
+/* ---------- design-system polish that still applies ---------- */
+.ds-scope .unlock-section-heading { min-height: var(--ds-control-h); }
+.ds-scope .unlock-results-footer, .ds-scope .count-pill, .ds-scope .progress-count { font-variant-numeric: tabular-nums; }
+.ds-scope .el-table .ds-badge { font-size: 11px; }
+.ds-scope .unlock-empty { min-height: 200px; }
 .ds-scope .unlock-results-footer { border-top: 1px solid var(--ds-border); padding-top: 16px; margin-top: 16px; }
 .ds-scope .unlock-empty > .el-icon {
   display: inline-flex; align-items: center; justify-content: center;
@@ -507,9 +732,30 @@ onBeforeUnmount(() => { disposed = true; clearTimeout(timer);clearInterval(expir
   background: var(--ds-bg); color: var(--ds-primary); font-size: 26px; margin-bottom: 16px;
 }
 .ds-scope .unlock-empty h3 { font-size: 16px; font-weight: 650; color: var(--ds-text); }
+.ds-scope .unlock-progress-panel .el-progress-bar__outer { height: 8px !important; border-radius: 8px; background: var(--ds-primary-100); }
+.ds-scope .unlock-progress-panel .el-progress-bar__inner { border-radius: 8px; }
+
+@media (max-width: 1200px) {
+  .config-field { flex: 1 1 200px; }
+  .config-field .el-select { width: 100%; }
+  .config-hint { max-width: none; }
+}
+@media (max-width: 900px) {
+  .bill-input-grid { grid-template-columns: minmax(0, 1fr); }
+}
 @media (max-width: 720px) {
-  .ds-scope .unlock-progress-panel { padding: 18px; }
-  .ds-scope .progress-number { font-size: 36px; }
-  .ds-scope .progress-number span { font-size: 20px; }
+  .unlock-card { padding: 16px; }
+  .progress-inline { flex-wrap: wrap; gap: 10px 14px; }
+  .progress-body { flex-basis: 100%; order: 3; }
+  .progress-actions { margin-left: auto; }
+  .progress-text { white-space: normal; }
+  .unlock-results-panel { padding: 14px 0; }
+  .unlock-results-panel > .unlock-section-heading,
+  .unlock-results-panel > .unlock-attention-summary,
+  .unlock-results-panel > .unlock-empty,
+  .unlock-results-panel > .unlock-results-footer { margin-left: 14px; margin-right: 14px; }
+  .results-hint { display: none; }
+  .unlock-input-actions { flex-wrap: wrap; }
+  .unlock-input-actions .unlock-start.el-button { width: 100%; }
 }
 </style>

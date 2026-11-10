@@ -4,6 +4,8 @@ ROLE_CAPABILITIES = {"excel": frozenset({"excel"}), "mail": frozenset({"mail"}),
 def required_capability(path: str):
     if path in {"/api/analyze", "/api/analyze-combined", "/api/inspect-combined"}:
         return "excel"
+    if path.startswith("/api/profit-center/"):
+        return "excel"
     for capability in ("mail", "ilog"):
         if path.startswith(f"/api/{capability}/"):
             return capability

@@ -111,3 +111,120 @@ def test_successful_transition_with_real_mail_manager_does_not_deadlock(tmp_path
     worker.start();worker.join(2)
     assert not worker.is_alive()
     assert results==[True] and mail.platform_suspended
+
+
+class FakeMail:
+    """Minimal mail manager: only the locks and flags the transition guard touches."""
+    def __init__(self):
+        from threading import RLock
+        self.lock=RLock()
+        self.state={'busy':False,'enabled':False,'next_run':None}
+        self.maintenance_active=False
+        self.analysis_busy=False
+        self.platform_suspended=False
+    def suspend_platform(self):
+        if self.state['busy'] or self.maintenance_active or self.analysis_busy:return False
+        self.platform_suspended=True
+        return True
+
+
+def guard_request():
+    from types import SimpleNamespace
+    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(platform_auth=SimpleNamespace(business_requests=0))))
+
+
+def test_transition_guard_pauses_ilog_task_and_marks_reason(tmp_path,monkeypatch):
+    from app import platform_runtime, mail_tasks, ilog_tasks
+    from app.ilog_tasks import TaskManager
+    mail=FakeMail()
+    tasks=TaskManager(tmp_path/'tasks',auto_start=False)
+    task=tasks.create('id','Account',['ABC123'],[],'guard-pause',True)
+    monkeypatch.setattr(mail_tasks,'_manager',mail)
+    monkeypatch.setattr(ilog_tasks,'_manager',tasks)
+    assert platform_runtime.transition_guard(guard_request(),None) is True
+    result=tasks.get(task['id'])
+    assert result['state']=='paused' and '切换账号' in result['notice']
+    assert mail.platform_suspended
+
+
+def test_transition_guard_releases_platform_lock_before_waiting_for_mail(tmp_path,monkeypatch):
+    from threading import Event, Thread
+    from app import platform_runtime, mail_tasks, ilog_tasks
+    from app.ilog_tasks import TaskManager
+    mail=FakeMail();held=Event();release=Event()
+    def hold():
+        with mail.lock:held.set();release.wait(5)
+    holder=Thread(target=hold,daemon=True);holder.start();assert held.wait(2)
+    tasks=TaskManager(tmp_path/'tasks',auto_start=False)
+    task=tasks.create('id','Account',['ABC123'],[],'guard-release',True)
+    monkeypatch.setattr(mail_tasks,'_manager',mail)
+    monkeypatch.setattr(ilog_tasks,'_manager',tasks)
+    worker=Thread(target=lambda:platform_runtime.transition_guard(guard_request(),None),daemon=True);worker.start()
+    deadline=time.time()+3
+    while time.time()<deadline and tasks.get(task['id'])['state']=='running':time.sleep(0.02)
+    assert tasks.get(task['id'])['state']=='paused','任务应先被暂停，随后释放平台切换锁'
+    # 邮件锁仍被占用时，平台切换锁必须已经可获取，否则解锁线程会被登录流程一起堵住。
+    acquired=ilog_tasks.platform_transition_lock.acquire(timeout=1)
+    if acquired:ilog_tasks.platform_transition_lock.release()
+    release.set();holder.join(2);worker.join(5)
+    assert acquired,'等待邮件锁时不应继续持有平台切换锁'
+
+
+def test_transition_guard_times_out_and_resumes_task_when_mail_lock_is_held(tmp_path,monkeypatch):
+    import pytest
+    from threading import Event, Thread
+    from fastapi import HTTPException
+    from app import platform_runtime, mail_tasks, ilog_tasks
+    from app.ilog_tasks import TaskManager
+    mail=FakeMail();held=Event();release=Event()
+    def hold():
+        with mail.lock:held.set();release.wait(5)
+    holder=Thread(target=hold,daemon=True);holder.start();assert held.wait(2)
+    tasks=TaskManager(tmp_path/'tasks',auto_start=False)
+    task=tasks.create('id','Account',['ABC123'],[],'guard-timeout',True)
+    monkeypatch.setattr(mail_tasks,'_manager',mail)
+    monkeypatch.setattr(ilog_tasks,'_manager',tasks)
+    monkeypatch.setattr(platform_runtime,'MAIL_TRANSITION_TIMEOUT',0.3)
+    errors=[]
+    def call():
+        try:platform_runtime.transition_guard(guard_request(),None)
+        except HTTPException as error:errors.append(error)
+    worker=Thread(target=call,daemon=True);worker.start();worker.join(5)
+    release.set();holder.join(2)
+    assert not worker.is_alive()
+    assert [error.status_code for error in errors]==[409]
+    result=tasks.get(task['id'])
+    assert result['state']=='running' and 'notice' not in result
+
+
+def test_transition_guard_resumes_task_when_mail_refuses(tmp_path,monkeypatch):
+    import pytest
+    from fastapi import HTTPException
+    from app import platform_runtime, mail_tasks, ilog_tasks
+    from app.ilog_tasks import TaskManager
+    class RefusingMail(FakeMail):
+        def suspend_platform(self):return False
+    mail=RefusingMail()
+    tasks=TaskManager(tmp_path/'tasks',auto_start=False)
+    task=tasks.create('id','Account',['ABC123'],[],'guard-refuse',True)
+    monkeypatch.setattr(mail_tasks,'_manager',mail)
+    monkeypatch.setattr(ilog_tasks,'_manager',tasks)
+    with pytest.raises(HTTPException) as error:platform_runtime.transition_guard(guard_request(),None)
+    assert error.value.status_code==409
+    result=tasks.get(task['id'])
+    assert result['state']=='running' and 'notice' not in result
+
+
+def test_transition_guard_leaves_task_running_when_mail_is_busy(tmp_path,monkeypatch):
+    import pytest
+    from fastapi import HTTPException
+    from app import platform_runtime, mail_tasks, ilog_tasks
+    from app.ilog_tasks import TaskManager
+    mail=FakeMail();mail.state['busy']=True
+    tasks=TaskManager(tmp_path/'tasks',auto_start=False)
+    task=tasks.create('id','Account',['ABC123'],[],'guard-busy',True)
+    monkeypatch.setattr(mail_tasks,'_manager',mail)
+    monkeypatch.setattr(ilog_tasks,'_manager',tasks)
+    with pytest.raises(HTTPException):platform_runtime.transition_guard(guard_request(),None)
+    result=tasks.get(task['id'])
+    assert result['state']=='running' and 'notice' not in result
