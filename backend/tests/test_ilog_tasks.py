@@ -182,6 +182,26 @@ def test_failed_order_does_not_block_next_order(tmp_path, status):
     assert [r['status'] for r in result['rows']]==['attention','success']
 
 
+@pytest.mark.parametrize('batch', [False, True])
+def test_duplicate_block_reports_that_no_unlock_was_submitted(tmp_path, batch):
+    detail = {'status': 'blocked_duplicate', 'submitted': False}
+    if batch:
+        detail['reason'] = '有历史未核实提交，本条未再次解锁'
+        result = {'status': 'batch_attention', 'records': [detail]}
+    else:
+        detail['failed_stage'] = 'reserve_submission'
+        result = detail
+    m = manager(tmp_path, lambda *args, **kwargs: result)
+    job = m.create('west', 'West', ['BILL123456'], [], 'key', True)
+    m.drain(job['id'])
+    row = m.get(job['id'])['rows'][0]
+    assert row['status'] == 'attention'
+    assert row['detail']['submitted'] is False
+    assert '未核实' in row['message']
+    assert '未再次解锁' in row['message']
+    assert '具体原因尚未确认' not in row['message']
+
+
 def test_explicit_pause_still_stops_after_current_failure(tmp_path):
     calls=[]
     def runner(account,bill,kind,**kwargs):

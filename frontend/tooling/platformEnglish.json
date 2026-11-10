@@ -152,6 +152,7 @@
   "未找到": "Not found",
   "未登记密码": "No saved password",
   "未确认": "Unconfirmed",
+  "未提交": "Not submitted",
   "未能读取本机已登记账号，请检查本地服务。": "Could not load saved local accounts. Check the local service.",
   "本批已结束，": "Batch finished, ",
   "本次操作影响整个航次，不仅是输入提单。": "This operation affects the entire voyage, not only the entered bill.",

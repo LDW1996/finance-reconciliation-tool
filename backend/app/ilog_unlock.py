@@ -521,11 +521,15 @@ def run(account_id, bill, kind='fee', *, execute=False, channel='chrome', headed
                 reply = _submit_single_order(page, result, step, expected)
                 _finish_single_order(page, bill, record, reply, kind, result, step, verify_after)
 
-        except FileExistsError:
-            result['status'] = 'blocked_duplicate'
-            result['failed_stage'] = result.get('stage')
-            result['error_type'] = 'FileExistsError'
-            result['reason'] = 'Prior submission exists; inspect before deciding whether any further operation is needed'
+        except FileExistsError as error:
+            if result.get('stage') == 'reserve_submission' and not result['submitted']:
+                result.update(
+                    status='blocked_duplicate', failed_stage='reserve_submission', error_type='FileExistsError',
+                    failure_cause='有未核实的历史防重凭据，本条未再次解锁',
+                    next_action='请核对历史记录和当前锁状态',
+                )
+            else:
+                _record_execution_failure(result, error)
         except Exception as error:
             _record_execution_failure(result, error)
         finally:

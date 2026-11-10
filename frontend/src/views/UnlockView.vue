@@ -61,8 +61,8 @@
               <el-table-column prop="businessNo" label="业务号" min-width="160"><template #default="{row}">{{ row.businessNo || row.detail?.before?.booking || '—' }}</template></el-table-column>
               <el-table-column label="类型" min-width="100"><template #default="{ row }">{{ row.kind === 'fee' ? '费用解锁' : '订单解锁' }}</template></el-table-column>
               <el-table-column label="实际使用账号" min-width="180"><template #default="{ row }">{{ row.actualAccountName || '—' }}<el-tag v-if="(row.attempts?.length || 0) > 1" size="small" type="info">兜底</el-tag><div v-for="(attempt,i) in row.attempts || []" :key="i" style="font-size:12px;color:var(--ink-muted)">{{ attempt.accountName }}：{{ attemptText(attempt.status) }}</div></template></el-table-column>
-              <el-table-column label="平台响应" min-width="120"><template #default="{ row }">{{ row.detail?.platform_success === true ? '明确成功' : row.detail?.platform_success === false ? '明确拒绝' : '—' }}</template></el-table-column>
-              <el-table-column label="锁状态复查" min-width="120"><template #default="{ row }">{{ row.detail?.before?.lock || '—' }} → {{ row.detail?.verification_performed === false ? '未复查' : row.detail?.after?.lock || '—' }}</template></el-table-column>
+              <el-table-column label="平台响应" min-width="120"><template #default="{ row }">{{ platformResponseText(row.detail) }}</template></el-table-column>
+              <el-table-column label="锁状态复查" min-width="120"><template #default="{ row }">{{ row.detail?.before?.lock || '—' }} → {{ lockRecheckText(row.detail) }}</template></el-table-column>
               <el-table-column label="分阶段耗时" min-width="160"><template #default="{row}"><div v-for="(timing,i) in row.detail?.detail?.timings || row.detail?.timings || []" :key="i">{{ timing.stage }}：{{ timing.seconds }} 秒</div><span v-if="!(row.detail?.detail?.timings || row.detail?.timings)?.length">—</span></template></el-table-column><el-table-column label="说明" min-width="180"><template #default="{row}">{{ row.detail?.status === 'voyage_platform_confirmed' ? cleanMessage(row.detail?.reason || '航次平台确认，全航次影响数量未提供') : row.message }}</template></el-table-column>
               <el-table-column prop="time" label="处理时间" width="100"/>
               <el-table-column label="凭证" width="110"><template #default="{ row }"><el-link v-if="row.detail?.screenshot" :href="`/api/ilog/tasks/${encodeURIComponent(taskId)}/evidence/${row.evidenceIndex}`" target="_blank" rel="noopener" type="primary">查看截图</el-link><span v-else>{{ row.detail?.screenshotExpired ? '已过期清理' : '—' }}</span></template></el-table-column>
@@ -143,6 +143,7 @@
 </template>
 
 <script setup lang="ts">
+import { platformText } from '../platformLocale'
 import StatusBadge from '../components/StatusBadge.vue'
 import { computed, ref, onBeforeUnmount, onMounted, watch } from 'vue'
 import axios from 'axios'
@@ -155,7 +156,7 @@ import { downloadBlob } from '../services/api'
 import { inspectBills, duplicateBills } from '../services/billValidation.mjs'
 type Kind = 'fee' | 'order'
 type Status = 'waiting' | 'processing' | 'success' | 'attention' | 'cancelled'
-type Detail = { verification_performed?: boolean; reason?:string; detail?:{timings?:{stage:string;seconds:number}[]}; timings?:{stage:string;seconds:number}[]; status?: string; platform_success?: boolean; before?: {lock?: string;booking?:string}; after?: {lock?: string}; screenshot?: string; screenshotExpired?: boolean }
+type Detail = { submitted?: boolean; verification_performed?: boolean; reason?:string; detail?:{timings?:{stage:string;seconds:number}[]}; timings?:{stage:string;seconds:number}[]; status?: string; platform_success?: boolean; before?: {lock?: string;booking?:string}; after?: {lock?: string}; screenshot?: string; screenshotExpired?: boolean }
 type Attempt = { account: string; accountName: string; status: string }
 type Row = { bill: string; businessNo?:string; kind: Kind; status: Status; message: string; time: string; detail?: Detail; evidenceIndex?: number; actualAccountName?: string; attempts?: Attempt[] }
 type Task = { id: string; account: string; accountName: string; fallbackAccount?: string; fallbackAccountName?: string; state: 'running' | 'paused' | 'completed'; rows: Row[]; verify_after?: boolean; createdAt?: string; completedAt?: string }
@@ -388,9 +389,22 @@ const rowClassName = ({ row }: { row: Row }) => row.status === 'processing' ? 'a
 const statusText = (s: Status, detail?: Detail) => detail?.status === 'voyage_platform_confirmed' ? (detail.verification_performed === false ? '航次平台成功（未复查）' : '航次平台确认') : s === 'success' ? ({ platform_accepted:'平台返回成功（未复查）', verified_fee_unlocked:'小锁已解', verified_unlocked:'复查无锁', already_unlocked:'原本已无锁', already_fee_unlocked:'小锁原本已解' }[detail?.status || ''] || '核实通过') : ({ waiting: '等待处理', processing: '真实处理中', attention: '待人工核实', cancelled: '已取消' }[s])
 const statusStyle = (s: Status) => ({ waiting: 'info', processing: 'primary', success: 'success', attention: 'warning', cancelled:'info' } as const)[s]
 const attemptText = (status: string) => ({ platform_accepted:'平台返回成功（未复查）', not_found:'未找到', ambiguous:'多条匹配', verified_unlocked:'成功并复查无锁', verified_fee_unlocked:'小锁已核实解开', already_unlocked:'原本已无锁', already_fee_unlocked:'小锁原本已解', rejected:'平台拒绝', blocked_duplicate:'已阻止重复提交', platform_confirmed:'平台成功，仍需核实', needs_verification:'待核实' }[status] || '待核实')
+function platformResponseText(detail?: Detail) {
+  if (detail?.submitted === false || detail?.status === 'blocked_duplicate') return platformText('未提交')
+  if (detail?.platform_success === true) return platformText('明确成功')
+  if (detail?.platform_success === false) return platformText('明确拒绝')
+  return detail ? platformText('未确认') : '—'
+}
+function lockRecheckText(detail?: Detail) {
+  if (detail?.after?.lock) return detail.after.lock
+  if (detail?.submitted === false || detail?.status === 'blocked_duplicate' || detail?.verification_performed === false) {
+    return platformText('未复查')
+  }
+  return '—'
+}
 function exportResults(task?:Task) {
   const cell = (v: string) => `"${(/^[=+@\-\t\r]/.test(v) ? "'" + v : v).replace(/"/g, '""')}"`
-  const content = [['主账号', '兜底账号', '实际使用账号', '查询路径', '提单号', '业务号', '类型', '结果', '平台响应', '原锁状态', '复查锁状态', '说明', '时间', '执行模式'], ...(task?.rows || rows.value).map(r => [task?.accountName || taskAccountName.value, task ? task.fallbackAccountName || '' : taskFallbackName.value, r.actualAccountName || '', (r.attempts || []).map(a => `${a.accountName}: ${attemptText(a.status)}`).join(' → '), r.bill, r.businessNo || r.detail?.before?.booking || '', r.kind === 'fee' ? '费用解锁' : '订单解锁', statusText(r.status,r.detail), r.detail?.platform_success === true ? '成功' : r.detail?.platform_success === false ? '拒绝' : '未确认', r.detail?.before?.lock || '', r.detail?.verification_performed === false ? '未复查' : r.detail?.after?.lock || '', cleanMessage(r.detail?.status === 'voyage_platform_confirmed' ? r.detail.reason || '航次平台确认，全航次影响数量未提供' : r.message), r.time, (task ? task.verify_after === false : !taskVerifyAfter.value) ? '快速模式（不复查）' : '标准模式（复查）'])].map(r => r.map(cell).join(',')).join('\r\n')
+  const content = [['主账号', '兜底账号', '实际使用账号', '查询路径', '提单号', '业务号', '类型', '结果', '平台响应', '原锁状态', '复查锁状态', '说明', '时间', '执行模式'], ...(task?.rows || rows.value).map(r => [task?.accountName || taskAccountName.value, task ? task.fallbackAccountName || '' : taskFallbackName.value, r.actualAccountName || '', (r.attempts || []).map(a => `${a.accountName}: ${attemptText(a.status)}`).join(' → '), r.bill, r.businessNo || r.detail?.before?.booking || '', r.kind === 'fee' ? '费用解锁' : '订单解锁', statusText(r.status,r.detail), platformResponseText(r.detail), r.detail?.before?.lock || '', lockRecheckText(r.detail), cleanMessage(r.detail?.status === 'voyage_platform_confirmed' ? r.detail.reason || '航次平台确认，全航次影响数量未提供' : r.message), r.time, (task ? task.verify_after === false : !taskVerifyAfter.value) ? '快速模式（不复查）' : '标准模式（复查）'])].map(r => r.map(cell).join(',')).join('\r\n')
   downloadBlob(new Blob(['\uFEFF', content], { type: 'text/csv;charset=utf-8' }), 'iLog解锁-真实结果.csv')
 }
 const taskAccountName = ref('')

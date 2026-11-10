@@ -20,6 +20,14 @@ from .accounts import account_data_dir
 from .bill_validation import normalize_bills
 
 
+def duplicate_block_message(detail):
+    cause = detail.get('failure_cause')
+    if not cause and not detail.get('failed_stage'):
+        cause = detail.get('reason')
+    return (cause or '有未核实的历史防重凭据，本条未再次解锁') + '；' + (
+        detail.get('next_action') or '请核对历史记录和当前锁状态')
+
+
 def runtime():
     import shutil
     import sys
@@ -146,6 +154,10 @@ class TaskManager:
             elif isinstance(value,list):
                 for item in value: present(item)
         present(data)
+        for item in data['rows']:
+            detail = item.get('detail') or {}
+            if detail.get('status') == 'blocked_duplicate':
+                item['message'] = duplicate_block_message(detail)
         return data
 
     normalize_bills = staticmethod(normalize_bills)
@@ -327,7 +339,6 @@ class TaskManager:
                         'verified_unlocked':'复查已无锁',
                         'already_unlocked':'原记录已无锁，未重复提交',
                         'already_fee_unlocked':'小锁已处于解锁后状态，未重复提交',
-                        'blocked_duplicate':'有历史提交，未再次解锁；请核对历史记录',
                         'needs_verification':'执行结果不确定，请人工核实，未自动重试',
                         'platform_confirmed':'平台确认成功，但目标状态尚未充分核实',
                         'not_found':'当前账号未找到单号，未提交',
@@ -337,7 +348,9 @@ class TaskManager:
                         matches = result['matches']
                         descriptions = [f"业务号 {r.get('booking','未知')}（船东提单 {r.get('mbl','未知')}；货代提单 {r.get('hbl','未知')}）" for r in matches[:5]]
                         notes['ambiguous'] = result.get('ambiguity_reason', '查询结果不唯一，未提交') + f"；共 {result.get('matched_count',len(matches))} 条：" + '；'.join(descriptions) + '；请按业务号核实'
-                    if result.get('failed_stage'):
+                    if result.get('status') == 'blocked_duplicate':
+                        notes['blocked_duplicate'] = duplicate_block_message(result)
+                    elif result.get('failed_stage'):
                         stage_names = {'login':'登录平台','query_order':'查询订单','select_record':'选中订单',
                             'open_unlock_menu':'打开解锁菜单','choose_unlock_action':'选择解锁操作',
                             'read_confirmation':'读取确认窗口','reserve_submission':'登记提交凭据',
@@ -365,7 +378,9 @@ class TaskManager:
                             for detail in result['records']:
                                 child_ok=detail.get('status') in ('verified_unlocked','verified_fee_unlocked','platform_accepted','already_unlocked','already_fee_unlocked','voyage_platform_confirmed')
                                 message=notes.get(detail.get('status'),'执行异常，请人工核实')
-                                if detail.get('failure_cause'):
+                                if detail.get('status') == 'blocked_duplicate':
+                                    message=duplicate_block_message(detail)
+                                elif detail.get('failure_cause'):
                                     message=detail['failure_cause']+'；'+detail.get('next_action','请人工核实')
                                 if detail.get('relocked_resubmission'):
                                     message='历史已成功，当前再次有锁，本次重新解锁；'+message
