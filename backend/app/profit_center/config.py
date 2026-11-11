@@ -116,6 +116,10 @@ class RegionSpec:
     # 上一年管理费用 sheet（行 2..N 为人工明细；高管工资行、SUM 行
     # 在旧模板里已覆盖全年，不动；其他管理费用、合计需平移补齐）
     fill_mgmt2025: bool = False
+    # 上一年管理费用 sheet 名；空 = 用 mgmt_sheet(year)。
+    # 帕鲁同时有 '25年管理费用'（财务实际在用，列=月份、行14=合计）
+    # 和 '2025年管理费用'（空壳副表），必须显式指定，否则写到空表。
+    mgmt2025_sheet: str = ""
     mgmt2025_labour_row: int = 10
     mgmt2025_other_row: int = 13
     mgmt2025_total_row: int = 14
@@ -205,9 +209,17 @@ REGIONS: tuple[RegionSpec, ...] = (
             10: "=[{cur}]管理费用表!$D$11+[{cur}]管理费用表!$D$25",
         },
         pl_row=27,
-        # C/F/I 模板已有且财务未改，不动；只补 B/H 与修 E
-        pl_skip=frozenset({"C", "F", "I"}),
-        fill_mgmt2025=False,
+        # C（毛利-2025）/ I（净利润-2025）模板已有且财务未改，不动；
+        # F（管理费用-2025）模板 10 月行没有，由 pl_overrides 指向本簿旧表合计行。
+        pl_skip=frozenset({"C", "I"}),
+        pl_overrides={"F": "='25年管理费用'!{pl_col}14"},
+        # 旧表 '25年管理费用' 才是财务在用的（列=月份、行2..8 明细、行14 合计）；
+        # '2025年管理费用' 是空壳副表。源报表只提供上年同期累计合计，无分区明细，
+        # 因此只填合计行 14，明细行留给财务按需手填。
+        fill_mgmt2025=True,
+        mgmt2025_sheet="25年管理费用",
+        mgmt2025_labour_row=1,
+        mgmt2025_total_row=14,
         history_round=frozenset({("prev", 21), ("prev", 22), ("prev", 23), ("prev", 24)}),
         history_hard=frozenset(),
         history_int=frozenset({("prev", 20), ("prev", 26)}),

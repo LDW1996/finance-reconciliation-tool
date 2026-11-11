@@ -135,6 +135,27 @@ def test_shift_rule_shifts_local_columns_by_delta():
         ShiftRule(col_shift=-2).apply("=A1")   # 左移越界必须报错
 
 
+def test_mgmt2025_rules_shift_same_sheet_refs_but_not_rendered_columns():
+    """2025 管理费用表：同表引用随月右移，[@MC]/[@PC] 渲染出的累计列不再平移。
+
+    回归 2026-10：10 月合计行曾生成 ``=J12+J13``（取到 9 月列），应为 K 列。
+    """
+    spec = next(r for r in REGIONS if r.key == "batam")
+    rule = ShiftRule(col_shift=1, mgmt_accum_col_shift=0, data_row_shift=1)
+    common = dict(cur_link=15, prev_link=14, out_link=3,
+                  mc="V", pc="U", shift=rule)
+
+    assert rule_formula(spec, "mgmt2025", 14, **common) == "=K12+K13"
+    assert rule_formula(spec, "mgmt2025", 12, **common) == "=SUM(K2:K11)"
+    row13 = rule_formula(spec, "mgmt2025", 13, **common)
+    assert row13.endswith("-K12+K11") and "J12" not in row13
+
+    row2 = rule_formula(spec, "mgmt2025", 2, **common)
+    assert row2 == "=[15]管理费用表!$V$6-[14]管理费用表!$U$6"
+    # 外包成本行按行平移（Data!J28 -> J29），列不动
+    assert rule_formula(spec, "mgmt2025", 11, **common) == "=[3]Data!$J$29"
+
+
 # ---------------------------------------------------------------------------
 # ensure_link_cells：外链缓存补齐
 # ---------------------------------------------------------------------------

@@ -39,17 +39,17 @@ RULES: dict[str, dict] = {
         'I': '=[@MONTH]利润表!$K$60-[@PREVMONTH]利润表!$J$60',
         },
         'mgmt2025': {
-        2: '=[@MONTH]管理费用表!$T$6-[@PREVMONTH]管理费用表!$R$6',
-        3: '=[@MONTH]管理费用表!$T$7-[@PREVMONTH]管理费用表!$R$7',
-        4: '=[@MONTH]管理费用表!$T$10-[@PREVMONTH]管理费用表!$R$10',
-        5: '=[@MONTH]管理费用表!$T$12-[@PREVMONTH]管理费用表!$R$12',
-        6: '=[@MONTH]管理费用表!$T$13-[@PREVMONTH]管理费用表!$R$13',
-        7: '=[@MONTH]管理费用表!$T$15-[@PREVMONTH]管理费用表!$R$15',
-        8: '=[@MONTH]管理费用表!$T$26-[@PREVMONTH]管理费用表!$R$26',
-        9: '=[@MONTH]管理费用表!$T$30-[@PREVMONTH]管理费用表!$R$30',
+        2: '=[@MONTH]管理费用表![@MC]6-[@PREVMONTH]管理费用表![@PC]6',
+        3: '=[@MONTH]管理费用表![@MC]7-[@PREVMONTH]管理费用表![@PC]7',
+        4: '=[@MONTH]管理费用表![@MC]10-[@PREVMONTH]管理费用表![@PC]10',
+        5: '=[@MONTH]管理费用表![@MC]12-[@PREVMONTH]管理费用表![@PC]12',
+        6: '=[@MONTH]管理费用表![@MC]13-[@PREVMONTH]管理费用表![@PC]13',
+        7: '=[@MONTH]管理费用表![@MC]15-[@PREVMONTH]管理费用表![@PC]15',
+        8: '=[@MONTH]管理费用表![@MC]26-[@PREVMONTH]管理费用表![@PC]26',
+        9: '=[@MONTH]管理费用表![@MC]30-[@PREVMONTH]管理费用表![@PC]30',
         11: '=[@OUTBOOK]Data!$J$28',
         12: '=SUM(J2:J11)',
-        13: '=[@MONTH]管理费用表!$T$5-[@PREVMONTH]管理费用表!$R$5-J12+J11',
+        13: '=[@MONTH]管理费用表![@MC]5-[@PREVMONTH]管理费用表![@PC]5-J12+J11',
         14: '=J12+J13',
         },
         'items': {
@@ -102,18 +102,18 @@ RULES: dict[str, dict] = {
         'I': '=[@MONTH]损益表!$K$60-[@PREVMONTH]损益表!$J$60',
         },
         'mgmt2025': {
-        2: '=[@MONTH]管理费用表!$T$6-[@PREVMONTH]管理费用表!$R$6',
-        3: '=[@MONTH]管理费用表!$T$7-[@PREVMONTH]管理费用表!$R$7',
-        4: '=[@MONTH]管理费用表!$T$10-[@PREVMONTH]管理费用表!$R$10',
-        5: '=[@MONTH]管理费用表!$T$12-[@PREVMONTH]管理费用表!$R$12',
-        6: '=[@MONTH]管理费用表!$T$13-[@PREVMONTH]管理费用表!$R$13',
-        7: '=[@MONTH]管理费用表!$T$15-[@PREVMONTH]管理费用表!$R$15',
-        8: '=[@MONTH]管理费用表!$T$26-[@PREVMONTH]管理费用表!$R$26',
-        9: '=[@MONTH]管理费用表!$T$30-[@PREVMONTH]管理费用表!$R$30',
-        10: '=[@MONTH]管理费用表!$T$11+[@MONTH]管理费用表!$T$25-[@PREVMONTH]管理费用表!$R$11-[@PREVMONTH]管理费用表!$R$25',
+        2: '=[@MONTH]管理费用表![@MC]6-[@PREVMONTH]管理费用表![@PC]6',
+        3: '=[@MONTH]管理费用表![@MC]7-[@PREVMONTH]管理费用表![@PC]7',
+        4: '=[@MONTH]管理费用表![@MC]10-[@PREVMONTH]管理费用表![@PC]10',
+        5: '=[@MONTH]管理费用表![@MC]12-[@PREVMONTH]管理费用表![@PC]12',
+        6: '=[@MONTH]管理费用表![@MC]13-[@PREVMONTH]管理费用表![@PC]13',
+        7: '=[@MONTH]管理费用表![@MC]15-[@PREVMONTH]管理费用表![@PC]15',
+        8: '=[@MONTH]管理费用表![@MC]26-[@PREVMONTH]管理费用表![@PC]26',
+        9: '=[@MONTH]管理费用表![@MC]30-[@PREVMONTH]管理费用表![@PC]30',
+        10: '=[@MONTH]管理费用表![@MC]11+[@MONTH]管理费用表![@MC]25-[@PREVMONTH]管理费用表![@PC]11-[@PREVMONTH]管理费用表![@PC]25',
         11: '=[@OUTBOOK]Data!$J$15',
         12: '=SUM(J2:J11)',
-        13: '=[@MONTH]管理费用表!$T$5-[@PREVMONTH]管理费用表!$R$5-J12+J11',
+        13: '=[@MONTH]管理费用表![@MC]5-[@PREVMONTH]管理费用表![@PC]5-J12+J11',
         14: '=J12+J13',
         },
         'items': {
@@ -200,13 +200,16 @@ RULES: dict[str, dict] = {
         13: '=J11+J12',
         },
         'pl': {
-        # C/F/I 属 config.pl_skip：引擎保留模板原值，不生成规则
+        # C/I 属 config.pl_skip：引擎保留模板原值，不生成规则；
+        # F 由 config.pl_overrides 指向本簿旧表 '25年管理费用' 的合计行
         'B': '=[@MONTH]收入成本表!$CJ$8',
         'E': '=J13',
         'H': '=[@MONTH]利润表!$C$60',
         },
         'mgmt2025': {
-
+        # 帕鲁只有源报表层面的「上年同期累计」合计，没有分科目明细，
+        # 因此只生成旧表 '25年管理费用' 的合计行 14（明细留给财务手填）。
+        14: '=[@MONTH]管理费用表![@MC]5-[@PREVMONTH]管理费用表![@PC]5',
         },
         'items': {
             'upper': {
