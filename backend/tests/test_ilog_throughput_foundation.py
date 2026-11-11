@@ -2,6 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import Mock, MagicMock
 import pytest
 from app.ilog_metrics import Timings
+from app.ilog_query import LOGIN_URL, ORDER_LIST_PATH
 from app.ilog_session import SessionPool
 from app.ilog_unlock import compact_success
 
@@ -20,14 +21,23 @@ def test_compact_keeps_monotonic_timings(monkeypatch):
         {'stage': 'login', 'seconds': 2}, {'stage': 'query', 'seconds': 3}]
 
 
+def mock_browser():
+    browser = Mock()
+    page = browser.new_page.return_value
+    page.goto.side_effect = lambda url: setattr(page, 'url', url)
+    page.locator.return_value.count.return_value = 0
+    return browser
+
+
 def test_pool_reuse_isolated_and_closed():
-    pool = SessionPool()
+    pool = SessionPool(login_url=LOGIN_URL)
     runtime = Mock()
     pool._runtime = runtime
+    runtime.chromium.launch.return_value = mock_browser()
     page1 = pool.page('a', {'username': 'one'}, 'secret')
     assert pool.page('a', {'username': 'one'}, 'secret') is page1
     assert runtime.chromium.launch.call_count == 1
-    runtime.chromium.launch.return_value = Mock()
+    runtime.chromium.launch.return_value = mock_browser()
     page2 = pool.page('b', {'username': 'two'}, 'secret')
     assert page2 is not page1
     with ThreadPoolExecutor() as worker:
@@ -40,11 +50,11 @@ def test_pool_reuse_isolated_and_closed():
 
 
 def test_invalidate_closes_only_target_and_forces_new_login():
-    pool = SessionPool()
+    pool = SessionPool(login_url=LOGIN_URL)
     pool._runtime = Mock()
-    first_browser = Mock()
-    other_browser = Mock()
-    replacement_browser = Mock()
+    first_browser = mock_browser()
+    other_browser = mock_browser()
+    replacement_browser = mock_browser()
     pool._runtime.chromium.launch.side_effect = [first_browser, other_browser, replacement_browser]
     first = pool.page('a', {'username': 'one'}, 'secret')
     other = pool.page('b', {'username': 'two'}, 'secret')
@@ -131,6 +141,7 @@ def test_single_mode_controls_post_submission_query(tmp_path, monkeypatch, verif
     query=Mock(side_effect=[[before],[{**before,'lock':'B'}]])
     monkeypatch.setattr(ilog_unlock,'search_bill',query)
     pool=Mock();page=pool.page.return_value
+    page.url = LOGIN_URL + ORDER_LIST_PATH
     page.locator.return_value.count.return_value=1
     page.locator.return_value.inner_text.return_value='确认取消锁定吗?'
     page.evaluate.return_value=['one']
@@ -143,4 +154,7 @@ def test_single_mode_controls_post_submission_query(tmp_path, monkeypatch, verif
     assert query.call_count==queries
     assert result['verification_performed'] is verify_after
     pool.invalidate.assert_not_called()
-    if not verify_after:page.goto.assert_not_called()
+    if verify_after:
+        page.goto.assert_called_once_with(LOGIN_URL + ORDER_LIST_PATH)
+    else:
+        page.goto.assert_not_called()
