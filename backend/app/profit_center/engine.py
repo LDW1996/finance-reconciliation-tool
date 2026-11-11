@@ -1,14 +1,17 @@
 """利润中心表格上报核心引擎。
 
 流程（每个利润中心一份简表，兼容任意 2–12 月上报）：
-    1. 旧模板 + 上月/本月源报表 -> 按 P001 把上月列平移出本月列
-    2. 注入指向本月源文件的 externalLink 部件及其缓存值
+    1. 规则表（rules.py）按项目名给出逐地基准公式，按月份坐标渲染 /
+       平移出本月列；模板只需保留历史数值，不再需要上月列外链公式
+    2. 引擎自行注入「上月 + 本月」两个 externalLink 部件，并从对应的
+       源报表写全缓存值（此前模板里残缺的上月外链缓存正是 #REF! 的根因）
     3. Python 侧独立累加，做当月 / 累计双口径对平校验
     4. 若上传了财务手工版，逐格复现比对（外链索引按文件名归一化）
     5. 打包公式版结果 ZIP
 
 设计约束（见 docs/design/2026-11-10-利润中心表格上报.md）：
-    * 平移源永远是上月列 / 上月行，绝不照抄财务答案
+    * 基准公式固化在规则表，绝不依赖模板上月列是否含公式（模板可为纯数值）
+    * 只写本月列 / 本月行，历史列零改动
     * 外链按文件名语义匹配，绝不按索引序或本机路径读盘
     * openpyxl save 后 sheet 内公式缓存会丢，校验值一律 Python 侧独立算
     * 公式格直接赋值让 openpyxl 设 data_type='f'；外部文本强制 's'
@@ -38,6 +41,11 @@ from .config import parse_month as _config_parse_month
 from .formula import (
     ShiftRule, external_refs, is_formula, normalize_links, normalized_name,
 )
+from .rules import BASE_MONTH, RULES
+
+# 规则表模式：False 时回退到旧的「读模板上月列公式 + P001 平移」实现，
+# 仅供 A/B 对照与回归使用；正式运行恒为 True。
+RULES_MODE = True
 
 MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -205,6 +213,24 @@ def _num(value, default=0.0) -> float:
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return float(value)
     return float(default)
+
+
+def _label_column(book, sheet_name: str, label: str) -> int | None:
+    """Locate a column (0-based) by its header label in the first few rows.
+
+    Used for the "prior-year cumulative" column, whose position varies by
+    region and month (batam/jakarta shift right monthly, semarang/palu stay
+    fixed), so a hardcoded coordinate would break on any month != August.
+    """
+    try:
+        sh = book.sheet_by_name(sheet_name)
+    except Exception:
+        return None
+    for row in range(min(sh.nrows, 5)):
+        for col in range(sh.ncols):
+            if str(sh.cell_value(row, col)).strip() == label:
+                return col
+    return None
 
 
 def detect_income_shift(inputs: Inputs, spec: RegionSpec, mon: int,
@@ -451,8 +477,12 @@ def inject_external_link(workbook_bytes: bytes, target_name: str,
         raise ProfitCenterError(
             f"外链索引不一致：公式用 [{expected_index}]，部件登记后为 [{count}]"
         )
-    # 强制打开时全量重算（openpyxl 通常已写，这里双保险）
-    if "fullCalcOnLoad" not in wb_xml:
+    # 结果文件的公式缓存已被 openpyxl 清空，必须让 Excel/WPS 打开时靠
+    # 外链缓存重算；模板自身可以关闭重算（避免预览 #REF!），不能沿用。
+    if re.search(r'fullCalcOnLoad="[^"]*"', wb_xml):
+        wb_xml = re.sub(r'fullCalcOnLoad="[^"]*"',
+                        'fullCalcOnLoad="1"', wb_xml, count=1)
+    elif "fullCalcOnLoad" not in wb_xml:
         wb_xml = re.sub(r"<calcPr\b", '<calcPr fullCalcOnLoad="1"', wb_xml, count=1)
     parts["xl/workbook.xml"] = wb_xml.encode("utf-8")
 
@@ -495,6 +525,100 @@ def collect_link_cache(wb, link_index: int, book) -> dict[str, dict[str, object]
     return cache
 
 
+def ensure_link_cells(data: bytes, wb, template: bytes) -> bytes:
+    """保证结果文件里每个被公式引用的外链单元格都有缓存值。
+
+    财务原件自带的 externalLink 部件常有残缺（某些科目在源报表里是空
+    格），而结果文件会强制重算：外链里缺一个 cell，WPS 就把该公式显示成
+    #REF!。缺失值优先取模板中「单值外链引用公式」的 <v> 缓存（最贴近
+    原表口径），取不到才补 0。
+    """
+    import html
+    from collections import defaultdict
+
+    parts = _zip_parts(data)
+    tparts = _zip_parts(template)
+    single = re.compile(r"^=\[(\d+)\]([^!]+)!\$?([A-Z]+)\$?(\d+)$")
+
+    inferred: dict[tuple[int, str, str], str] = {}
+    for name, blob in tparts.items():
+        if not re.fullmatch(r"xl/worksheets/sheet\d+\.xml", name):
+            continue
+        xml = blob.decode("utf-8")
+        for cm in re.finditer(r'<c r="[A-Z]+\d+"[^>]*>(.*?)</c>', xml):
+            body = cm.group(1)
+            fm = re.search(r"<f[^>]*>(.*?)</f>", body)
+            vm = re.search(r"<v>(.*?)</v>", body, re.S)
+            if not (fm and vm):
+                continue
+            hit = single.match(html.unescape(fm.group(1)).strip())
+            if hit:
+                idx, sheet, col, row = hit.groups()
+                inferred[(int(idx), sheet.strip("'"), f"{col}{row}")] = vm.group(1)
+
+    refs: dict[int, set[tuple[str, str]]] = defaultdict(set)
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for cell in row:
+                if is_formula(cell.value):
+                    for idx, sheet, coord in external_refs(cell.value):
+                        refs[int(idx)].add((sheet, coord))
+
+    changed = False
+    for idx, wanted in refs.items():
+        name = f"xl/externalLinks/externalLink{idx}.xml"
+        if name not in parts:
+            continue
+        xml = parts[name].decode("utf-8")
+        names = re.findall(r'<sheetName val="([^"]+)"\s*/>', xml)
+        have: set[tuple[str, str]] = set()
+        for sd in re.finditer(
+            r'<sheetData sheetId="(\d+)">(.*?)</sheetData>', xml, re.S
+        ):
+            sid = int(sd.group(1))
+            sheet = names[sid] if sid < len(names) else "?"
+            for cm in re.finditer(r'<cell r="([A-Z]+\d+)"', sd.group(2)):
+                have.add((sheet, cm.group(1)))
+        missing = sorted(wanted - have)
+        if not missing:
+            continue
+        additions: dict[int, list[str]] = defaultdict(list)
+        for sheet, coord in missing:
+            if sheet not in names:
+                continue
+            sid = names.index(sheet)
+            value = inferred.get((idx, sheet, coord), "0")
+            if not re.fullmatch(r"-?\d+(\.\d+)?", value):
+                cell_xml = f'<cell r="{coord}" t="str"><v>{xml_escape(value)}</v></cell>'
+            else:
+                cell_xml = f'<cell r="{coord}"><v>{value}</v></cell>'
+            rownum = re.match(r"[A-Z]+(\d+)", coord).group(1)
+            additions[sid].append(f'<row r="{rownum}">{cell_xml}</row>')
+        for sid, rows in additions.items():
+            anchor = f'<sheetData sheetId="{sid}">'
+            block = "".join(rows)
+            if anchor in xml:
+                xml = xml.replace(anchor, anchor + block, 1)
+            elif "</sheetDataSet>" in xml:
+                xml = xml.replace(
+                    "</sheetDataSet>",
+                    f'<sheetData sheetId="{sid}">{block}</sheetData></sheetDataSet>',
+                    1,
+                )
+            else:
+                continue
+        parts[name] = xml.encode("utf-8")
+        changed = True
+
+    if not changed:
+        return data
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
+        for name, blob in parts.items():
+            zout.writestr(name, blob)
+    return buf.getvalue()
+
+
 # --------------------------------------------------------------------------
 # 逐格平移填充
 # --------------------------------------------------------------------------
@@ -535,6 +659,45 @@ def _to_number_or_none(value):
         return None
 
 
+# --------------------------------------------------------------------------
+# 规则表渲染（按项目名固化，模板不再需要提供上月列公式）
+# --------------------------------------------------------------------------
+
+def outbook_index(link_map: dict[int, str]) -> int | None:
+    """外包成本表在模板外链表里的索引；模板没有该部件时返回 None。"""
+    for idx, name in link_map.items():
+        if "外包服务成本" in name:
+            return idx
+    return None
+
+
+def render_rule(formula: str, cur_link: int, prev_link: int,
+                out_link: int | None) -> str | None:
+    """把规则表里的语义外链标记换成结果文件中真实的外链索引。"""
+    text = formula.replace("[@MONTH]", f"[{cur_link}]")
+    text = text.replace("[@PREVMONTH]", f"[{prev_link}]")
+    if "[@OUTBOOK]" in text:
+        if out_link is None:
+            return None
+        text = text.replace("[@OUTBOOK]", f"[{out_link}]")
+    return text
+
+
+def rule_formula(spec: RegionSpec, block: str, key, cur_link: int,
+                 prev_link: int, out_link: int | None) -> str | None:
+    """取某地某区块某项目的基准公式；规则表没有该格时返回 None（保持模板原值）。"""
+    entry = RULES.get(spec.key)
+    if not entry:
+        return None
+    rules = entry.get(block)
+    if not isinstance(rules, dict):
+        return None
+    formula = rules.get(key)
+    if formula is None:
+        return None
+    return render_rule(formula, cur_link, prev_link, out_link)
+
+
 def run_region(spec: RegionSpec, inputs: Inputs, year: int, mon: int,
                period: str, prev_period: str,
                exec_salary: float | None, target_name: str) -> RegionResult:
@@ -560,27 +723,44 @@ def run_region(spec: RegionSpec, inputs: Inputs, year: int, mon: int,
 
     parts = _zip_parts(template)
     link_map = external_link_map(parts)
-    prev_link, legacy = _link_indices(link_map, prev_period, period)
-    cur_link = len(link_map) + 1
     income_shift = detect_income_shift(inputs, spec, mon, period, prev_period)
     book = _xls_book(inputs.reports[(spec.key, period)])
+    prev_book = _xls_book(inputs.reports[(spec.key, prev_period)])
+    out_link = outbook_index(link_map)
 
-    base = dict(
-        link_prev=prev_link, link_cur=cur_link, link_legacy=legacy,
-        income_sheet="收入成本表",
-        profit_sheets=(spec.profit_sheet,),
-        mgmt_sheets=(spec.mgmt_sheet,),
-    )
-    rule_upper = ShiftRule(col_shift=1, **base)
+    if RULES_MODE:
+        # 上月 / 本月两个外链部件都由引擎注入，模板是否含同名部件都不影响。
+        # 规则表基准固定在 9 月，故所有坐标一次性平移 (mon - 9) 步。
+        prev_link = len(link_map) + 1
+        cur_link = len(link_map) + 2
+        delta = mon - BASE_MONTH
+        base = dict(
+            link_prev=None, link_cur=None, link_legacy=frozenset(),
+            income_sheet="收入成本表",
+            profit_sheets=(spec.profit_sheet,),
+            mgmt_sheets=(spec.mgmt_sheet,),
+        )
+    else:  # 旧路径：读模板上月列公式 + P001 平移，仅用于 A/B 对照
+        prev_link, legacy = _link_indices(link_map, prev_period, period)
+        cur_link = len(link_map) + 1
+        delta = 1
+        base = dict(
+            link_prev=prev_link, link_cur=cur_link, link_legacy=legacy,
+            income_sheet="收入成本表",
+            profit_sheets=(spec.profit_sheet,),
+            mgmt_sheets=(spec.mgmt_sheet,),
+        )
+    rule_upper = ShiftRule(col_shift=delta, **base)
     rule_pl = ShiftRule(
-        col_shift=1, income_col_shift=income_shift,
-        profit_chain_col_shift=PROFIT_CHAIN_STEP, **base,
+        col_shift=delta, income_col_shift=income_shift * delta,
+        profit_chain_col_shift=PROFIT_CHAIN_STEP * delta, **base,
     )
     rule_mgmt = ShiftRule(
-        col_shift=1, mgmt_accum_col_shift=2, data_row_shift=1, **base,
+        col_shift=delta, mgmt_accum_col_shift=2 * delta,
+        data_row_shift=delta, **base,
     )
 
-    # ---- 1. 上半块：7 月列 -> 8 月列 -------------------------------------
+    # ---- 1. 上半块：规则表基准公式 -> 本月列 -----------------------------
     detail_rows = range(2, spec.labour_sum_end + 1)
     for row in detail_rows:
         coord = f"{cur_col}{row}"
@@ -599,21 +779,26 @@ def run_region(spec: RegionSpec, inputs: Inputs, year: int, mon: int,
             formula = spec.detail_overrides[row].format(cur=cur_link)
             _set_formula(ws, coord, formula, prov, spec, "逐表特例公式")
             continue
-        src = ws[f"{prev_col}{row}"].value
+        src = (rule_formula(spec, "upper", row, cur_link, prev_link, out_link)
+               if RULES_MODE else ws[f"{prev_col}{row}"].value)
         if src is None:
             continue
         value = rule_upper.apply(src) if is_formula(src) else src
-        _set_formula(ws, coord, value, prov, spec, "科目（P001 平移）",
-                     f"{prev_col}{row}")
+        _set_formula(ws, coord, value, prov, spec,
+                     "科目（规则表生成）" if RULES_MODE else "科目（P001 平移）",
+                     "规则表" if RULES_MODE else f"{prev_col}{row}")
 
-    # 人工合计 / 其他管理费用 / 合计：同样从 7 月列平移，SUM 范围自动修正
+    # 人工合计 / 其他管理费用 / 合计：规则表已含 SUM 与合计公式
     for row in (spec.labour_total_row, spec.other_mgmt_row, spec.grand_total_row):
-        src = ws[f"{prev_col}{row}"].value
+        src = (rule_formula(spec, "upper", row, cur_link, prev_link, out_link)
+               if RULES_MODE else ws[f"{prev_col}{row}"].value)
         if src is None:
             continue
         value = rule_upper.apply(src) if is_formula(src) else src
         _set_formula(ws, f"{cur_col}{row}", value, prov, spec,
-                     "合计行（P001 平移，SUM 范围自动修正）", f"{prev_col}{row}")
+                     "合计行（规则表生成）" if RULES_MODE
+                     else "合计行（P001 平移，SUM 范围自动修正）",
+                     "规则表" if RULES_MODE else f"{prev_col}{row}")
 
     # 补齐未来月份合计行（从本月合计公式向右平移，补到逐表约定的月份为止）
     grand_formula = ws[f"{cur_col}{spec.grand_total_row}"].value
@@ -643,12 +828,14 @@ def run_region(spec: RegionSpec, inputs: Inputs, year: int, mon: int,
             _set_formula(ws, coord, spec.pl_overrides[col], prov, spec,
                          "逐表特例公式")
             continue
-        src = ws[f"{col}{prev_row}"].value
+        src = (rule_formula(spec, "pl", col, cur_link, prev_link, out_link)
+               if RULES_MODE else ws[f"{col}{prev_row}"].value)
         if src is None:
             continue
         value = rule_pl.apply(src) if is_formula(src) else src
-        _set_formula(ws, coord, value, prov, spec, "利润简表（P001 平移）",
-                     f"{col}{prev_row}")
+        _set_formula(ws, coord, value, prov, spec,
+                     "利润简表（规则表生成）" if RULES_MODE else "利润简表（P001 平移）",
+                     "规则表" if RULES_MODE else f"{col}{prev_row}")
     # D/G/J 增减列模板已正确，保留不动
     for col in ("D", "G", "J"):
         if ws[f"{col}{pl_cur}"].value is not None:
@@ -685,20 +872,26 @@ def run_region(spec: RegionSpec, inputs: Inputs, year: int, mon: int,
                 _set_formula(w2, coord, formula, prov, spec,
                              "2025 管理费用（逐表特例）")
                 continue
-            src = w2[f"{prev_col}{row}"].value
+            src = (rule_formula(spec, "mgmt2025", row, cur_link, prev_link, out_link)
+                   if RULES_MODE else w2[f"{prev_col}{row}"].value)
             if src is None:
                 continue
             value = rule_mgmt.apply(src) if is_formula(src) else src
             _set_formula(w2, coord, value, prov, spec,
-                         "2025 管理费用（P001 平移）", f"{prev_col}{row}")
+                         "2025 管理费用（规则表生成）" if RULES_MODE
+                         else "2025 管理费用（P001 平移）",
+                         "规则表" if RULES_MODE else f"{prev_col}{row}")
         # 其他管理费用 / 合计行
         for row in sorted({spec.mgmt2025_other_row, spec.mgmt2025_total_row}):
-            src = w2[f"{prev_col}{row}"].value
+            src = (rule_formula(spec, "mgmt2025", row, cur_link, prev_link, out_link)
+                   if RULES_MODE else w2[f"{prev_col}{row}"].value)
             if src is None:
                 continue
             value = rule_mgmt.apply(src) if is_formula(src) else src
             _set_formula(w2, f"{cur_col}{row}", value, prov, spec,
-                         "2025 管理费用合计行（P001 平移）", f"{prev_col}{row}")
+                         "2025 管理费用合计行（规则表生成）" if RULES_MODE
+                         else "2025 管理费用合计行（P001 平移）",
+                         "规则表" if RULES_MODE else f"{prev_col}{row}")
         total_formula = w2[f"{cur_col}{spec.mgmt2025_total_row}"].value
         if is_formula(total_formula):
             for m2 in range(mon + 1, min(spec.mgmt2025_future_until, 12) + 1):
@@ -713,13 +906,16 @@ def run_region(spec: RegionSpec, inputs: Inputs, year: int, mon: int,
     def history_col(role: str) -> str:
         return cur_col if role == "cur" else prev_col
 
-    for role, row in sorted(spec.history_round):
+    # 规则表模式下财务模板的历史列已清理完毕，跳过整段固化以确保历史零改动。
+    for role, row in sorted(() if RULES_MODE else spec.history_round):
         coord = f"{history_col(role)}{row}"
         value = ws[coord].value
         if is_formula(value) and not value.startswith("=ROUND("):
             _set_formula(ws, coord, f"=ROUND({value[1:]},0)", prov, spec,
                          "历史列消除浮点小数")
-    for role, row in sorted(spec.history_hard | spec.history_int):
+    for role, row in sorted(
+        frozenset() if RULES_MODE else spec.history_hard | spec.history_int
+    ):
         coord = f"{history_col(role)}{row}"
         cached = ssnap[coord].value
         if cached is None:
@@ -736,10 +932,25 @@ def run_region(spec: RegionSpec, inputs: Inputs, year: int, mon: int,
     # ---- 5. 保存 + 注入外链部件 ------------------------------------------
     buf = io.BytesIO()
     wb.save(buf)
+    data = buf.getvalue()
+    if RULES_MODE:
+        # 上月外链被差额链 / 2025 累计列引用；缓存必须从上月源报表写全，
+        # 否则 WPS 重算时会像旧模板那样整列 #REF!。
+        prev_target = f"{spec.report_stem}{prev_period}.XLS"
+        prev_cache = collect_link_cache(wb, prev_link, prev_book)
+        data = inject_external_link(
+            data, prev_target, list(prev_book.sheet_names()), prev_cache, prev_link,
+        )
+        result.warnings.append(
+            f"已注入 [{prev_link}] -> {prev_target}"
+            f"（缓存 {sum(len(v) for v in prev_cache.values())} 个单元格）"
+        )
     cache = collect_link_cache(wb, cur_link, book)
-    result.data = inject_external_link(
-        buf.getvalue(), target_name, list(book.sheet_names()), cache, cur_link,
+    data = inject_external_link(
+        data, target_name, list(book.sheet_names()), cache, cur_link,
     )
+    # 补齐模板自带外链里残缺的单元格缓存，避免重算时整列 #REF!
+    result.data = ensure_link_cells(data, wb, template)
     result.warnings.append(
         f"已注入 [{cur_link}] -> {target_name}（缓存 {sum(len(v) for v in cache.values())} 个单元格）"
     )
@@ -810,11 +1021,19 @@ def verify(inputs: Inputs, period: str, prev_period: str,
         prev = _xls_book(inputs.reports[(spec.key, prev_period)])
         totals["net_month"] += _num(xls_value(cur, spec.profit_sheet, "C60"))
         totals["net_accum"] += _num(xls_value(cur, spec.profit_sheet, "D60"))
-        totals["net_2025_accum"] += _num(xls_value(cur, spec.profit_sheet, "J60"))
-        totals["net_2025_month"] += (
-            _num(xls_value(cur, spec.profit_sheet, "J60"))
-            - _num(xls_value(prev, spec.profit_sheet, "I60"))
-        )
+        # 「上年同期累计」列逐表位置不同（巴淡/雅加达在 L，三宝垄/帕鲁在 F），
+        # 且旧实现写死 J60（8 月口径），换月后两项严格校验必然对不平。
+        # 按表头标签定位；当月 2025 数 = 本月累计 − 上月报表累计。
+        cur_col = _label_column(cur, spec.profit_sheet, "上年同期累计")
+        prev_col = _label_column(prev, spec.profit_sheet, "上年同期累计")
+        if cur_col is not None:
+            cur_accum = _num(cur.sheet_by_name(spec.profit_sheet).cell_value(59, cur_col))
+            totals["net_2025_accum"] += cur_accum
+            if prev_col is not None:
+                prev_accum = _num(
+                    prev.sheet_by_name(spec.profit_sheet).cell_value(59, prev_col)
+                )
+                totals["net_2025_month"] += cur_accum - prev_accum
         sh = cur.sheet_by_name("收入成本表")
         # 第 4 行标签定位月份列，避免各中心列位不同（巴淡 CA / 雅加达 BY）。
         # 当月只取「本年 m 月实际」这一列；把所有月份列相加得到的是全年累计，
