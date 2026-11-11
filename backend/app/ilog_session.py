@@ -3,7 +3,7 @@ import os
 import signal
 import subprocess
 from threading import Event, Thread, get_ident
-from .ilog_query import URL
+from .ilog_query import ORDER_LIST_PATH, check_login_origin, open_order_menu, platform_url
 
 # Sync Playwright never raises when the browser/driver process dies mid-call:
 # the pending command just blocks forever (observed twice in production). Every
@@ -72,7 +72,8 @@ def kill_browser_processes():
 
 
 class SessionPool:
-    def __init__(self):
+    def __init__(self, login_url=None):
+        self.login_url = login_url if login_url is not None else platform_url()
         self._owner = get_ident()
         self._pages = {}
         self._browsers = []
@@ -123,18 +124,22 @@ class SessionPool:
         try:
             page = browser.new_page(viewport={'width':1440,'height':1000})
             page.set_default_timeout(20000)
-            page.goto(URL)
+            page.goto(self.login_url)
+            check_login_origin(page, self.login_url)
             language = page.locator('[name=language]')
             language.wait_for(state='attached')
             if not language.input_value():
                 language.locator('..').locator('img').click()
                 with page.expect_navigation():
                     page.get_by_text('简体中文', exact=True).click()
+            check_login_origin(page, self.login_url)
             page.locator('[name=adminUserName]').fill(account['username'])
             page.locator('[name=adminUserPassword]').fill(password)
             page.locator('[name=status]').uncheck()
             page.get_by_role('button', name='登陆', exact=True).click()
-            page.get_by_text('委托单列表', exact=True).click()
+            page.wait_for_url(self.login_url + 'SysLogin!index')
+            page.goto(self.login_url + ORDER_LIST_PATH)
+            open_order_menu(page)
             page.locator('input[name=search]').wait_for()
             self._pages[key] = page
             self._page_browsers[key] = browser

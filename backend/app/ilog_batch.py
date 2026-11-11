@@ -28,7 +28,6 @@ def batch_status(rows, kind):
 
 
 def execute_batch(page, found, result, report_path, directory, step, *, verify_after=True):
-    from .ilog_query import URL
     from .ilog_unlock import reserve_operation, private_report, outcome, parse_reply, search_bill, retry_verification, compact_success, error_context, finish_submission, dismiss_result_dialog
     rows = plan_batch(found, result['bill'], result['kind'])
     result['records'] = rows
@@ -135,10 +134,10 @@ def _select_batch_records(page, found, eligible, ids, result, step):
 
 
 def _verify_batch_records(page, found, eligible, reply, result, step):
-    from .ilog_query import URL
+    from .ilog_query import open_order_menu, order_list_url
     from .ilog_unlock import search_bill, outcome
-    step('verify_open_page');page.goto(URL)
-    step('verify_open_list');page.get_by_text('委托单列表',exact=True).click()
+    step('verify_open_page');page.goto(order_list_url(page))
+    step('verify_open_list');open_order_menu(page)
     step('verify_wait_search');page.locator('input[name=search]').wait_for()
     after=search_bill(page,result['bill'],trace=lambda phase:step('verify_'+phase))
     step('verify_order_state')

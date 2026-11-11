@@ -44,6 +44,7 @@ class FakePage:
         self.selected=selected; self.events=[]
     def evaluate(self, script): return 'grid' if 'getEl' in script else self.selected
     def locator(self, selector): self.events.append(('locator',selector)); return self
+    def count(self): return 0
     def nth(self,index): self.events.append(('nth',index)); return self
     def get_by_role(self,role,**kw): self.target=kw['name']; return self
     def get_by_text(self,text,**kw): self.target=text; return self

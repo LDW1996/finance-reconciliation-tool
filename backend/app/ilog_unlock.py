@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
 from app.accounts import AccountStore, account_data_dir
-from app.ilog_query import URL, validate_bill
+from app.ilog_query import open_order_menu, order_list_url, validate_bill
 
 
 def parse_reply(raw):
@@ -162,8 +162,8 @@ def wait_for_clickable_list(page, seconds=5.0, confirmations=1):
 
 def reset_order_list(page):
     """Return the authenticated session to a known list state without logging in again."""
-    page.goto(URL)
-    page.get_by_text('委托单列表', exact=True).click()
+    page.goto(order_list_url(page))
+    open_order_menu(page)
     page.locator('input[name=search]').wait_for()
 
 
@@ -623,9 +623,9 @@ def _save_execution_screenshot(page, result, report_path, timings, screenshot_po
 
 def _verify_single_order(page, bill, record, reply, kind, result, step):
     step('verify_open_page')
-    page.goto(URL)
+    page.goto(order_list_url(page))
     step('verify_open_list')
-    page.get_by_text('委托单列表', exact=True).click()
+    open_order_menu(page)
     step('verify_wait_search')
     page.locator('input[name=search]').wait_for()
     after = search_bill(page, bill, trace=lambda phase: step('verify_' + phase))

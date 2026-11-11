@@ -39,7 +39,7 @@ def voyage_reply_status(reply):
 
 def execute_voyage(page, found, result, report_path, directory, step, target, *, verify_after=True):
     from .ilog_unlock import private_report, parse_reply, search_bill, retry_verification, dismiss_result_dialog, reserve_operation
-    from .ilog_query import URL
+    from .ilog_query import open_order_menu, order_list_url
     seed = validate_target(found, target)
     if target['account_id'] != result['account'] or target['kind'] != result['kind']:
         raise ValueError('航次核对账号或操作类型不一致')
@@ -83,8 +83,8 @@ def execute_voyage(page, found, result, report_path, directory, step, target, *,
         result['status'] = voyage_reply_status(reply)
         if verify_after:
             def verify():
-                step('verify_open_page'); page.goto(URL)
-                page.get_by_text('委托单列表', exact=True).click(); page.locator('input[name=search]').wait_for()
+                step('verify_open_page'); page.goto(order_list_url(page))
+                open_order_menu(page); page.locator('input[name=search]').wait_for()
                 after = search_bill(page, result['bill'])
                 current = validate_target(after, target); result['after'] = current
                 if reply and reply.get('success') and (current['lock'] != 'U' if result['kind']=='order' else current['lock'] not in ('B','U')):

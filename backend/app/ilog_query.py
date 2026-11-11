@@ -3,13 +3,71 @@
 import argparse
 import json
 import re
-from urllib.parse import unquote_plus
+from tempfile import NamedTemporaryFile
+from urllib.parse import unquote_plus, urlsplit
 from uuid import uuid4
 
 from app.accounts import AccountStore, account_data_dir
 from app.bill_validation import valid_bill
 
-URL = 'https://logistics.sitc.com/ilog/desktop/kanbanm/booking.html'
+LOGIN_URL = 'https://jk.sitc.com/ilog/'
+ORDER_LIST_PATH = 'desktop/kanbanm/booking.html'
+
+
+def normalize_platform_url(value):
+    parsed = urlsplit(value.strip())
+    host = parsed.hostname or ''
+    if (
+        parsed.scheme != 'https'
+        or not re.fullmatch(r'(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+sitc\.com', host)
+        or parsed.netloc.lower() != host
+        or parsed.path not in ('', '/', '/ilog', '/ilog/')
+        or parsed.query or parsed.fragment
+    ):
+        raise ValueError('请输入 SITC 的 HTTPS 登录地址，例如 https://jk.sitc.com/ilog/')
+    return f'https://{host}/ilog/'
+
+
+def platform_url():
+    try:
+        return normalize_platform_url((account_data_dir() / 'ilog-platform-url.txt').read_text(encoding='utf-8'))
+    except FileNotFoundError:
+        return LOGIN_URL
+
+
+def save_platform_url(url):
+    directory = account_data_dir()
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with NamedTemporaryFile(mode='w', encoding='utf-8', dir=directory, delete=False) as file:
+        temporary = directory / file.name
+        try:
+            file.write(url)
+            file.close()
+            temporary.replace(directory / 'ilog-platform-url.txt')
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+def order_list_url(page):
+    parsed = urlsplit(getattr(page, 'url', LOGIN_URL))
+    return normalize_platform_url(f'{parsed.scheme}://{parsed.netloc}') + ORDER_LIST_PATH
+
+
+def check_login_origin(page, login_url):
+    if urlsplit(page.url).netloc != urlsplit(login_url).netloc or urlsplit(page.url).scheme != 'https':
+        raise RuntimeError('iLog login redirected outside the configured origin')
+
+
+
+def open_order_menu(page):
+    menu = page.get_by_text('委托单列表', exact=True)
+    menu.wait_for()
+    close_update_log = page.locator(
+        '.x-window:visible:has(.x-window-header-text:text-is("Update Log")) .x-tool-close'
+    )
+    if close_update_log.count() == 1:
+        close_update_log.click()
+    menu.click()
 
 
 def validate_bill(value: str) -> str:
@@ -37,7 +95,9 @@ def query_bill(account_id: str, bill: str, *, headless=True, channel='chrome'):
             page = browser.new_page(viewport={'width': 1440, 'height': 1000})
             page.set_default_timeout(20000)
             result['stage'] = 'login'
-            page.goto(URL)
+            login_url = platform_url()
+            page.goto(login_url)
+            check_login_origin(page, login_url)
             language = page.locator('[name=language]')
             language.wait_for(state='attached')
             # Fresh ExtJS sessions have an empty required language field.
@@ -45,14 +105,15 @@ def query_bill(account_id: str, bill: str, *, headless=True, channel='chrome'):
                 language.locator('..').locator('img').click()
                 with page.expect_navigation():
                     page.get_by_text('简体中文', exact=True).click()
+            check_login_origin(page, login_url)
             page.locator('[name=adminUserName]').fill(account['username'])
             page.locator('[name=adminUserPassword]').fill(password)
             page.locator('[name=status]').uncheck()
             page.get_by_role('button', name='登陆', exact=True).click()
-            menu = page.get_by_text('委托单列表', exact=True)
-            menu.wait_for()
+            page.wait_for_url(login_url + 'SysLogin!index')
+            page.goto(login_url + ORDER_LIST_PATH)
             result['stage'] = 'query'
-            menu.click()
+            open_order_menu(page)
             search = page.locator('input[name=search]')
             search.wait_for()
             # Wait for the initial list before submitting the bill filter.
