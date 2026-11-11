@@ -14,8 +14,8 @@ import pytest
 
 from app.profit_center.config import REGIONS
 from app.profit_center.engine import (
-    _label_column, _zip_parts, ensure_link_cells, inject_external_link,
-    outbook_index, render_rule, rule_formula,
+    _label_column, _render_override, _zip_parts, ensure_link_cells,
+    inject_external_link, outbook_index, render_rule, rule_formula,
 )
 from app.profit_center.formula import ShiftRule
 from app.profit_center.rules import BASE_MONTH, RULES
@@ -115,6 +115,32 @@ def test_rule_formula_unknown_entries_return_none():
     assert rule_formula(spec, "upper", 2, 15, 14, None) == "=[15]管理费用表!$D$6"
     assert rule_formula(spec, "nope", 2, 15, 14, None) is None
     assert rule_formula(spec, "upper", 999, 15, 14, None) is None
+
+
+def test_palu_2025_gross_net_profit_pulled_from_source_income_statement():
+    """帕鲁 2025 毛利(C)/净利润(I)从本月源报表「利润表」上年同期累计(F 列)自动取数。
+
+    回归 2026-11-11：此前 pl_skip 把 C/I 跳空（模板原值 0），财务要求改为自动取数。
+    公式结构与 9 月行模板公式一致：毛利 = 营业收入 F4 − 营业成本 F20，净利润 = F60。
+    """
+    spec = next(r for r in REGIONS if r.key == "palu")
+    assert "C" not in spec.pl_skip and "I" not in spec.pl_skip, "C/I 不应再被跳过"
+    assert "C" in spec.pl_overrides and "I" in spec.pl_overrides
+    assert "F" in spec.pl_overrides, "管理费用-2025 仍走旧表合计行特例"
+
+    c = spec.pl_overrides["C"]
+    i = spec.pl_overrides["I"]
+    assert "利润表!$F$4" in c and "利润表!$F$20" in c, "毛利须用营业收入-营业成本(上年同期)"
+    assert "利润表!$F$60" in i, "净利润须用上年同期累计"
+
+    # 运行时把 {cur} 替换成当前月外链索引（10 月 = 11）
+    c_rendered = _render_override(c, cur_col="L", prev_col="K", cur_link=11, prev_link=10)
+    i_rendered = _render_override(i, cur_col="L", prev_col="K", cur_link=11, prev_link=10)
+    assert c_rendered == "=[11]利润表!$F$4-[11]利润表!$F$20"
+    assert i_rendered == "=[11]利润表!$F$60"
+    # 用 10 月源报表实测值回算：20,062,978,692 − 18,113,660,248 = 1,949,318,444
+    assert 20062978692 - 18113660248 == 1949318444
+
 
 
 # ---------------------------------------------------------------------------
