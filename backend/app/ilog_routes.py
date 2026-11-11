@@ -6,6 +6,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, SecretStr
 from .accounts import AccountStore, account_data_dir
 from . import ilog_tasks
+from .ilog_query import normalize_platform_url, platform_url, save_platform_url
 from .ilog_retention import Retention
 
 
@@ -13,6 +14,20 @@ class AccountUpdate(BaseModel):
     name: str = Field(min_length=1, max_length=40)
     username: str = Field(min_length=1, max_length=100)
     password: SecretStr | None = None
+
+
+class PlatformAddress(BaseModel):
+    url: str = Field(max_length=300)
+
+    def normalized(self):
+        try:
+            return normalize_platform_url(self.url)
+        except ValueError:
+            raise HTTPException(400, "请输入 SITC 的 HTTPS 登录地址，例如 https://jk.sitc.com/ilog/") from None
+
+
+class PlatformLoginTest(PlatformAddress):
+    account_id: str = Field(min_length=1, max_length=100)
 
 
 def account_values(body: AccountUpdate):
@@ -73,6 +88,49 @@ def create_accounts_router():
 
 def create_router(require_local_account_write):
     router = APIRouter()
+
+    @router.get("/api/ilog/platform-address")
+    def get_platform_address():
+        return {"url": platform_url()}
+
+    @router.put("/api/ilog/platform-address")
+    def update_platform_address(body: PlatformAddress, request: Request):
+        require_local_account_write(request)
+        url = body.normalized()
+        manager = ilog_tasks.manager()
+        with ilog_tasks.worker_lock(manager.directory) as acquired:
+            if not acquired:
+                raise HTTPException(409, "iLog 正在处理任务，请稍后再试")
+            with manager.db() as db:
+                db.execute("BEGIN IMMEDIATE")
+                if db.execute("SELECT 1 FROM tasks WHERE state IN ('running','paused','closing')").fetchone():
+                    raise HTTPException(409, "请先结束当前解锁任务")
+                save_platform_url(url)
+        return {"url": url}
+
+    @router.post("/api/ilog/platform-address/test")
+    def test_platform_address(body: PlatformLoginTest, request: Request):
+        from .ilog_session import SessionPool
+
+        require_local_account_write(request)
+        url = body.normalized()
+        store = AccountStore()
+        account = next((item for item in store.list_accounts() if item["id"] == body.account_id), None)
+        password = store.password_for(body.account_id) if account else None
+        if not password:
+            raise HTTPException(400, "请选择已保存密码的业务账号")
+        runtime = ilog_tasks.runtime()
+        if not runtime["available"]:
+            raise HTTPException(503, runtime["message"])
+        with ilog_tasks.worker_lock(ilog_tasks.manager().directory) as acquired:
+            if not acquired:
+                raise HTTPException(409, "iLog 正在处理任务，请稍后再试")
+            try:
+                with SessionPool(login_url=url) as session:
+                    session.page(account["id"], account, password, channel=runtime["channel"])
+            except Exception:
+                raise HTTPException(502, "登录测试失败，请检查地址、账号密码及网络连接") from None
+        return {"ok": True}
 
     @router.post("/api/ilog/accounts", status_code=201)
     def create_ilog_account(body: AccountUpdate, request: Request):

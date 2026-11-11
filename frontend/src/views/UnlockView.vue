@@ -148,6 +148,23 @@
 
     <section v-else-if="view === 'accounts'" class="management-section ds-flush-table">
       <UnlockAccountsTable :accounts="accounts" :busy="busy" @edit="openAccount" @remove="removeAccount" />
+      <details class="platform-address-settings">
+        <summary>{{ platformText('平台地址') }}</summary>
+        <el-form label-position="top" @submit.prevent class="platform-address-form">
+          <el-form-item :label="platformText('平台地址')">
+            <el-input v-model="platformAddress" placeholder="https://jk.sitc.com/ilog/" :disabled="addressBusy || !addressLoaded" maxlength="300" />
+          </el-form-item>
+          <el-form-item :label="platformText('登录测试账号')">
+            <el-select v-model="testAccountId" :disabled="addressBusy" style="width: 100%">
+              <el-option v-for="account in accounts.filter(item => item.hasPassword)" :key="account.id" :label="account.name" :value="account.id" />
+            </el-select>
+          </el-form-item>
+          <el-form-item>
+            <el-button :loading="testingAddress" :disabled="busy || savingAddress || !platformAddress.trim() || !testAccountId" @click="testPlatformAddress">{{ platformText('测试登录') }}</el-button>
+            <el-button type="primary" :loading="savingAddress" :disabled="busy || testingAddress || !platformAddress.trim() || platformAddress === savedPlatformAddress" @click="savePlatformAddress">{{ platformText('保存') }}</el-button>
+          </el-form-item>
+        </el-form>
+      </details>
     </section>
 
     <section v-if="view === 'history'" class="management-section ds-flush-table">
@@ -288,6 +305,51 @@ const storageKey = 'finance-ilog-account-metadata-v1'
 const accounts = ref<Account[]>([])
 const accountId = ref('')
 const accountHeaders = { 'X-Finance-Local': '1' }
+const platformAddress = ref('')
+const savedPlatformAddress = ref('')
+const testAccountId = ref('')
+const addressLoaded = ref(false)
+const testingAddress = ref(false)
+const savingAddress = ref(false)
+const addressBusy = computed(() => testingAddress.value || savingAddress.value)
+
+watch(() => props.view, async (view) => {
+  if (view !== 'accounts') return
+  try {
+    const { data } = await axios.get<{ url: string }>('/api/ilog/platform-address')
+    savedPlatformAddress.value = platformAddress.value = data.url
+    addressLoaded.value = true
+  } catch { ElMessage.error(platformText('无法读取平台地址')) }
+}, { immediate: true })
+
+watch(accounts, (items) => {
+  if (!items.some(item => item.id === testAccountId.value && item.hasPassword)) {
+    testAccountId.value = items.find(item => item.hasPassword)?.id || ''
+  }
+}, { deep: true })
+
+async function savePlatformAddress() {
+  savingAddress.value = true
+  try {
+    const { data } = await axios.put<{ url: string }>('/api/ilog/platform-address', { url: platformAddress.value }, { headers: accountHeaders })
+    savedPlatformAddress.value = platformAddress.value = data.url
+    ElMessage.success(platformText('平台地址已保存'))
+  } catch (error) {
+    const detail = axios.isAxiosError(error) ? error.response?.data?.detail : null
+    ElMessage.error(platformText(typeof detail === 'string' ? detail : '保存平台地址失败'))
+  } finally { savingAddress.value = false }
+}
+
+async function testPlatformAddress() {
+  testingAddress.value = true
+  try {
+    await axios.post('/api/ilog/platform-address/test', { url: platformAddress.value, account_id: testAccountId.value }, { headers: accountHeaders })
+    ElMessage.success(platformText('登录成功，已打开委托单列表'))
+  } catch (error) {
+    const detail = axios.isAxiosError(error) ? error.response?.data?.detail : null
+    ElMessage.error(platformText(typeof detail === 'string' ? detail : '登录测试失败'))
+  } finally { testingAddress.value = false }
+}
 onMounted(async () => {
   try {
     const response = await axios.get<Account[]>('/api/ilog/accounts')
@@ -545,6 +607,26 @@ onBeforeUnmount(() => { disposed = true; clearTimeout(timer);clearInterval(expir
 </script>
 
 <style scoped>
+.platform-address-settings {
+  margin-top: 16px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--el-border-color-light);
+}
+.platform-address-settings > summary {
+  width: fit-content;
+  cursor: pointer;
+  font-weight: 600;
+}
+.platform-address-form {
+  display: grid;
+  grid-template-columns: minmax(220px, 420px) minmax(160px, 240px) auto;
+  gap: 0 16px;
+  align-items: end;
+  padding: 16px 0;
+}
+@media (max-width: 760px) {
+  .platform-address-form { grid-template-columns: 1fr; }
+}
 /* ============================================================
    v5 - vertical stack: settings -> input -> progress -> results
    Only layout and appearance change here; every state, request and

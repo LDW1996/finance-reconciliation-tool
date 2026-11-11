@@ -32,6 +32,7 @@ from uuid import uuid4
 
 from .accounts import account_data_dir
 from .bill_validation import normalize_bills
+from .ilog_query import platform_url
 
 
 def duplicate_block_message(detail):
@@ -200,8 +201,8 @@ class TaskManager:
     normalize_bills = staticmethod(normalize_bills)
 
     @staticmethod
-    def preview_binding(account, fallback_account, fee, order):
-        return json.dumps([account,fallback_account or None,fee,order],ensure_ascii=False)
+    def preview_binding(account, fallback_account, fee, order, login_url):
+        return json.dumps([account,fallback_account or None,fee,order,login_url],ensure_ascii=False)
 
     def preview(self, account, name, fee, order, *, fallback_account=None, fallback_name=None):
         from contextlib import nullcontext
@@ -217,7 +218,8 @@ class TaskManager:
         accepts_kwargs=any(p.kind==inspect.Parameter.VAR_KEYWORD for p in parameters.values())
         queries=[];issues=[]
         use_pool=self.runner is None or accepts_kwargs or 'session_pool' in parameters
-        with (SessionPool() if use_pool else nullcontext(None)) as session_pool:
+        login_url = platform_url()
+        with (SessionPool(login_url=login_url) if use_pool else nullcontext(None)) as session_pool:
             for kind,bills in [('fee',fee),('order',order)]:
                 for bill in bills:
                     candidates=[(account,name)]
@@ -244,7 +246,7 @@ class TaskManager:
         data={'token':secrets.token_urlsafe(32),'expires_at':datetime.fromtimestamp(expires,timezone.utc).isoformat(),'groups':groups,'issues':issues,'can_execute':bool(groups) and not issues}
         with self.db() as db:
             db.execute('DELETE FROM voyage_previews WHERE expires<=?',(time.time(),))
-            db.execute('INSERT INTO voyage_previews VALUES (?,?,?,?)',(data['token'],expires,self.preview_binding(account,fallback_account,fee,order),json.dumps(data,ensure_ascii=False)))
+            db.execute('INSERT INTO voyage_previews VALUES (?,?,?,?)',(data['token'],expires,self.preview_binding(account,fallback_account,fee,order,login_url),json.dumps(data,ensure_ascii=False)))
         return deepcopy(data)
 
     def create(self, account, name, fee, order, key, confirmed, *, fallback_account=None, fallback_name=None, scope="bill", screenshot_policy="errors", record_timings=False, preview_token=None, verify_after=True):
@@ -278,7 +280,7 @@ class TaskManager:
             if scope=='voyage':
                 saved=db.execute('SELECT * FROM voyage_previews WHERE token=?',(preview_token,)).fetchone()
                 if not saved or saved['expires']<=time.time(): raise ValueError('航次预览不存在或已过期，请重新查询')
-                if saved['binding']!=self.preview_binding(account,fallback_account,fee,order): raise ValueError('预览输入或账号已变化，请重新查询')
+                if saved['binding']!=self.preview_binding(account,fallback_account,fee,order,platform_url()): raise ValueError('预览输入、账号或平台地址已变化，请重新查询')
                 preview=json.loads(saved['data'])
                 if not preview['can_execute'] or preview['issues'] or not preview['groups']: raise ValueError('预览存在问题，禁止执行')
                 inputs=[{'bill':g.get('bill') or g['bills'][0],'kind':g['kind'],'target':g,

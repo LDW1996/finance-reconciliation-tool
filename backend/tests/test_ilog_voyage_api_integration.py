@@ -114,6 +114,9 @@ def test_preview_shares_pool_across_all_queries_and_closes(manager,monkeypatch,f
     m,_=manager
     events=[];pools=[]
     class Pool:
+        def __init__(self, *, login_url):
+            assert login_url.startswith('https://')
+
         def __enter__(self): events.append('enter');return self
         def __exit__(self,*exc): events.append('close')
     monkeypatch.setattr('app.ilog_session.SessionPool',Pool)
