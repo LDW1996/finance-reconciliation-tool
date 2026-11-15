@@ -25,7 +25,7 @@
 </template>
 <script setup lang="ts">
 import {computed,onMounted,onBeforeUnmount,ref} from 'vue'
-import {ElMessageBox} from 'element-plus'
+import { actionDialog } from '../services/actionDialog'
 import CustomerMappingPreview from './CustomerMappingPreview.vue'
 import {mailMatchingApi,matchingError,validateSpreadsheetUrl,type CustomerMappingMetadata,type CustomerOnlineConfig} from '../services/mailMatching'
 const props=defineProps<{disabled:boolean;embedded?:boolean}>()
@@ -69,7 +69,7 @@ async function toggle(){await work('toggle',async()=>{const result=await mailMat
 async function importBackup(event:Event,sheet=''){
   const input=event.target as HTMLInputElement,file=input.files?.[0];input.value=''
   if(!file || props.disabled || working.value)return
-  if(metadata.value.entries_count){try{await ElMessageBox.confirm('备用文件将替换当前客户映射。在线来源配置保留，依赖旧映射的关联将重新核对。','导入备用客户台账',{confirmButtonText:'导入并替换',cancelButtonText:'取消',type:'warning'})}catch{return}}
+  if(metadata.value.entries_count){try{await actionDialog.confirm('备用文件将替换当前客户映射。在线来源配置保留，依赖旧映射的关联将重新核对。','导入备用客户台账',{confirmButtonText:'导入并替换',cancelButtonText:'取消',type:'warning'})}catch{return}}
   await work('file-import',async()=>{const result=await mailMatchingApi.importCustomerMapping(file,sheet,controller.signal);if(alive){metadata.value=result;readFailed.value=false}},true)
 }
 async function reload(){const [meta,source]=await Promise.all([mailMatchingApi.customerMapping(controller.signal),mailMatchingApi.customerOnlineConfig(controller.signal)]);if(alive){metadata.value=meta;config.value=source;emit('metadata',meta)}}

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { actionDialog } from '../services/actionDialog'
 import { mailApi } from '../services/mail'
 import ReceiptEvidencePreview from './ReceiptEvidencePreview.vue'
 import { Close } from '@element-plus/icons-vue'
@@ -17,7 +18,7 @@ async function openOriginal(){
   try{
     const result=await mailApi.openOriginal(chosen.value.mail_id)
     if(result.opened)ElMessage.success('已请求 Outlook 打开原邮件')
-    else await ElMessageBox.alert([result.reason,result.search?.subject,result.search?.sender,result.search?.received].filter(Boolean).join('\n'),'原邮件定位提示',{confirmButtonText:'知道了',customStyle:{whiteSpace:'pre-wrap'}})
+    else await actionDialog.alert([result.reason,result.search?.subject,result.search?.sender,result.search?.received].filter(Boolean).join('\n'),'原邮件定位提示',{confirmButtonText:'知道了',customStyle:{whiteSpace:'pre-wrap'}})
   }catch(error){if(error!=='cancel' && error!=='close')ElMessage.error('无法打开 Outlook 原邮件，请检查本地服务。')}
   finally{openingOriginal.value=false}
 }
@@ -106,7 +107,7 @@ async function review(state: ReviewState) {
   if (state === 'confirmed') {
     if (chosen.value?.payment_id && !confirmed.value) emit('review', state, chosen.value)
   } else {
-    if(state==='pending'){try{await ElMessageBox.confirm('将撤销本地核对状态，不删除邮件或流水；已回写在线表的内容不会自动撤销。','重置核对',{confirmButtonText:'确认重置',cancelButtonText:'取消',type:'warning'})}catch{return}}
+    if(state==='pending'){try{await actionDialog.confirm('将撤销本地核对状态，不删除邮件或流水；已回写在线表的内容不会自动撤销。','重置核对',{confirmButtonText:'确认重置',cancelButtonText:'取消',type:'warning'})}catch{return}}
     if(!props.busy && !props.stale)emit('review', state)
   }
 }

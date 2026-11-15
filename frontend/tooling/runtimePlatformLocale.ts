@@ -71,7 +71,7 @@ export function runtimePlatformLocale(): Plugin {
             used=true; return
           }
           const displayFunction = node.type === 'VariableDeclarator' && /^(?:statusText|attemptText|reviewLabel|amountText|errorText|emptyPaymentText|emptyText)$/.test(node.id?.name)
-          const call = node.type === 'CallExpression' && node.callee?.type === 'MemberExpression' && ['ElMessage','ElMessageBox'].includes(node.callee.object?.name)
+          const call = node.type === 'CallExpression' && node.callee?.type === 'MemberExpression' && ['ElMessage','ElMessageBox','actionDialog'].includes(node.callee.object?.name)
           if(node.type === 'TemplateElement' && ui && /[\u4e00-\u9fff]/.test(node.value.cooked || '')) {
             edits.push({start:script.loc.start.offset+node.start,end:script.loc.start.offset+node.end,text:'${__platformText('+JSON.stringify(node.value.cooked)+')}'})
             used=true; return

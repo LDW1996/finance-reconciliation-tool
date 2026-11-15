@@ -106,7 +106,8 @@
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount, ref, computed } from 'vue'
 import axios from 'axios'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { actionDialog } from '../services/actionDialog'
 defineProps<{standalone?:boolean}>()
 type Rules={max_gb:number;min_free_gb:number;queue_limit:number;preview_cache_mb:number}
 type Stats={settings:Rules;mail_count:number;attachment_count:number;used_bytes:number;database_bytes:number;attachment_bytes:number;recognition_bytes:number;preview_cache_bytes:number;cleanup_backup_bytes?:number;free_bytes:number;reusable_bytes:number;data_directory:string;warning:boolean;blocked_reason:string}
@@ -160,7 +161,7 @@ async function startPreview(){
   catch(cause){error.value=failure(cause,'无法开始存储预览，请稍后重试。')}
 }
 async function optimize(){
-  try{await ElMessageBox.confirm('将去重原件并移除可重建的历史预览，保留邮件、原始凭证、识别文字及确认关联。整理大数据库需要临时磁盘空间，请保持程序运行。','确认优化存储',{confirmButtonText:'开始优化',cancelButtonText:'取消',type:'warning'})}catch{return}
+  try{await actionDialog.confirm('将去重原件并移除可重建的历史预览，保留邮件、原始凭证、识别文字及确认关联。整理大数据库需要临时磁盘空间，请保持程序运行。','确认优化存储',{confirmButtonText:'开始优化',cancelButtonText:'取消',type:'warning'})}catch{return}
   error.value=''
   try{job.value=(await client.post<Job>('/storage/maintenance/optimize',{confirmed:true,preview_id:job.value.id,compact:compact.value})).data;schedule()}
   catch(cause){error.value=failure(cause,'存储优化未启动，请重新预览后重试。')}
@@ -172,7 +173,7 @@ async function cleanupPreview(){
 }
 async function cleanupExecute(){
   const previewId=job.value.id, ids=[...selected.value]
-  try{await ElMessageBox.confirm(`请确认已逐封核对这 ${ids.length} 封邮件。程序先保存加密恢复备份，再清理本地记录；Outlook原件和所有附件保留。备份继续占用空间，数据库不会立即缩小。`,'确认本地邮件清理',{confirmButtonText:'备份并清理',cancelButtonText:'取消',type:'warning'})}catch{return}
+  try{await actionDialog.confirm(`请确认已逐封核对这 ${ids.length} 封邮件。程序先保存加密恢复备份，再清理本地记录；Outlook原件和所有附件保留。备份继续占用空间，数据库不会立即缩小。`,'确认本地邮件清理',{confirmButtonText:'备份并清理',cancelButtonText:'取消',type:'warning'})}catch{return}
   error.value=''
   try{job.value=(await client.post<Job>('/storage/cleanup/execute',{confirmed:true,preview_id:previewId,selected:ids})).data;selected.value=[];schedule()}
   catch(cause){error.value=failure(cause,'清理未启动，请重新预览。')}

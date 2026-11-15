@@ -2,26 +2,27 @@
   <el-config-provider :locale="elementLocale">
   <main class="app-shell">
     <section class="workspace ds-scope" aria-labelledby="page-title">
-      <header class="page-header ds-head">
-        <ModuleTitle :icon="DataAnalysis" title-id="page-title">{{ t('title') }}</ModuleTitle>
-        <div v-if="standaloneExcel" class="header-actions">
-          <el-select
-            v-model="language"
-            class="language-select"
-            :aria-label="t('languageLabel')"
-            :disabled="isAnalyzing"
-          >
-            <el-option v-for="option in localeOptions" :key="option.value" :label="option.label" :value="option.value" />
-          </el-select>
+      <header class="module-header">
+        <nav class="function-nav" :aria-label="t('menuLabel')">
+          <el-menu :default-active="outputMode" mode="horizontal" @select="handleMenuSelect">
+            <el-menu-item index="detailed" :disabled="isAnalyzing"><el-icon><Document /></el-icon>{{ t('detailedMode') }}</el-menu-item>
+            <el-menu-item index="marked" :disabled="isAnalyzing"><el-icon><Brush /></el-icon>{{ t('markedMode') }}</el-menu-item>
+          </el-menu>
+        </nav>
+        <div class="module-header-end">
+          <ModuleTitle class="compact-module-title" :icon="DataAnalysis" title-id="page-title">{{ t('title') }}</ModuleTitle>
+          <div v-if="standaloneExcel" class="header-actions">
+            <el-select
+              v-model="language"
+              class="language-select"
+              :aria-label="t('languageLabel')"
+              :disabled="isAnalyzing"
+            >
+              <el-option v-for="option in localeOptions" :key="option.value" :label="option.label" :value="option.value" />
+            </el-select>
+          </div>
         </div>
       </header>
-
-      <nav class="function-nav" :aria-label="t('menuLabel')">
-        <el-menu :default-active="outputMode" mode="horizontal" @select="handleMenuSelect">
-          <el-menu-item index="detailed" :disabled="isAnalyzing"><el-icon><Document /></el-icon>{{ t('detailedMode') }}</el-menu-item>
-          <el-menu-item index="marked" :disabled="isAnalyzing"><el-icon><Brush /></el-icon>{{ t('markedMode') }}</el-menu-item>
-        </el-menu>
-      </nav>
       <p class="mode-description" aria-live="polite">{{ t(outputMode === 'marked' ? 'markedModeHelp' : 'detailedModeHelp') }}</p>
 
       <div class="layout-grid">
@@ -369,7 +370,7 @@ function downloadResult() {
 .mode-description { margin: -8px 0 24px; color: var(--el-text-color-secondary); font-size: 14px; line-height: 1.6; }
 .ds-scope .layout-grid { gap: var(--ds-sp-6); }
 .ds-scope .panel { border-radius: var(--ds-radius-card); box-shadow: var(--ds-shadow-1); }
-.ds-scope .page-header { padding-bottom: var(--ds-sp-2); }
+
 .ds-scope .inspection-header, .ds-scope .section-title-row { min-height: var(--ds-control-h); margin-bottom: var(--ds-sp-4); }
 .ds-result-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--ds-sp-3); margin-bottom: var(--ds-sp-5); }
 .ds-result-metrics :deep(.ds-metric) { padding: var(--ds-sp-3); }

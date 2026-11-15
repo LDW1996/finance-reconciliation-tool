@@ -70,7 +70,8 @@ import ReceiptReview from './ReceiptReview.vue'
 import CustomerMapping from './CustomerMapping.vue'
 import BankLedgerPreview from './BankLedgerPreview.vue'
 import { platformText } from '../platformLocale'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { actionDialog } from '../services/actionDialog'
 import { mailMatchingApi, matchingError, validateSpreadsheetUrl, type OnlineConfig, type OnlineHistoryItem, type OnlineWriteback, type MatchingCandidate, type MatchingResult, type MatchingRow, type MatchingScope, type ReviewState, type MatchComputation, type CustomerMappingMetadata } from '../services/mailMatching'
 
 const props = withDefaults(defineProps<{ active?: boolean }>(), { active: true })
@@ -259,7 +260,7 @@ async function writeOnline() {
     }
     if (!fresh.summary.confirmed || !fresh.confirmation_token) throw new Error('当前没有已确认关联可回写')
     try {
-      await ElMessageBox.confirm(`将回写当前在线流水的 ${fresh.summary.confirmed} 条已确认关联（包含其他页面及筛选范围），保留原备注和核销状态。冲突会跳过并记录原因。回写期间请勿排序或增删在线表行。是否继续？`, '确认回写在线工作表', { type: 'warning', confirmButtonText: '确认回写', cancelButtonText: '取消' })
+      await actionDialog.confirm(`将回写当前在线流水的 ${fresh.summary.confirmed} 条已确认关联（包含其他页面及筛选范围），保留原备注和核销状态。冲突会跳过并记录原因。回写期间请勿排序或增删在线表行。是否继续？`, '确认回写在线工作表', { type: 'warning', confirmButtonText: '确认回写', cancelButtonText: '取消' })
     } catch { return }
     if (!alive || token !== sequence || signal.aborted) return
     try {

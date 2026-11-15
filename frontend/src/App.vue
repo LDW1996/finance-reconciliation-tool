@@ -14,15 +14,25 @@
     <ReconciliationView v-if="page==='excel' && can('excel')"/>
     <ProfitCenterView v-else-if="page==='profit-center' && can('excel')"/>
     <MailView v-else-if="page==='mail' && can('mail')"/>
-    <div v-else-if="can('ilog') && isIlog" class="ilog-workspace"><ModuleTitle class="ilog-title" :icon="Unlock">iLog</ModuleTitle><nav class="ilog-tabs module-tabs" aria-label="iLog功能导航"><button v-for="tab in ilogTabs" :key="tab.page" type="button" :class="{selected:page===tab.page}" :aria-current="page===tab.page ? 'page' : undefined" @click="navigate(tab.page)"><el-icon aria-hidden="true"><component :is="tab.icon"/></el-icon>{{tab.label}}</button></nav>
-    <UnlockView v-if="can('ilog') && (page==='unlock'||page==='accounts'||page==='history')" :view="page" @navigate="navigate"/><IlogRetentionSettings v-if="page==='retention'"/></div>
+    <div v-else-if="can('ilog') && isIlog" class="ilog-workspace">
+      <header class="module-header">
+        <nav class="ilog-tabs module-tabs" aria-label="iLog功能导航">
+          <button v-for="tab in ilogTabs" :key="tab.page" type="button" :class="{selected:page===tab.page}" :aria-current="page===tab.page ? 'page' : undefined" @click="navigate(tab.page)">
+            <el-icon aria-hidden="true"><component :is="tab.icon"/></el-icon>{{tab.label}}
+          </button>
+        </nav>
+        <ModuleTitle class="compact-module-title" :icon="Box">iLog</ModuleTitle>
+      </header>
+      <UnlockView v-if="can('ilog') && (page==='unlock'||page==='accounts'||page==='history')" :view="page" @navigate="navigate"/>
+      <IlogRetentionSettings v-if="page==='retention'"/>
+    </div>
   </template>
 </template>
 <script setup lang="ts">
 import ModuleTitle from './components/ModuleTitle.vue'
 import { ref, computed, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
-import { OfficeBuilding, User, SwitchButton, Unlock, Clock, Setting } from '@element-plus/icons-vue'
+import { OfficeBuilding, User, SwitchButton, Unlock, Clock, Setting, Box } from '@element-plus/icons-vue'
 import ReconciliationView from './views/ReconciliationView.vue'
 import ProfitCenterView from './views/ProfitCenterView.vue'
 import MailView from './views/MailView.vue'
@@ -48,14 +58,18 @@ onBeforeUnmount(()=>{window.removeEventListener('hashchange',syncHash);window.re
 void initialize()
 </script>
 <style scoped>
-.ilog-workspace{padding:32px;min-width:0}.ilog-workspace>.ilog-title{margin:0 0 24px;font-size:28px}
+.ilog-workspace{padding:16px 32px 32px;min-width:0}
+.module-header .ilog-tabs.module-tabs{flex:1;min-width:0;margin:0;border-bottom:0}
 .ilog-tabs{display:flex;gap:32px;border-bottom:1px solid var(--border);margin-bottom:24px;overflow-x:auto}
 .ilog-tabs button{border:0;border-bottom:2px solid transparent;background:transparent;padding:0 4px;white-space:nowrap;color:inherit;cursor:pointer}
 .ilog-tabs button.selected{color:var(--el-color-primary);border-bottom-color:var(--el-color-primary);font-weight:600}
 .ilog-tabs button:focus-visible{outline:2px solid var(--el-color-primary)}
 .ilog-workspace :deep(.unlock-heading h2){font-size:20px;line-height:1.5}
 .ilog-workspace :deep(.unlock-shell){padding:0;margin:0;max-width:none}
-@media(max-width:700px){.ilog-workspace{padding:24px 16px}}
+@media(max-width:700px){.ilog-workspace{padding:16px}}
+@media(max-width:680px){
+  .module-header .ilog-tabs.module-tabs{overflow-x:auto}
+}
 
 .platform-header.product-bar { min-height: 72px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; column-gap: 32px; padding: 0 32px; }
 .platform-brand.product-brand { gap: 10px; font-size: 19px; letter-spacing: -.025em; color: #16334b; }

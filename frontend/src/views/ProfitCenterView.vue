@@ -1,11 +1,15 @@
 <template>
   <main class="pc-shell">
+    <header class="module-header">
+      <nav class="function-nav" :aria-label="$platformText('页签切换')">
+        <el-menu :default-active="activeTab" mode="horizontal" @select="activeTab = $event">
+          <el-menu-item index="data"><el-icon aria-hidden="true"><Upload /></el-icon>{{ $platformText('数据上报') }}</el-menu-item>
+          <el-menu-item index="templates"><el-icon aria-hidden="true"><Document /></el-icon>{{ $platformText('模板管理') }}</el-menu-item>
+        </el-menu>
+      </nav>
+      <ModuleTitle class="compact-module-title" :icon="TrendCharts">{{ $platformText('利润中心上报') }}</ModuleTitle>
+    </header>
     <el-alert v-if="errorMessage" class="pc-alert" type="error" :title="errorMessage" :closable="false" show-icon />
-
-    <el-radio-group v-model="activeTab" class="pc-tabs" aria-label="页签切换">
-      <el-radio-button value="data">{{ $platformText('数据上报') }}</el-radio-button>
-      <el-radio-button value="templates">{{ $platformText('模板管理') }}</el-radio-button>
-    </el-radio-group>
 
     <div v-loading="configLoading" class="pc-config">
       <template v-if="activeTab === 'templates'">
@@ -246,7 +250,8 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { Download, UploadFilled } from '@element-plus/icons-vue'
+import ModuleTitle from '../components/ModuleTitle.vue'
+import { Document, Download, TrendCharts, Upload, UploadFilled } from '@element-plus/icons-vue'
 import type { UploadFile, UploadInstance } from 'element-plus'
 import { platformText } from '../platformLocale'
 import { downloadBlob } from '../services/api'
@@ -531,12 +536,8 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.pc-shell { padding: 28px 32px 48px; max-width: 1240px; margin: 0 auto; }
+.pc-shell { padding: 16px 32px 48px; }
 .pc-alert { margin-bottom: 20px; }
-.pc-tabs { display: flex; width: 100%; margin-bottom: 20px; --el-radio-button-checked-bg-color: var(--el-color-primary-light-9); --el-radio-button-checked-text-color: var(--el-color-primary); --el-radio-button-checked-border-color: var(--el-color-primary-light-5); }
-.pc-tabs :deep(.el-radio-button) { flex: 1; }
-.pc-tabs :deep(.el-radio-button.is-active .el-radio-button__inner) { background: var(--el-color-primary-light-9); color: var(--el-color-primary); border-color: var(--el-color-primary-light-5); box-shadow: none; }
-.pc-tabs :deep(.el-radio-button__inner) { width: 100%; box-sizing: border-box; }
 .pc-config { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 24px; align-items: start; }
 .pc-config > .pc-card { grid-column: 1 / -1; }
 .pc-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }

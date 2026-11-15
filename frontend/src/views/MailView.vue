@@ -1,17 +1,26 @@
 <template>
   <main class="mail-page">
-    <header class="mail-heading ds-head">
-      <div><ModuleTitle :icon="Message">邮件收款匹配</ModuleTitle><p>{{ status?.enabled ? '自动读取已开启' : '自动读取未开启' }}<span v-if="status?.analysis_busy"> · 正在识别付款附件</span></p></div>
-      <div class="mail-actions">
-        <input ref="fileInput" type="file" accept=".eml,.msg" class="mail-file-input" @change="importSample" />
-        <el-button v-if="section === 'mail'" :icon="Upload" :loading="working === 'import'" :disabled="!!working" @click="fileInput?.click()">导入验证邮件</el-button>
-        <el-button v-if="section === 'mail'" :icon="Download" :disabled="mailListUnavailable || !rows.length" @click="exportRows">导出本页邮件</el-button>
-      </div>
+    <header class="module-header">
+      <nav class="function-nav" aria-label="邮件收款匹配">
+        <el-menu :default-active="section" mode="horizontal" @select="section = $event">
+          <el-menu-item index="receipts"><el-icon aria-hidden="true"><Wallet /></el-icon>收款匹配</el-menu-item>
+          <el-menu-item index="mail"><el-icon aria-hidden="true"><Message /></el-icon>邮箱与邮件</el-menu-item>
+          <el-menu-item index="storage"><el-icon aria-hidden="true"><Setting /></el-icon>保存设置</el-menu-item>
+        </el-menu>
+      </nav>
+      <ModuleTitle class="compact-module-title" :icon="Collection">邮件收款匹配</ModuleTitle>
     </header>
 
-    <el-tabs v-model="section" class="module-tabs">
-      <el-tab-pane label="收款匹配" name="receipts"><template #label><span class="module-tab-label"><el-icon aria-hidden="true"><Wallet/></el-icon>收款匹配</span></template><ReceiptMatching ref="receiptMatching" :active="section === 'receipts'" @open-mail="openMatchedMail" /></el-tab-pane>
-      <el-tab-pane label="邮箱与邮件" name="mail"><template #label><span class="module-tab-label"><el-icon aria-hidden="true"><Message/></el-icon>邮箱与邮件</span></template>
+    <ReceiptMatching v-show="section === 'receipts'" ref="receiptMatching" :active="section === 'receipts'" @open-mail="openMatchedMail" />
+    <div v-show="section === 'mail'">
+      <div class="mail-heading">
+        <p>{{ status?.enabled ? '自动读取已开启' : '自动读取未开启' }}<span v-if="status?.analysis_busy"> · 正在识别付款附件</span></p>
+        <div class="mail-actions">
+          <input ref="fileInput" type="file" accept=".eml,.msg" class="mail-file-input" @change="importSample" />
+          <el-button v-if="section === 'mail'" :icon="Upload" :loading="working === 'import'" :disabled="!!working" @click="fileInput?.click()">导入验证邮件</el-button>
+          <el-button v-if="section === 'mail'" :icon="Download" :disabled="mailListUnavailable || !rows.length" @click="exportRows">导出本页邮件</el-button>
+        </div>
+      </div>
     <el-alert v-if="connectionError" :title="connectionError" type="error" :closable="false" show-icon class="mail-alert" />
     <details class="mail-settings" :open="settingsOpen ?? true" @toggle="settingsOpen = ($event.target as HTMLDetailsElement).open">
       <summary><strong>自动收取邮件</strong><span class="auto-mail-state">{{ !status ? '正在检查环境' : !status.outlook_supported ? '当前 Mac 不支持连接 · Windows 经典版 Outlook 可用' : status.enabled ? '自动读取已开启' : 'Windows 经典版 Outlook' }}</span><span class="auto-mail-config">{{ settingsOpen === false ? '展开设置' : '收起设置' }}</span></summary>
@@ -117,9 +126,8 @@
         <el-empty v-else description="选择邮件查看详情" :image-size="72" />
       </section>
     </div>
-      </el-tab-pane>
-      <el-tab-pane label="保存设置" name="storage"><template #label><span class="module-tab-label"><el-icon aria-hidden="true"><Setting/></el-icon>保存设置</span></template><MailStorageSettings v-if="section === 'storage'"/></el-tab-pane>
-    </el-tabs>
+    </div>
+    <MailStorageSettings v-if="section === 'storage'"/>
   </main>
 </template>
 
@@ -133,8 +141,9 @@ function readPhase(phase?: string) {
   return platformText(({ starting:'准备读取', connecting:'连接 Outlook', folders:'检查目录范围', opening:'打开目录', filtering:'筛选日期范围', sorting:'Outlook 排序邮件', metadata:'读取邮件索引', attachments:'提取邮件及附件', saving:'保存本批邮件', checkpoint:'保存读取断点' } as Record<string,string>)[phase || ''] || '正在读取')
 }
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { Setting, Wallet, Message, Connection, Refresh, Upload, Download, Delete, Search, Clock, VideoPlay } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
+import { actionDialog } from '../services/actionDialog'
+import { Collection, Setting, Wallet, Message, Connection, Refresh, Upload, Download, Delete, Search, Clock, VideoPlay } from '@element-plus/icons-vue'
 import { mailApi, type MailFolder, type MailRow, type MailStatus, type MailRelatedReceipts } from '../services/mail'
 import { downloadBlob } from '../services/api'
 import MailPaymentDetail from '../components/MailPaymentDetail.vue'
@@ -328,7 +337,7 @@ async function analyzeAttachments() {
   await action('analyze',async()=>{await mailApi.analyze(selected.value!.id);status.value=await mailApi.status()})
 }
 async function clearLocal() {
-  try {await ElMessageBox.confirm('仅清除本机保存的邮件正文和解析结果，不删除 Outlook 邮件。','清空本地记录',{type:'warning',confirmButtonText:'清空',cancelButtonText:'取消'})} catch{return}
+  try {await actionDialog.confirm('仅清除本机保存的邮件正文和解析结果，不删除 Outlook 邮件。','清空本地记录',{type:'warning',confirmButtonText:'清空',cancelButtonText:'取消'})} catch{return}
   await action('clear',async()=>{
     await mailApi.clear()
     detailRequest++; relatedRequest++; messageRequest++; clearTimeout(searchTimer)
@@ -347,7 +356,7 @@ onBeforeUnmount(()=>{disposed=true;detailRequest++;relatedRequest++;clearTimeout
 </script>
 
 <style scoped>
-.mail-page{padding:32px 32px 40px;max-width:1920px;margin:auto}
+.mail-page{padding:16px 32px 40px;max-width:1920px;margin:auto}
 .mail-card:disabled{cursor:default}
 .mail-list-error{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--el-color-danger)}
 .mail-heading,.mail-actions,.mail-folder-select,.mail-schedule,.mail-schedule-options,.mail-section-heading,.mail-detail-heading,.mail-list-footer{display:flex;align-items:center;gap:12px}

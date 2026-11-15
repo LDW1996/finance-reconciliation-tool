@@ -313,7 +313,19 @@ dd { margin: 8px 0 0; font-weight: 600; line-height: 1.6; overflow-wrap: anywher
 /* Product audit: shared page rhythm, dialog structure and narrow-screen access. */
 .app-shell{padding:32px 32px 40px}
 .page-header{min-height:42px;padding:0;margin-bottom:24px}
-.mail-page .mail-heading{min-height:42px;margin-bottom:24px}
+.app-shell:has(.module-header){padding-top:16px}
+.module-header{display:flex;align-items:center;gap:24px;border-bottom:1px solid var(--border);margin-bottom:24px}
+.module-header > nav{flex:1;min-width:0}
+.module-header > .function-nav{margin:0;border:0}
+.module-header-end{display:flex;align-items:center;gap:16px}
+.module-header .compact-module-title{flex:none;gap:8px}
+.module-header .compact-module-title .module-title-icon{flex-basis:20px;font-size:20px}
+.module-header .compact-module-title h1{font-size:20px}
+@media(max-width:680px){
+  .module-header{flex-direction:column;align-items:stretch;gap:0;margin-bottom:16px}
+  .module-header > .compact-module-title,.module-header-end{order:-1;align-self:flex-end}
+  .module-header-end{flex-wrap:wrap;justify-content:flex-end}
+}
 .module-tabs.el-tabs>.el-tabs__header .el-tabs__nav{display:flex;gap:28px}
 .module-tabs.el-tabs>.el-tabs__header .el-tabs__item{padding:0 4px!important}
 .el-dialog{max-height:calc(100dvh - 48px);display:flex;flex-direction:column;overflow:hidden;border-radius:10px;padding:0;margin-bottom:24px}
@@ -321,7 +333,14 @@ dd { margin: 8px 0 0; font-weight: 600; line-height: 1.6; overflow-wrap: anywher
 .el-dialog__title{font-size:18px;line-height:1.5;font-weight:600}
 .el-dialog__body{flex:1;min-height:0;overflow:auto;padding:20px 24px;overflow-wrap:anywhere}
 .el-dialog__footer{flex:none;padding:16px 24px;border-top:1px solid var(--border)}
-.el-message-box{max-width:calc(100vw - 32px);border-radius:10px}
+.el-message-box.action-dialog {
+  width: 440px;
+  max-width: calc(100vw - 32px);
+  border-radius: 10px;
+}
+.action-dialog .el-message-box__message { min-width: 0; }
+.action-dialog .el-message-box__btns { flex-wrap: wrap; gap: 8px; }
+.action-dialog .el-message-box__btns .el-button + .el-button { margin-left: 0; }
 .el-message-box__content{line-height:1.7;overflow-wrap:anywhere;max-height:60dvh;overflow:auto}
 .el-dialog input[type=file]{max-width:100%;font:inherit;color:var(--ink-muted)}
 .el-dialog input[type=file]::file-selector-button{border:1px solid var(--el-border-color);border-radius:6px;background:white;padding:8px 12px;margin-right:10px;color:var(--el-text-color-regular);cursor:pointer;font:inherit}
@@ -537,8 +556,7 @@ button:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outli
    Design system v6 - 2026-11-11 (iLog unlock module, additive layer)
    Landed from output/ui-redesign/unlock-design-v6.css: the "recommended"
    tier plus both narrow-screen fixes. Pure CSS: no template, script, copy or
-   primary-color changes; the execution-mode / screenshot-mode capsules,
-   the global nav and the result tabs are all untouched.
+   primary-color changes; the global nav and the result tabs are untouched.
 
    Specificity note: UnlockView.vue has <style scoped>, and Vite emits those
    [data-v-*] rules AFTER this global sheet. The design comp injected its CSS
@@ -550,15 +568,6 @@ button:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outli
 /* P0-1  Readability: result hint 2.30:1 -> 5.07:1, helper copy 11.5 -> 12px */
 .ilog-workspace .ds-scope .results-hint { color: var(--ds-muted); font-size: 12px; }
 .ilog-workspace .ds-scope .config-hint { font-size: 12px; }
-
-/* P0-2  Keyboard focus: the 0x0 radio is hidden, so project the ring onto
-   its label. :has() is progressive enhancement - unsupported browsers simply
-   keep the previous (still functional) radio behaviour. */
-.ilog-workspace .ds-scope .scope-options label:has(input:focus-visible) {
-  outline: 2px solid var(--ds-primary);
-  outline-offset: 2px;
-  border-radius: 6px;
-}
 
 /* P0-3  Touch targets: clear / expand / secondary buttons >= 32px */
 .ilog-workspace .ds-scope .input-caption button {

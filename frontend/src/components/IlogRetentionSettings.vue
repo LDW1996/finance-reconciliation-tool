@@ -8,7 +8,7 @@
             <el-form-item label="截图保留"><div class="day-field"><el-input-number v-model="retentionForm.screenshot_days" aria-label="截图保留天数" :min="1" :max="36500" controls-position="right"/><span>天</span></div></el-form-item>
             <el-form-item label="任务结果保留"><div class="day-field"><el-input-number v-model="retentionForm.record_days" aria-label="任务结果保留天数" :min="1" :max="36500" controls-position="right"/><span>天</span></div></el-form-item>
           </div>
-          <div class="auto-policy"><div class="auto-heading"><h3>自动清理过期数据</h3><el-switch v-model="retentionForm.auto_enabled" aria-label="自动清理过期数据"/></div><p>在打开页面、查看历史或新建任务时检查，每 24 小时最多一次；有任务正在执行时延后。清理不会修改 iLog。</p></div>
+          <div class="auto-policy"><div><h3>自动清理过期数据</h3><p>在打开页面、查看历史或新建任务时检查，每 24 小时最多一次；有任务正在执行时延后。清理不会修改 iLog。</p></div><el-switch v-model="retentionForm.auto_enabled" aria-label="自动清理过期数据"/></div>
           <footer><el-button type="primary" :loading="retentionSaving" @click="saveRetention">保存规则</el-button></footer>
         </el-form>
       </section>
@@ -22,7 +22,8 @@
 <script setup lang="ts">
 import { ref, onMounted } from "vue"
 import axios from "axios"
-import { ElMessage, ElMessageBox } from "element-plus"
+import { ElMessage } from "element-plus"
+import { actionDialog } from '../services/actionDialog'
 import { VideoPlay, VideoPause, Tickets, Lock, InfoFilled } from '@element-plus/icons-vue'
 const protectedItems=[{title:'运行中',text:'正在执行的任务记录与截图不会清理。',icon:VideoPlay},{title:'暂停中',text:'已暂停的任务记录与截图不会清理。',icon:VideoPause},{title:'待核实',text:'待核实的任务记录与截图不会清理。',icon:Tickets},{title:'防重复凭据',text:'防重复凭据相关数据始终单独保留。',icon:Lock}]
 const loading=ref(true)
@@ -47,7 +48,7 @@ async function cleanupExpired() {
   try {
     const preview=(await axios.get('/api/ilog/retention/preview')).data
     if(preview.busy) { ElMessage.warning('有任务正在执行，暂不清理');return }
-    await ElMessageBox.confirm(`按已保存规则，预计删除 ${preview.tasks} 个历史任务、${preview.screenshots} 张截图、${preview.reports} 份报告。待核实记录和防重复凭据保留。删除不能撤销。`,'确认清理过期数据',{type:'warning',confirmButtonText:'确认清理',cancelButtonText:'取消'})
+    await actionDialog.confirm(`按已保存规则，预计删除 ${preview.tasks} 个历史任务、${preview.screenshots} 张截图、${preview.reports} 份报告。待核实记录和防重复凭据保留。删除不能撤销。`,'确认清理过期数据',{type:'warning',confirmButtonText:'确认清理',cancelButtonText:'取消'})
     const result=(await axios.post('/api/ilog/retention/cleanup',{confirmed:true},{headers:accountHeaders})).data
     if(result.busy) ElMessage.warning('任务已开始，清理已延后')
     else ElMessage.success(`已清理 ${result.tasks} 个任务、${result.screenshots} 张截图、${result.reports} 份报告${result.errors ? `；${result.errors} 个文件未能删除` : ''}`)
@@ -60,17 +61,17 @@ onMounted(openRetention)
 <style scoped>
 .ilog-retention{padding-top:6px;font-size:14px;color:#1d2633}
 .retention-grid{display:grid;grid-template-columns:minmax(0,2.15fr) minmax(280px,1fr);gap:20px;align-items:stretch}
-.policy-editor{background:#fff;border:1px solid #edf0f4;border-radius:10px;padding:28px 30px}
+.policy-editor{background:#fff;border:1px solid #edf0f4;border-radius:10px;padding:18px}
 h2,h3,p{margin:0}h2{font-size:20px;line-height:1.5;font-weight:600}h3{font-size:15px;line-height:1.5;font-weight:600}p{color:#697383;font-size:14px;line-height:1.8}
-.policy-editor header p{margin-top:6px}.policy-fields{display:grid;grid-template-columns:1fr 1fr;margin:30px 0 26px;gap:28px}
+.policy-editor header p{margin-top:6px}.policy-fields{display:grid;grid-template-columns:1fr 1fr;margin:20px 0;gap:28px}
 .policy-fields :deep(.el-form-item){margin:0}.policy-fields :deep(.el-form-item__label){font-size:14px;color:#414c5d;padding-bottom:10px}
 .policy-fields :deep(.el-form-item)+:deep(.el-form-item){border-left:1px solid #e8ebf0;padding-left:28px}
 .day-field{display:flex;align-items:center;gap:12px}.day-field :deep(.el-input-number){width:160px}
-.auto-policy{padding-top:24px;border-top:1px solid #e8ebf0}.auto-heading{display:flex;align-items:center;gap:24px}.auto-policy p{margin-top:12px;max-width:680px}
-.policy-editor footer{display:flex;justify-content:flex-end;margin-top:28px}.policy-editor footer .el-button{height:38px;padding:0 22px}
-.protected-records{background:#edf2f8;border-radius:10px;padding:28px}.protected-records>h2{display:flex;align-items:center;gap:10px;margin-bottom:24px;font-size:18px}.protected-records>h2 .el-icon{font-size:16px;color:#537899}
+.auto-policy{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding-top:18px;border-top:1px solid var(--ds-border)}.auto-policy p{margin-top:6px;max-width:680px}.auto-policy :deep(.el-switch){flex-shrink:0}
+.policy-editor footer{display:flex;justify-content:flex-end;margin-top:20px}.policy-editor footer .el-button{height:38px;padding:0 22px}
+.protected-records{background:#f5f8fc;border:1px solid var(--ds-border);border-radius:10px;padding:18px}.protected-records>h2{display:flex;align-items:center;gap:10px;margin-bottom:24px;font-size:18px}.protected-records>h2 .el-icon{font-size:16px;color:#537899}
 .protected-item{display:flex;gap:14px;margin-top:22px;align-items:flex-start}.protected-item p{margin-top:4px;font-size:13px}.protection-icon{display:flex;align-items:center;justify-content:center;flex:0 0 36px;height:36px;border-radius:50%;background:#e1edfb;color:#0066cc;font-size:20px}.protected-item:last-child{padding-top:22px;border-top:1px solid #d9e1eb}
-.manual-cleanup{display:flex;align-items:center;justify-content:space-between;gap:24px;background:#fff;border:1px solid #edf0f4;border-radius:10px;padding:24px 30px;margin-top:20px}.manual-cleanup h2{font-size:18px}.manual-cleanup p{margin-top:6px}.manual-cleanup .el-button{flex-shrink:0}
+.manual-cleanup{display:flex;align-items:center;justify-content:space-between;gap:24px;background:#fff;border:1px solid #edf0f4;border-radius:10px;padding:18px;margin-top:16px}.manual-cleanup h2{font-size:18px}.manual-cleanup p{margin-top:6px}.manual-cleanup .el-button{flex-shrink:0}
 @media(max-width:1000px){.retention-grid{grid-template-columns:1fr}.protected-records{display:grid;grid-template-columns:1fr 1fr;gap:20px}.protected-records>h2{grid-column:1/-1;margin-bottom:0}.protected-item{margin:0}.protected-item:last-child{padding:0;border:0}}
 @media(max-width:600px){.policy-editor,.protected-records,.manual-cleanup{padding:20px}.policy-fields{grid-template-columns:1fr;gap:22px}.policy-fields :deep(.el-form-item)+:deep(.el-form-item){padding-left:0;border:0}.protected-records{grid-template-columns:1fr}.manual-cleanup{align-items:flex-start;flex-direction:column}.manual-cleanup .el-button{width:100%}}
 </style>
