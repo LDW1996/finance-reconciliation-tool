@@ -256,12 +256,9 @@ def _label_column(book, sheet_name: str, label: str,
     return hit
 
 
-def detect_income_shift(inputs: Inputs, spec: RegionSpec, mon: int,
-                        period: str, prev_period: str) -> int:
+def detect_income_shift(cur: xlrd.book.Book, prev: xlrd.book.Book, mon: int) -> int:
     """从源报表第 4 行探测「本年 m 月实际」列，算出月份列偏移（通常 9）。"""
     try:
-        cur = _xls_book(inputs.reports[(spec.key, period)])
-        prev = _xls_book(inputs.reports[(spec.key, prev_period)])
         sh_cur, sh_prev = cur.sheet_by_name("收入成本表"), prev.sheet_by_name("收入成本表")
 
         def find(sh, label):
@@ -314,11 +311,12 @@ def indonesia_values(data: bytes) -> dict[str, float]:
 # --------------------------------------------------------------------------
 
 
-def validate_inputs(inputs: Inputs) -> None:
+def validate_inputs(inputs: Inputs) -> dict[tuple[str, str], xlrd.book.Book]:
     """内容级预检：每份数据源能打开、必备工作表齐全，报错指向具体文件。
 
-    与 classify（纯文件名语义）分离，保证 classify 可用占位字节测试。
+    返回已读取的源报表，供这一批的取数和校验共用。
     """
+    report_books = {}
     for key, token in sorted(inputs.reports):
         spec = REGION_BY_KEY[key]
         label = f"{spec.report_stem}{token}.XLS"
@@ -332,6 +330,7 @@ def validate_inputs(inputs: Inputs) -> None:
         ]
         if missing:
             raise ProfitCenterError(f"{label} 缺少工作表：{'、'.join(missing)}")
+        report_books[key, token] = book
     try:
         wb = openpyxl.load_workbook(
             io.BytesIO(inputs.indonesia or b""), read_only=True, data_only=True
@@ -346,6 +345,7 @@ def validate_inputs(inputs: Inputs) -> None:
         wb.close()
     if missing:
         raise ProfitCenterError("印尼汇总表缺少工作表：" + "、".join(missing))
+    return report_books
 
 
 def _zip_parts(data: bytes) -> dict[str, bytes]:
@@ -820,7 +820,8 @@ def _render_override(template: str, cur_col: str, prev_col: str,
 
 def run_region(spec: RegionSpec, inputs: Inputs, year: int, mon: int,
                period: str, prev_period: str,
-               exec_salary: float | None, target_name: str) -> RegionResult:
+               exec_salary: float | None, target_name: str,
+               book: xlrd.book.Book, prev_book: xlrd.book.Book) -> RegionResult:
     template = inputs.templates[spec.key]
     wb = openpyxl.load_workbook(io.BytesIO(template), data_only=False, keep_links=True)
     snap = openpyxl.load_workbook(io.BytesIO(template), data_only=True)
@@ -843,9 +844,7 @@ def run_region(spec: RegionSpec, inputs: Inputs, year: int, mon: int,
 
     parts = _zip_parts(template)
     link_map = external_link_map(parts)
-    income_shift = detect_income_shift(inputs, spec, mon, period, prev_period)
-    book = _xls_book(inputs.reports[(spec.key, period)])
-    prev_book = _xls_book(inputs.reports[(spec.key, prev_period)])
+    income_shift = detect_income_shift(book, prev_book, mon)
     out_link = outbook_index(link_map)
 
     if RULES_MODE:
@@ -1165,7 +1164,8 @@ def reproduce(generated: bytes, reference: bytes, spec: RegionSpec) -> list[dict
 
 
 def verify(inputs: Inputs, period: str, prev_period: str,
-           exec_salaries: dict[str, float]) -> list[dict]:
+           exec_salaries: dict[str, float],
+           report_books: dict[tuple[str, str], xlrd.book.Book]) -> list[dict]:
     mon = int(period[-2:])
     benchmark = indonesia_values(inputs.indonesia)
     totals: dict[str, float] = {k: 0.0 for k in (
@@ -1173,8 +1173,8 @@ def verify(inputs: Inputs, period: str, prev_period: str,
         "gross_month", "gross_accum", "mgmt_month", "mgmt_accum",
     )}
     for spec in REGIONS:
-        cur = _xls_book(inputs.reports[(spec.key, period)])
-        prev = _xls_book(inputs.reports[(spec.key, prev_period)])
+        cur = report_books[spec.key, period]
+        prev = report_books[spec.key, prev_period]
         totals["net_month"] += _num(xls_value(cur, spec.profit_sheet, "C60"))
         totals["net_accum"] += _num(xls_value(cur, spec.profit_sheet, "D60"))
         # 「上年同期累计」列逐表位置不同（巴淡/雅加达在 L，三宝垄/帕鲁在 F），
@@ -1382,7 +1382,7 @@ def run_engine(files: list[tuple[str, bytes]], month: str,
     """主入口：返回前端契约所需字段 + 结果包字节。"""
     year, mon, period, prev_period = parse_month(month)
     inputs = classify(files, month, templates)
-    validate_inputs(inputs)
+    report_books = validate_inputs(inputs)
     salaries = {k: _to_number_or_none(v) for k, v in (exec_salaries or {}).items()}
     warnings = list(inputs.warnings)
 
@@ -1392,9 +1392,11 @@ def run_engine(files: list[tuple[str, bytes]], month: str,
         results.append(run_region(
             spec, inputs, year, mon, period, prev_period,
             salaries.get(spec.key), target_name,
+            report_books[spec.key, period], report_books[spec.key, prev_period],
         ))
 
-    checks = verify(inputs, period, prev_period, salaries)
+    checks = verify(inputs, period, prev_period, salaries, report_books)
+    report_books.clear()
     diffs: list[dict] = []
     for r in results:
         reference = inputs.references.get(r.key)

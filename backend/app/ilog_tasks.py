@@ -156,12 +156,15 @@ class TaskManager:
                 if data['state'] == 'paused' and not was_active:
                     continue
                 data['state'] = 'completed' if data['state'] == 'closing' else 'paused'
+                data.pop('queued', None)
                 self.save(db, data)
 
     @staticmethod
     def save(db, data):
         data['updatedAt']=datetime.now(timezone.utc).isoformat()
-        if data['state']=='completed': data.setdefault('completedAt',data['updatedAt'])
+        if data['state'] == 'completed':
+            data.pop('queued', None)
+            data.setdefault('completedAt', data['updatedAt'])
         db.execute('UPDATE tasks SET state=?,data=? WHERE id=?', (data['state'],json.dumps(data,ensure_ascii=False),data['id']))
 
     def history(self,limit=20,offset=0):
@@ -291,6 +294,8 @@ class TaskManager:
             if db.execute("SELECT 1 FROM tasks WHERE state IN ('running','paused')").fetchone():
                 raise RuntimeError('已有未结束任务，请先处理或取消剩余项')
             data = {'id':uuid4().hex,'account':account,'accountName':name,'state':'running','rows':inputs,'scope':scope,'screenshot_policy':screenshot_policy,'record_timings':record_timings,'verify_after':verify_after,'createdAt':datetime.now(timezone.utc).isoformat()}
+            if db.execute("SELECT 1 FROM tasks WHERE state='closing'").fetchone():
+                data['queued'] = True
             if fallback_account:
                 data.update(fallbackAccount=fallback_account,fallbackAccountName=fallback_name)
             db.execute('INSERT INTO tasks VALUES (?,?,?,?,?)',(data['id'],key,payload,'running',json.dumps(data,ensure_ascii=False)))
@@ -435,6 +440,7 @@ class TaskManager:
                                 self.save(db, data)
                                 return
                             item = data['rows'][index]
+                            data.pop('queued', None)
                             data['workerActive'] = True
                             item.update(status='processing',message='正在查询并提交解锁')
                             self.save(db,data)

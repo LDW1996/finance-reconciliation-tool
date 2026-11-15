@@ -5,7 +5,7 @@
     POST   /api/profit-center/templates        上传/替换模板（一次上传，每月复用）
     DELETE /api/profit-center/templates/{key}  清除某地模板
     POST   /api/profit-center/run              上传当月数据源文件，生成公式版结果包
-    GET    /api/profit-center/download/{id}    下载结果包（一次性）
+    GET    /api/profit-center/download/{id}    有效期内下载结果包
 
 非 GET 请求走平台鉴权中间件，前端需带 X-Finance-Local / X-Requested-With，
 详见 design 文档与 platform_auth_routes.py。
@@ -39,14 +39,17 @@ def get_templates():
 
 
 @router.post("/templates")
-async def upload_templates(files: list[UploadFile] = File(...)):
+async def upload_templates(
+    files: list[UploadFile] = File(...),
+    target_key: str | None = Form(None),
+):
     payloads: list[tuple[str, bytes]] = []
     try:
         for upload in files:
             data = await read_excel_upload(upload)
             check_excel_archive(data)
             payloads.append((upload.filename or "", data))
-        result = await run_in_threadpool(save_templates, payloads)
+        result = await run_in_threadpool(save_templates, payloads, target_key=target_key)
     except ProfitCenterError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except HTTPException:

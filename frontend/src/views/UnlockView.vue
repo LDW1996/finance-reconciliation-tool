@@ -95,14 +95,17 @@
                   <span v-if="taskId" class="progress-mode">{{ taskVerifyAfter ? '标准模式（复查）' : '快速模式（不复查）' }}</span>
                   <span class="progress-text">{{ currentRow ? `正在处理 ${currentRow.bill}` : paused ? '已暂停，继续将跳过待核实项。' : rows.length ? `任务账号：${taskAccountName}` : '等待提交任务' }}</span>
                   <span v-if="pollError" class="progress-tip" role="alert"><el-icon><InfoFilled /></el-icon>{{ pollError }}</span>
+                  <span v-else-if="taskQueued" class="progress-tip" role="status"><el-icon><InfoFilled /></el-icon>上一批收尾完成后，本批会自动开始。</span>
                   <span v-else-if="taskNotice || waitingHint" class="progress-tip" role="status"><el-icon><InfoFilled /></el-icon>{{ taskNotice || $platformText('正在等待平台切换或上一个任务收尾（关闭浏览器），稍候几秒即可开始；无需重复提交') }}</span>
                 </div>
               </div>
               <div class="progress-actions">
                 <template v-if="taskState === 'running' || taskState === 'paused'">
+                  <StatusBadge v-if="taskQueued" tone="processing" label="已排队" />
                   <el-button size="small" :disabled="controlling" :icon="paused ? VideoPlay : VideoPause" @click="controlTask(paused ? 'resume' : 'pause')">{{ paused ? '继续剩余项' : '暂停后续项' }}</el-button>
                   <el-button size="small" :disabled="controlling" @click="cancelRemaining">取消剩余项</el-button>
                 </template>
+                <StatusBadge v-else-if="taskState === 'closing'" tone="processing" label="收尾中" />
                 <StatusBadge v-else :tone="attentionCount ? 'warning' : rows.length ? 'success' : 'neutral'" :label="rows.length ? '任务已结束' : '等待开始'" />
               </div>
             </div>
@@ -249,7 +252,7 @@ type Status = 'waiting' | 'processing' | 'success' | 'attention' | 'cancelled'
 type Detail = { submitted?: boolean; verification_performed?: boolean; reason?:string; detail?:{timings?:{stage:string;seconds:number}[]}; timings?:{stage:string;seconds:number}[]; total_seconds?: number; status?: string; platform_success?: boolean; before?: {lock?: string;booking?:string}; after?: {lock?: string}; screenshot?: string; screenshotExpired?: boolean }
 type Attempt = { account: string; accountName: string; status: string }
 type Row = { bill: string; businessNo?:string; kind: Kind; status: Status; message: string; time: string; detail?: Detail; evidenceIndex?: number; actualAccountName?: string; attempts?: Attempt[] }
-type Task = { id: string; account: string; accountName: string; fallbackAccount?: string; fallbackAccountName?: string; state: 'running' | 'paused' | 'closing' | 'completed'; rows: Row[]; verify_after?: boolean; createdAt?: string; completedAt?: string; notice?: string }
+type Task = { id: string; account: string; accountName: string; fallbackAccount?: string; fallbackAccountName?: string; state: 'running' | 'paused' | 'closing' | 'completed'; rows: Row[]; verify_after?: boolean; createdAt?: string; completedAt?: string; notice?: string; queued?: boolean }
 type HistoryItem = Omit<Task,'rows'> & {total:number;attention:number}
 const historyOpen=ref(false), historyDetailOpen=ref(false), historyLoading=ref(false)
 const historyItems=ref<HistoryItem[]>([]), historyTask=ref<Task|null>(null)
@@ -421,6 +424,7 @@ const overlap = computed(() => parsed.value.fee.filter(bill => parsed.value.orde
 const rows = ref<Row[]>([])
 const taskId = ref('')
 const taskState = ref<Task['state'] | ''>('')
+const taskQueued = ref(false)
 const runtimeAvailable = ref(false)
 const runtimeMessage = ref('正在检查真实执行环境')
 const submitting = ref(false)
@@ -449,9 +453,12 @@ const filteredRows = computed(() => filter.value === 'all' ? rows.value : rows.v
 const waitingHint = computed(() => taskState.value === 'running' && rows.value.length > 0 && !rows.value.some(r => r.status === 'processing') && now.value - taskStartedAt.value >= 8000)
 let timer: ReturnType<typeof setTimeout> | undefined
 let disposed = false
+let taskVersion = 0
 function applyTask(task: Task) {
+  ++taskVersion
   taskVerifyAfter.value=task.verify_after !== false
   taskId.value = task.id; taskState.value = task.state; taskAccountName.value = task.accountName
+  taskQueued.value = task.state === 'running' && task.queued === true
   taskNotice.value = task.notice || ''
   if (task.id !== currentTaskId) { currentTaskId = task.id; taskStartedAt.value = Date.now() }
   accountId.value = task.account
@@ -464,12 +471,13 @@ function applyTask(task: Task) {
 async function refreshTask() {
   if (!taskId.value || disposed) return
   const requestedId = taskId.value
+  const requestedVersion = taskVersion
   try {
     const response = await axios.get<Task>(`/api/ilog/tasks/${encodeURIComponent(requestedId)}`)
-    if (taskId.value !== requestedId || disposed) return
+    if (taskId.value !== requestedId || requestedVersion !== taskVersion || disposed) return
     pollError.value = ''; applyTask(response.data)
   } catch (error) {
-    if (taskId.value !== requestedId || disposed) return
+    if (taskId.value !== requestedId || requestedVersion !== taskVersion || disposed) return
     pollError.value = axios.isAxiosError(error) && error.response?.status === 401 ? '登录已失效，请重新登录' : '连接中断，结果尚未同步；请勿重新提交'
     clearTimeout(timer); if (!disposed) timer = setTimeout(refreshTask,4000)
   }
@@ -496,6 +504,7 @@ async function newTask() {
     }
     clearTimeout(timer)
     taskId.value = ''; taskState.value = ''; rows.value = []
+    taskQueued.value = false
     taskAccountName.value = ''; taskFallbackName.value = ''
     taskNotice.value = ''; taskStartedAt.value = 0; currentTaskId = ''
     input.value = { fee: '', order: '' }; filter.value = 'all'
@@ -761,7 +770,7 @@ onBeforeUnmount(() => { disposed = true; clearTimeout(timer);clearInterval(expir
 .progress-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; min-height: 16px; font-size: 12px; color: var(--ds-muted); }
 .progress-mode { font-weight: 600; color: var(--ds-text-2); }
 .progress-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.progress-actions { display: flex; align-items: center; gap: 8px; }
+.progress-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .progress-actions .el-button + .el-button { margin-left: 0; }
 
 /* ---------- results ---------- */

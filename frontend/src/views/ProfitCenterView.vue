@@ -21,6 +21,7 @@
               drag
               multiple
               :auto-upload="false"
+              :disabled="templateWorking || running"
               :show-file-list="false"
               accept=".xlsx"
               :on-change="handleTemplateChange"
@@ -51,8 +52,8 @@
                     </span>
                   </td>
                   <td class="pc-template-actions">
-                    <el-button link type="primary" :disabled="templateWorking" @click="pickTemplate(slot.key)">{{ $platformText('更换') }}</el-button>
-                    <el-button v-if="slot.uploaded" link type="danger" :disabled="templateWorking" @click="handleRemoveTemplate(slot.key)">{{ $platformText('清除') }}</el-button>
+                    <el-button link type="primary" :disabled="templateWorking || running" @click="pickTemplate(slot.key)">{{ $platformText('更换') }}</el-button>
+                    <el-button v-if="slot.uploaded" link type="danger" :disabled="templateWorking || running" @click="handleRemoveTemplate(slot.key)">{{ $platformText('清除') }}</el-button>
                   </td>
                 </tr>
               </tbody>
@@ -78,8 +79,9 @@
               drag
               multiple
               :auto-upload="false"
+              :disabled="running"
               :show-file-list="false"
-              accept=".xlsx,.xls,.XLS,.XLSX"
+              accept=".xlsx,.xls,.xlsm"
               :on-change="handleFileChange"
             >
               <el-icon class="pc-upload-icon"><UploadFilled /></el-icon>
@@ -95,7 +97,7 @@
                     <span class="pc-file-name">{{ file.name }}</span>
                     <span class="pc-file-msg" :class="fileChecks[index]?.ok === false ? 'is-bad' : 'is-ok'">{{ fileChecks[index]?.message }}</span>
                   </div>
-                  <el-button link type="primary" :aria-label="$platformText('移除')" @click="removeFile(index)">{{ $platformText('移除') }}</el-button>
+                  <el-button link type="primary" :disabled="running" :aria-label="$platformText('移除')" @click="removeFile(index)">{{ $platformText('移除') }}</el-button>
                 </li>
               </ul>
               <p v-else class="pc-empty">{{ $platformText('暂无文件') }}</p>
@@ -103,10 +105,10 @@
               <p v-if="files.length && duplicateFiles.length" class="pc-hint pc-hint--warn">
                 {{ $platformText('重复上传，仅取第一份') }}：{{ duplicateFiles.join('；') }}
               </p>
-              <p v-if="files.length && missingDataFiles.length" class="pc-hint pc-hint--warn">
+              <p v-if="files.length && missingDataFiles.length" class="pc-hint pc-hint--warn" role="status">
                 {{ $platformText('缺少必需数据源') }}：{{ missingDataFiles.join('；') }}
               </p>
-              <p v-else-if="files.length && !missingDataFiles.length && !fileWarnings" class="pc-hint pc-hint--ok">
+              <p v-else-if="files.length && monthTokens" class="pc-hint pc-hint--ok">
                 {{ $platformText('必需数据源已齐') }}
               </p>
             </div>
@@ -132,9 +134,12 @@
           <div class="pc-card-body">
             <div class="pc-field">
               <label class="pc-label">{{ $platformText('上报月份') }}</label>
-              <el-select v-model="month" class="pc-month" filterable allow-create default-first-option>
+              <el-select v-model="month" class="pc-month" :disabled="running" filterable allow-create default-first-option>
                 <el-option v-for="item in monthOptions" :key="item" :label="item" :value="item" />
               </el-select>
+              <p v-if="!monthTokens" class="pc-hint pc-hint--warn" role="status">
+                {{ $platformText('请选择二月至十二月，或按此格式输入') }} YYYY-MM
+              </p>
             </div>
 
             <div class="pc-field">
@@ -143,7 +148,7 @@
               <div class="pc-salary-grid">
                 <div v-for="region in execRegions" :key="region.key" class="pc-salary-item">
                   <label class="pc-label">{{ region.label }}</label>
-                  <el-input-number v-model="execInputs[region.key]" class="pc-salary-input" :controls="false" :min="0" />
+                  <el-input-number v-model="execInputs[region.key]" class="pc-salary-input" :controls="false" :min="0" :disabled="running" />
                 </div>
               </div>
             </div>
@@ -165,6 +170,7 @@
         </span>
         <el-button type="primary" :icon="Download" :loading="downloading" @click="handleDownload">{{ $platformText('下载结果包') }}</el-button>
       </div>
+      <p v-if="downloadError" class="pc-hint pc-hint--warn" role="status">{{ downloadError }}</p>
 
       <section class="pc-card pc-table-card">
         <div class="pc-card-head"><h3 class="pc-card-title">{{ $platformText('校验项') }}</h3></div>
@@ -259,6 +265,7 @@ const config = ref<ProfitCenterConfig | null>(null)
 const configLoading = ref(true)
 const running = ref(false)
 const downloading = ref(false)
+const downloadError = ref('')
 const errorMessage = ref('')
 const files = ref<File[]>([])
 const month = ref('2026-08')
@@ -278,107 +285,115 @@ const monthOptions = computed(() => {
 })
 const execRegions = computed(() => (config.value?.regions ?? []).filter(region => region.has_exec_salary))
 const missingTemplates = computed(() => templates.value.length > 0 && templates.value.some(slot => !slot.uploaded))
-const canRun = computed(() => files.value.length > 0 && !!month.value && !running.value && !configLoading.value)
 const allPassed = computed(() => (result.value?.checks ?? []).every(check => check.pass || check.delta === 0))
 const filteredDiffs = computed(() => {
   const diffs = result.value?.diffs ?? []
   return diffFilter.value === 'all' ? diffs : diffs.filter(diff => !diff.match)
 })
 
-interface FileCheck { ok: boolean; message: string }
+interface FileCheck {
+  ok: boolean
+  message: string
+  key?: string
+}
 
 const monthTokens = computed(() => {
-  const m = /^(\d{4})-(\d{1,2})$/.exec(month.value || '')
+  const m = /^(\d{4})-(\d{1,2})$/.exec(month.value.trim())
   if (!m) return null
   const year = Number(m[1])
   const mon = Number(m[2])
+  if (mon < 2 || mon > 12) return null
   const pad = (v: number) => String(v).padStart(2, '0')
-  const prev = mon === 1 ? { year: year - 1, mon: 12 } : { year, mon: mon - 1 }
-  return { period: `${year}${pad(mon)}`, prevPeriod: `${prev.year}${pad(prev.mon)}` }
+  return { period: `${year}${pad(mon)}`, prevPeriod: `${year}${pad(mon - 1)}` }
 })
 
-const regionLabels = computed(() => (config.value?.regions ?? []).map(region => region.label))
+const regions = computed(() => config.value?.regions ?? [])
 
 // Filename keywords are data, not UI text: keep them as unicode escapes so the
 // text catalog checker does not pick them up as untranslated UI literals.
-const TEMPLATE_PREFIX = /^\u529e\u4e8b\u7b80\u8868/i
+const TEMPLATE_PREFIX = /^\u529e\u4e8b\u5904\u7b80\u8868/
 const INDONESIA_KEY = '\u7269\u6d41\u5370\u5c3c'
 const OUTSOURCING_KEY = '\u5916\u5305\u670d\u52a1\u6210\u672c'
-const reportStem = (label: string) => `\u8d22\u52a1\u62a5\u8868-${label}-`
+
+const requiredData = computed(() => {
+  const tokens = monthTokens.value
+  const requirements = new Map<string, string>()
+  if (!tokens) return requirements
+  for (const region of regions.value) {
+    requirements.set(`${region.key}:${tokens.prevPeriod}`, `${region.label} ${platformText('上月源报表')} ${tokens.prevPeriod}`)
+    requirements.set(`${region.key}:${tokens.period}`, `${region.label} ${platformText('本月源报表')} ${tokens.period}`)
+  }
+  requirements.set('indonesia', `${platformText('印尼汇总表')} ${tokens.period}`)
+  return requirements
+})
 
 const fileChecks = computed<FileCheck[]>(() => {
   const tokens = monthTokens.value
   return files.value.map(file => {
     const name = file.name
-    if (TEMPLATE_PREFIX.test(name)) {
+    const modernWorkbook = /\.xls[xm]$/i.test(name)
+    if (!file.size) return { ok: false, message: platformText('空文件，已忽略') }
+    if (regions.value.some(region => region.template === name)) {
       return { ok: false, message: platformText('模板文件由模板管理统一维护，本次忽略') }
     }
+    if (TEMPLATE_PREFIX.test(name) && modernWorkbook) {
+      const region = regions.value.find(item => name.includes(item.label))
+      return region
+        ? { ok: true, key: `reference:${region.key}`, message: `${region.label} ${platformText('财务手工比对版')}` }
+        : { ok: false, message: platformText('简表文件名未识别到地区，已忽略') }
+    }
     if (name.includes(INDONESIA_KEY)) {
-      if (!/\.xlsx$/i.test(name)) {
-        return { ok: false, message: platformText('印尼汇总表需为 xlsx 格式，已忽略') }
+      if (!modernWorkbook) {
+        return { ok: false, message: `${platformText('印尼汇总表需为')} .xlsx / .xlsm ${platformText('格式，已忽略')}` }
       }
       if (!tokens || !name.includes(tokens.period)) {
-        return { ok: false, message: `${platformText('文件名月份应为')} ${tokens?.period ?? ''}` }
+        return { ok: false, message: tokens ? `${platformText('文件名月份应为')} ${tokens.period}` : platformText('请先选择有效上报月份') }
       }
-      return { ok: true, message: platformText('印尼汇总表') }
+      return { ok: true, key: 'indonesia', message: platformText('印尼汇总表') }
+    }
+    const region = regions.value.find(item => name.includes(item.report_stem))
+    if (region) {
+      if (!tokens) return { ok: false, message: platformText('请先选择有效上报月份') }
+      const period = [tokens.period, tokens.prevPeriod].find(token => name.includes(token))
+      if (!period) {
+        return { ok: false, message: `${platformText('文件名月份应为')} ${tokens.prevPeriod} / ${tokens.period}` }
+      }
+      const role = period === tokens.period ? platformText('本月源报表') : platformText('上月源报表')
+      return { ok: true, key: `${region.key}:${period}`, message: `${region.label} ${role}` }
     }
     if (name.includes(OUTSOURCING_KEY) && /\.xlsx$/i.test(name)) {
       return { ok: false, message: platformText('外包成本表无需上传，模板缓存已含其数值') }
-    }
-    const label = regionLabels.value.find(item => name.includes(reportStem(item)))
-    if (label && tokens) {
-      if (!name.includes(tokens.period) && !name.includes(tokens.prevPeriod)) {
-        return { ok: false, message: `${platformText('文件名月份应为')} ${tokens.prevPeriod} / ${tokens.period}` }
-      }
-      const role = name.includes(tokens.period) ? platformText('本月源报表') : platformText('上月源报表')
-      return { ok: true, message: `${label} ${role}` }
     }
     return { ok: false, message: platformText('无法识别，将被忽略') }
   })
 })
 
-const fileWarnings = computed(() => fileChecks.value.some(check => !check.ok))
-
-const duplicateFiles = computed<string[]>(() => {
-  const tokens = monthTokens.value
-  if (!tokens) return []
-  const duplicates: string[] = []
-  for (const region of config.value?.regions ?? []) {
-    for (const token of [tokens.prevPeriod, tokens.period]) {
-      const hits = files.value.filter(file => file.name.includes(reportStem(region.label)) && file.name.includes(token))
-      if (hits.length > 1) duplicates.push(`${region.label} ${token}`)
-    }
+const fileCounts = computed(() => {
+  const counts = new Map<string, number>()
+  for (const check of fileChecks.value) {
+    if (check.key) counts.set(check.key, (counts.get(check.key) ?? 0) + 1)
   }
-  const indonesia = files.value.filter(file =>
-    file.name.includes(INDONESIA_KEY)
-    && file.name.includes(tokens.period)
-    && /\.xlsx$/i.test(file.name),
-  )
-  if (indonesia.length > 1) duplicates.push(platformText('印尼汇总表'))
-  return duplicates
+  return counts
 })
 
-const missingDataFiles = computed<string[]>(() => {
-  const tokens = monthTokens.value
-  if (!tokens) return []
-  const missing: string[] = []
-  for (const region of config.value?.regions ?? []) {
-    if (!files.value.some(file => file.name.includes(reportStem(region.label)) && file.name.includes(tokens.prevPeriod))) {
-      missing.push(`${region.label} ${platformText('上月源报表')} ${tokens.prevPeriod}`)
-    }
-    if (!files.value.some(file => file.name.includes(reportStem(region.label)) && file.name.includes(tokens.period))) {
-      missing.push(`${region.label} ${platformText('本月源报表')} ${tokens.period}`)
+const duplicateFiles = computed(() => {
+  const duplicates = new Map<string, string>()
+  for (const check of fileChecks.value) {
+    if (check.key && (fileCounts.value.get(check.key) ?? 0) > 1) {
+      duplicates.set(check.key, requiredData.value.get(check.key) ?? check.message)
     }
   }
-  if (!files.value.some(file =>
-    file.name.includes(INDONESIA_KEY)
-    && file.name.includes(tokens.period)
-    && /\.xlsx$/i.test(file.name),
-  )) {
-    missing.push(`${platformText('印尼汇总表')} ${tokens.period}`)
-  }
-  return missing
+  return [...duplicates.values()]
 })
+
+const missingDataFiles = computed(() => [...requiredData.value]
+  .filter(([key]) => !fileCounts.value.has(key))
+  .map(([, message]) => message),
+)
+
+const canRun = computed(() => !!config.value && !!monthTokens.value
+  && templates.value.length === regions.value.length && !missingTemplates.value
+  && !missingDataFiles.value.length && !templateWorking.value && !running.value)
 
 function handleFileChange(uploadFile: UploadFile) {
   const raw = uploadFile.raw
@@ -425,12 +440,12 @@ async function refreshTemplates() {
   }
 }
 
-async function doUploadTemplates(list: File[]) {
-  if (!list.length) return
+async function doUploadTemplates(list: File[], targetKey?: string) {
+  if (!list.length || templateWorking.value || running.value) return
   errorMessage.value = ''
   templateWorking.value = true
   try {
-    templates.value = await profitCenterApi.uploadTemplates(list)
+    templates.value = await profitCenterApi.uploadTemplates(list, targetKey)
   } catch (error) {
     errorMessage.value = readError(error)
   } finally {
@@ -438,10 +453,10 @@ async function doUploadTemplates(list: File[]) {
   }
 }
 
-function handleTemplateChange(uploadFile: UploadFile) {
-  const raw = uploadFile.raw
+function handleTemplateChange(_uploadFile: UploadFile, uploadFiles: UploadFile[]) {
+  const filesToUpload = uploadFiles.flatMap(file => file.raw ? [file.raw] : [])
   templateUploadRef.value?.clearFiles()
-  if (raw) void doUploadTemplates([raw])
+  void doUploadTemplates(filesToUpload)
 }
 
 function pickTemplate(key: string) {
@@ -452,8 +467,10 @@ function pickTemplate(key: string) {
 function onTemplatePicked(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
+  const targetKey = pendingTemplateKey.value
+  pendingTemplateKey.value = ''
   input.value = ''
-  if (file) void doUploadTemplates([file])
+  if (file && targetKey) void doUploadTemplates([file], targetKey)
 }
 
 async function handleRemoveTemplate(key: string) {
@@ -470,12 +487,8 @@ async function handleRemoveTemplate(key: string) {
 
 async function handleRun() {
   if (!canRun.value) return
-  if (templates.value.length > 0 && templates.value.some(slot => !slot.uploaded)) {
-    const labels = templates.value.filter(slot => !slot.uploaded).map(slot => slot.label).join('、')
-    errorMessage.value = platformText('请先在模板管理页签上传缺少的简表模板') + `：${labels}`
-    return
-  }
   errorMessage.value = ''
+  downloadError.value = ''
   result.value = null
   running.value = true
   const execSalaries: Record<string, number> = {}
@@ -493,14 +506,19 @@ async function handleRun() {
 }
 
 async function handleDownload() {
-  if (!result.value) return
-  errorMessage.value = ''
+  const job = result.value
+  if (!job || downloading.value) return
+  downloadError.value = ''
   downloading.value = true
   try {
-    const blob = await profitCenterApi.download(result.value.job_id)
-    downloadBlob(blob, result.value.download_name || `profit-center-${result.value.job_id}.zip`)
+    const blob = await profitCenterApi.download(job.job_id)
+    downloadBlob(blob, job.download_name || `profit-center-${job.job_id}.zip`)
   } catch (error) {
-    errorMessage.value = readError(error)
+    if (result.value !== job) return
+    const status = (error as { response?: { status?: number } })?.response?.status
+    downloadError.value = status === 404
+      ? platformText('结果包不存在或已过期，请重新生成')
+      : readError(error)
   } finally {
     downloading.value = false
   }

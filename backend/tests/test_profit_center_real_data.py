@@ -122,7 +122,7 @@ def test_service_and_download_route_with_real_files():
     with zipfile.ZipFile(io.BytesIO(content)) as archive:
         assert len([n for n in archive.namelist() if n.endswith(".xlsx")]) == 5
         assert "0 处差异" in archive.read("复现比对.md").decode("utf-8")
-    assert pc_service.get_job(body["job_id"]) is None
+    assert pc_service.get_job(body["job_id"])["zip_bytes"] == content
 
 
 def test_result_workbooks_are_formula_only_and_loadable():

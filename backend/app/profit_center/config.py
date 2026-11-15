@@ -249,6 +249,7 @@ def config_payload(month: str | None = None) -> dict:
                 "label": r.label,
                 "has_exec_salary": r.has_exec_salary,
                 "template": r.template,
+                "report_stem": r.report_stem,
                 "report": f"{r.report_stem}{period}.XLS",
             }
             for r in REGIONS

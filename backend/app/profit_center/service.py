@@ -117,10 +117,16 @@ def _match_template(name: str) -> str | None:
     return None
 
 
-def save_templates(files: list[tuple[str, bytes]]) -> dict:
-    """保存模板文件；全部识别通过才落盘（要么全成功，要么不动）。"""
+def save_templates(files: list[tuple[str, bytes]], *, target_key: str | None = None) -> dict:
+    """保存模板文件，落盘前校验文件名、目标地区和内容。"""
     if not files:
         raise ProfitCenterError("请选择要上传的模板文件")
+    if target_key is not None:
+        target = REGION_BY_KEY.get(target_key)
+        if target is None:
+            raise ProfitCenterError("未知的利润中心")
+        if len(files) != 1:
+            raise ProfitCenterError("更换地区模板时，请选择一份文件")
     matched: dict[str, tuple[str, bytes]] = {}
     unmatched: list[str] = []
     for raw_name, data in files:
@@ -139,6 +145,8 @@ def save_templates(files: list[tuple[str, bytes]]) -> dict:
         )
     if not matched:
         raise ProfitCenterError("请选择要上传的模板文件")
+    if target_key is not None and target_key not in matched:
+        raise ProfitCenterError(f"文件名与所选地区「{target.label}」不符，请选择该地区的简表模板")
     for key, (name, data) in matched.items():
         if len(data) > MAX_TEMPLATE_BYTES:
             raise ProfitCenterError(f"{name} 超过 20 MB，模板文件异常")
@@ -249,14 +257,12 @@ def run_job(files: list[tuple[str, bytes]], month: str | None,
 
 
 def get_job(job_id: str):
-    """取回并移除结果包；同一 job_id 只能下载一次。"""
+    """读取仍在有效期和容量限制内的结果包。"""
     if not job_id:
         return None
     with _lock:
-        job = _jobs.pop(job_id, None)
+        _prune_locked(time.monotonic())
+        job = _jobs.get(job_id)
         if job is None:
-            return None
-        if time.monotonic() - job.created_at > JOB_TTL_SECONDS:
-            _prune_locked(time.monotonic())
             return None
         return {"download_name": job.download_name, "zip_bytes": job.zip_bytes}

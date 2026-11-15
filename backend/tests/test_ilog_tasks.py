@@ -429,7 +429,9 @@ def test_cancel_keeps_task_closing_until_owner_thread_closes_browser(tmp_path, m
         assert close_threads and close_threads != worker_threads
         assert m.get(job['id'])['state'] == 'closing'
         # 新契约：收尾（closing）期间允许立即建新任务，新任务的 drain 在 worker 锁上排队自动衔接。
-        assert m.create('west', 'West', ['TRBTSTHP2607S'], [], 'next', True)['state'] == 'running'
+        next_job = m.create('west', 'West', ['TRBTSTHP2607S'], [], 'next', True)
+        assert next_job['state'] == 'running'
+        assert m.get(next_job['id'])['queued'] is True
     finally:
         finish_item.set()
         finish_close.set()
@@ -440,7 +442,11 @@ def test_cancel_keeps_task_closing_until_owner_thread_closes_browser(tmp_path, m
     assert calls == ['TRBTSTZH2606S']
     with ilog_tasks.worker_lock(tmp_path) as acquired:
         assert acquired
-    assert m.create('west', 'West', ['TRBTSTHP2607S'], [], 'next', True)['state'] == 'running'
+    assert m.create('west', 'West', ['TRBTSTHP2607S'], [], 'next', True)['id'] == next_job['id']
+    m.drain(next_job['id'])
+    assert m.get(next_job['id'])['state'] == 'completed'
+    assert not m.get(next_job['id']).get('queued')
+    assert calls == ['TRBTSTZH2606S', 'TRBTSTHP2607S']
 
 
 def test_create_allowed_while_previous_task_is_closing(tmp_path):

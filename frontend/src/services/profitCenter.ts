@@ -24,7 +24,8 @@ export interface ProfitCenterRegion {
   key: string
   label: string
   has_exec_salary: boolean
-  template?: string
+  template: string
+  report_stem: string
   report?: string
 }
 
@@ -65,9 +66,10 @@ export const profitCenterApi = {
   config: async () => (await client.get<ProfitCenterConfig>('/config')).data,
   listTemplates: async () =>
     (await client.get<{ templates: ProfitCenterTemplateSlot[] }>('/templates')).data.templates,
-  uploadTemplates: async (files: File[]) => {
+  uploadTemplates: async (files: File[], targetKey?: string) => {
     const form = new FormData()
     for (const file of files) form.append('files', file)
+    if (targetKey !== undefined) form.append('target_key', targetKey)
     return (await client.post<{ templates: ProfitCenterTemplateSlot[] }>('/templates', form)).data.templates
   },
   deleteTemplate: async (key: string) =>

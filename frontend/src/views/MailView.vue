@@ -5,7 +5,7 @@
       <div class="mail-actions">
         <input ref="fileInput" type="file" accept=".eml,.msg" class="mail-file-input" @change="importSample" />
         <el-button v-if="section === 'mail'" :icon="Upload" :loading="working === 'import'" :disabled="!!working" @click="fileInput?.click()">导入验证邮件</el-button>
-        <el-button v-if="section === 'mail'" :icon="Download" :disabled="!rows.length" @click="exportRows">导出本页邮件</el-button>
+        <el-button v-if="section === 'mail'" :icon="Download" :disabled="mailListUnavailable || !rows.length" @click="exportRows">导出本页邮件</el-button>
       </div>
     </header>
 
@@ -94,8 +94,12 @@
       <section class="mail-list" aria-label="已读取邮件">
         <div class="mail-section-heading"><h2>本地邮件 <span>{{ savedTotal }}</span></h2><el-input v-model="filter" clearable :prefix-icon="Search" placeholder="搜索付款人、金额、日期或邮件" aria-label="筛选本地邮件" /></div>
         <div class="mail-filters" aria-label="付款信息筛选"><button v-for="chip in filterChips" :key="chip.value" :aria-pressed="paymentFilter === chip.value" @click="paymentFilter = chip.value">{{ chip.label }}</button></div>
-        <div class="mail-cards" aria-label="邮件列表">
-          <button v-for="row in filteredRows" :key="row.id" class="mail-card" :class="{selected: selected?.id === row.id}" :aria-pressed="selected?.id === row.id" @click="selectMessage(row)">
+        <p v-if="messageListPending" class="mail-muted" role="status">正在筛选邮件…</p>
+        <div v-else-if="messageListFailed" class="mail-list-error" role="alert">
+          <span>邮件筛选失败</span><el-button link type="primary" @click="scheduleMessages">重试</el-button>
+        </div>
+        <div class="mail-cards" aria-label="邮件列表" :aria-busy="messageListPending">
+          <button v-for="row in rows" :key="row.id" class="mail-card" :class="{selected: selected?.id === row.id}" :aria-pressed="selected?.id === row.id" :disabled="mailListUnavailable" @click="selectMessage(row)">
             <strong class="mail-card-amount">{{ $platformText(summaryAmount(row)) }}</strong>
             <span class="mail-card-subject">{{ row.subject || '（无主题）' }}</span>
             <span>{{ row.payment_summary?.payers?.join('、') || '付款人待补充' }}</span>
@@ -103,9 +107,9 @@
             <span class="mail-card-meta">{{ row.sender || '发件人未提供' }} · {{ formatDate(row.received) }}</span>
             <StatusBadge class="ds-card-status" :tone="row.payment_summary?.payers?.length ? 'success' : 'neutral'" :label="$platformText(summaryStatus(row))" />
           </button>
-          <p v-if="!filteredRows.length" class="mail-muted">{{ savedTotal ? '没有符合筛选条件的邮件' : '暂无邮件，可导入 MSG / EML 邮件' }}</p>
+          <p v-if="messagesLoaded && !mailListUnavailable && !rows.length" class="mail-muted">{{ savedTotal ? '没有符合筛选条件的邮件' : '暂无邮件，可导入 MSG / EML 邮件' }}</p>
         </div>
-        <div class="mail-list-pagination"><span>筛选 {{ mailTotal }} 封 · 每页 50 封</span><el-pagination v-model:current-page="mailPage" :page-size="50" :total="mailTotal" :pager-count="5" layout="prev, pager, next" small /></div>
+        <div class="mail-list-pagination"><span v-if="messagesLoaded && !mailListUnavailable">筛选 {{ mailTotal }} 封 · 每页 50 封</span><el-pagination v-model:current-page="mailPage" :disabled="mailListUnavailable" :page-size="50" :total="mailTotal" :pager-count="5" layout="prev, pager, next" small /></div>
         <footer class="mail-list-footer"><span>已保存 {{ savedTotal }} 封 · 支持翻页及全库搜索</span><el-button link type="danger" :icon="Delete" :disabled="locked || !!working || !savedTotal" @click="clearLocal">清空本地记录</el-button></footer>
       </section>
       <section class="mail-detail" aria-label="邮件详情" v-loading="detailLoading">
@@ -182,27 +186,57 @@ const summaryAmount = (row: MailRow) => {
   const amounts = row.payment_summary?.amounts || []
   return amounts.length > 1 ? `${amounts.length} 笔金额 · ${row.payment_summary?.count || amounts.length} 条付款信息` : amounts.length ? `${amounts[0]!.currency || '币种待补充'} ${Number.isFinite(Number(amounts[0]!.amount))?Number(amounts[0]!.amount).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2}):amounts[0]!.amount}` : '付款金额待补充'
 }
-const filteredRows = computed(() => rows.value)
+const messagesLoaded = ref(false)
+const messageListPending = ref(false)
+const messageListFailed = ref(false)
+const mailListUnavailable = computed(() => messageListPending.value || messageListFailed.value)
 let messageRequest=0, searchTimer:ReturnType<typeof setTimeout>|undefined
 async function loadMessages(){
+  clearTimeout(searchTimer)
+  if (!messagesLoaded.value || messageListFailed.value) messageListPending.value = true
   const request=++messageRequest
   const query={page:mailPage.value,page_size:50,keyword:filter.value,payment_filter:paymentFilter.value}
-  const data=await mailApi.messagePage(query)
-  if(disposed || request!==messageRequest || query.page!==mailPage.value || query.keyword!==filter.value || query.payment_filter!==paymentFilter.value)return
+  const isCurrent = () => !disposed && request === messageRequest && query.page === mailPage.value
+    && query.keyword === filter.value && query.payment_filter === paymentFilter.value
+  let data
+  try {
+    data = await mailApi.messagePage(query)
+  } catch (error) {
+    if (!isCurrent()) return
+    if (!messageListPending.value) throw error
+    messageListPending.value = false
+    messageListFailed.value = true
+    return
+  }
+  if (!isCurrent()) return
+  const last = Math.max(1, Math.ceil(data.total / query.page_size))
+  if (query.page > last) {
+    mailPage.value = last
+    return
+  }
+  const selectedWasListed = rows.value.some(row => row.id === selected.value?.id)
   rows.value=data.rows;mailTotal.value=data.total;savedTotal.value=data.total_saved
-  if(selected.value && !data.rows.some(row=>row.id===selected.value?.id)) {
+  messagesLoaded.value = true
+  messageListFailed.value = false
+  messageListPending.value = false
+  if(selectedWasListed && !data.rows.some(row=>row.id===selected.value?.id)) {
     ++detailRequest; ++relatedRequest
     selected.value=null; related.value=null; relatedError.value=''; relatedLoading.value=false
     relatedPaymentId.value=''; detailLoading.value=false
   }
-  const last=Math.max(1,Math.ceil(data.total/50));if(mailPage.value>last)mailPage.value=last
 }
-function scheduleMessages(){clearTimeout(searchTimer);searchTimer=setTimeout(()=>{void loadMessages().catch(error=>{connectionError.value=errorText(error)})},250)}
+function scheduleMessages(){
+  clearTimeout(searchTimer)
+  ++messageRequest
+  messageListPending.value = true
+  messageListFailed.value = false
+  searchTimer = setTimeout(() => { void loadMessages() }, 250)
+}
 watch([filter,paymentFilter],()=>{
   ++detailRequest; ++relatedRequest
   selected.value=null; related.value=null; relatedError.value=''; relatedLoading.value=false
   relatedPaymentId.value=''; detailLoading.value=false
-  rows.value=[]; mailTotal.value=0; mailPage.value=1; scheduleMessages()
+  mailPage.value=1; scheduleMessages()
 })
 watch(mailPage,scheduleMessages)
 watch(section,value=>{if(value==='mail')scheduleMessages()})
@@ -222,7 +256,7 @@ async function refresh() {
       else if(status.value.store && status.value.folder){folders.value=[{store:status.value.store,id:status.value.folder,label:status.value.folder_label || '上次选择的 Outlook 文件夹'}];folderKeys.value=folders.value.map(folderValue)}
       initialized=true
     }
-    if(!status.value.status_diagnostic && section.value==='mail') await loadMessages(); connectionError.value=''
+    if(!status.value.status_diagnostic && section.value==='mail' && !messageListPending.value) await loadMessages(); connectionError.value=''
     if(section.value==='mail' && related.value?.computation?.stale && !relatedLoading.value)void loadRelated()
     if(selected.value && (status.value.analysis_busy || selected.value.payment_summary?.status === 'pending' || rows.value.find(row => row.id === selected.value?.id)?.payment_summary?.status !== selected.value.payment_summary?.status || selected.value.attachment_details?.some(a=>a.status==='pending' || a.status==='running'))) {
       const identity=selected.value.id, request=detailRequest
@@ -245,7 +279,7 @@ async function action(name: string, work: ()=>Promise<void>) {
 async function connect() { await action('connect',async()=>{const data=await mailApi.folders();folders.value=data.folders;folderWarnings.value=data.errors;folderKeys.value=folderKeys.value.filter(key=>data.folders.some(f=>folderValue(f)===key));if(!data.folders.length) ElMessage.warning('未找到可访问的邮箱或存档，请先在经典 Outlook 打开 PST。')}) }
 async function scan(reset=false) { if(!rangeValid.value || !selectedFolders.value.length)return; await action('scan',async()=>{status.value=await mailApi.scan({...selection(),reset})}) }
 async function setPolling(value: string | number | boolean) { if(value && (!rangeValid.value || !selectedFolders.value.length))return; await action('poll',async()=>{status.value=await mailApi.poll({...selection(),enabled:!!value,seconds:seconds.value,resume_on_start:resumeOnStart.value})}) }
-async function openMatchedMail(identity: string) {section.value='mail';await selectMessage({id:identity} as MailRow)}
+async function openMatchedMail(identity: string) {section.value='mail';await selectMessage({id:identity})}
 async function loadRelated(limit = 5) {
   const identity = selected.value?.id
   if (!identity) return
@@ -266,8 +300,7 @@ async function openRelatedReceipt(id: string, ref: string) {
   try { await receiptMatching.value?.openReceipt(id, ref, mailId,relatedPaymentId.value) }
   catch (error) { ElMessage.error(errorText(error)) }
 }
-async function selectMessage(row: MailRow | null) {
-  if(!row) return
+async function selectMessage(row: Pick<MailRow, 'id'>) {
   const request=++detailRequest
   ++relatedRequest; related.value=null; relatedError.value=''; relatedLoading.value=false
   relatedPaymentId.value=''
@@ -283,7 +316,12 @@ async function importSample(event: Event) {
   const input=event.target as HTMLInputElement, file=input.files?.[0];input.value=''
   if(!file) return
   if(file.size>25*1024*1024) {ElMessage.error('邮件不能超过 25 MB');return}
-  await action('import',async()=>{const result=await mailApi.import(file);rows.value=await mailApi.messages();const row=rows.value.find(r=>r.id===result.id);if(row) await selectMessage(row);ElMessage.success(result.new ? '已导入，正在本地识别附件' : '邮件已存在，已保留识别结果')})
+  await action('import', async () => {
+    const result = await mailApi.import(file)
+    await selectMessage({ id: result.id })
+    scheduleMessages()
+    ElMessage.success(result.new ? '已导入，正在本地识别附件' : '邮件已存在，已保留识别结果')
+  })
 }
 async function analyzeAttachments() {
   if(!selected.value) return
@@ -291,11 +329,17 @@ async function analyzeAttachments() {
 }
 async function clearLocal() {
   try {await ElMessageBox.confirm('仅清除本机保存的邮件正文和解析结果，不删除 Outlook 邮件。','清空本地记录',{type:'warning',confirmButtonText:'清空',cancelButtonText:'取消'})} catch{return}
-  await action('clear',async()=>{await mailApi.clear();detailRequest++;relatedRequest++;related.value=null;relatedLoading.value=false;relatedError.value='';selected.value=null;rows.value=[];savedTotal.value=0;mailTotal.value=0;mailPage.value=1;messageRequest++})
+  await action('clear',async()=>{
+    await mailApi.clear()
+    detailRequest++; relatedRequest++; messageRequest++; clearTimeout(searchTimer)
+    related.value=null;relatedLoading.value=false;relatedError.value='';selected.value=null;detailLoading.value=false
+    rows.value=[];savedTotal.value=0;mailTotal.value=0;mailPage.value=1
+    messagesLoaded.value=true;messageListPending.value=false;messageListFailed.value=false
+  })
 }
 function exportRows() {
   const cell=(value: string)=>'"'+(/^[\s]*[=+@-]/.test(value) ? "'"+value : value).replace(/"/g,'""')+'"'
-  const lines=[['主题','发件人','时间','付款人（多值独立列示）','付款日期（多值独立列示）','付款金额（多值独立列示）','业务编号（可选）','识别状态','附件名称','来源'],...filteredRows.value.map(r=>[r.subject,r.sender,r.received,(r.payment_summary?.payers || []).join('; '),(r.payment_summary?.dates || []).join('; '),(r.payment_summary?.amounts || []).map(a=>`${a.currency} ${a.amount}`).join('; '),(r.payment_summary?.business_ids || r.candidates || []).join('; '),summaryStatus(r),r.attachments.join('; '),r.source])]
+  const lines=[['主题','发件人','时间','付款人（多值独立列示）','付款日期（多值独立列示）','付款金额（多值独立列示）','业务编号（可选）','识别状态','附件名称','来源'],...rows.value.map(r=>[r.subject,r.sender,r.received,(r.payment_summary?.payers || []).join('; '),(r.payment_summary?.dates || []).join('; '),(r.payment_summary?.amounts || []).map(a=>`${a.currency} ${a.amount}`).join('; '),(r.payment_summary?.business_ids || r.candidates || []).join('; '),summaryStatus(r),r.attachments.join('; '),r.source])]
   downloadBlob(new Blob(['\uFEFF'+lines.map(r=>r.map(cell).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'}),'邮件读取结果.csv')
 }
 onMounted(refresh)
@@ -304,6 +348,8 @@ onBeforeUnmount(()=>{disposed=true;detailRequest++;relatedRequest++;clearTimeout
 
 <style scoped>
 .mail-page{padding:32px 32px 40px;max-width:1920px;margin:auto}
+.mail-card:disabled{cursor:default}
+.mail-list-error{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--el-color-danger)}
 .mail-heading,.mail-actions,.mail-folder-select,.mail-schedule,.mail-schedule-options,.mail-section-heading,.mail-detail-heading,.mail-list-footer{display:flex;align-items:center;gap:12px}
 .mail-heading{justify-content:space-between;margin-bottom:16px}.mail-heading>div:first-child{display:flex;align-items:baseline;flex-wrap:wrap;gap:8px 16px}.mail-heading h1{font-size:24px;margin:0}.mail-heading p{font-size:13px;color:var(--ink-muted);margin:0}.mail-file-input{display:none}
 .mail-controls{display:grid;grid-template-columns:minmax(260px,1fr) 150px 150px auto;align-items:end;gap:20px;background:white;border-bottom:1px solid var(--border);padding:24px}

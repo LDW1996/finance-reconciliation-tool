@@ -58,7 +58,7 @@ def test_parse_exec_salaries():
             parse_exec_salaries(bad)
 
 
-def test_job_store_is_one_time_and_size_bounded(monkeypatch):
+def test_job_store_supports_repeat_download_and_is_size_bounded(monkeypatch):
     monkeypatch.setattr(pc_service, "run_engine", _fake_engine)
     pc_service._jobs.clear()
     payload = pc_service.run_job([("a.xlsx", b"x")], "2026-08", {"batam": 1})
@@ -69,7 +69,7 @@ def test_job_store_is_one_time_and_size_bounded(monkeypatch):
 
     job = pc_service.get_job(payload["job_id"])
     assert job["zip_bytes"] == _fake_zip()
-    assert pc_service.get_job(payload["job_id"]) is None
+    assert pc_service.get_job(payload["job_id"]) == job
     assert pc_service.get_job("nope") is None
 
     with pytest.raises(ProfitCenterError, match="至少上传"):
@@ -107,10 +107,9 @@ def test_run_download_end_to_end(monkeypatch):
         with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
             assert archive.read("demo.txt") == b"ok"
 
-        # 结果包一次性取回，重复下载应 404
-        assert client.get(
-            f"/api/profit-center/download/{body['job_id']}"
-        ).status_code == 404
+        repeated = client.get(f"/api/profit-center/download/{body['job_id']}")
+        assert repeated.status_code == 200
+        assert repeated.content == downloaded.content
 
 
 def test_run_rejects_bad_salary_payload():
@@ -190,6 +189,25 @@ def test_templates_endpoints_over_http():
                      if t["key"] == "batam")
         assert batam["uploaded"] is True
         assert batam["stored_name"] == name
+
+        other_region = next(region for region in REGIONS if region.key != "batam")
+        other_name, other_data = _tiny_xlsx(other_region.template)
+        wrong_slot = client.post(
+            "/api/profit-center/templates",
+            headers=MUTATION_HEADERS,
+            files={"files": (other_name, other_data)},
+            data={"target_key": "batam"},
+        )
+        assert wrong_slot.status_code == 400
+        assert pc_service.load_templates() == {"batam": data}
+
+        replaced = client.post(
+            "/api/profit-center/templates",
+            headers=MUTATION_HEADERS,
+            files={"files": (name, data)},
+            data={"target_key": "batam"},
+        )
+        assert replaced.status_code == 200
 
         removed = client.delete(
             "/api/profit-center/templates/batam", headers=MUTATION_HEADERS)
