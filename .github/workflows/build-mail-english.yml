@@ -2,47 +2,12 @@ name: Build Financial Platform
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/build-mail-english.yml'
-      - 'backend/launcher.py'
-      - 'backend/app/main.py'
-      - 'backend/app/ilog*.py'
-      - '.github/workflows/build-windows-exe.yml'
-      - 'packaging/finance-reconcile.spec'
-      - 'packaging/smoke_windows_exe.py'
-      - 'frontend/src/views/ReconciliationView.vue'
-      - 'frontend/src/views/UnlockView.vue'
-      - 'backend/app/platform*.py'
-      - 'packaging/prepare_platform_accounts.py'
-      - 'frontend/src/platformLocale.ts'
-      - 'frontend/src/services/platform*.ts'
-      - 'frontend/src/components/Platform*.vue'
-      - 'frontend/src/components/IlogRetentionSettings.vue'
-      - 'frontend/src/App.vue'
-      - 'frontend/src/main.ts'
-      - 'frontend/tooling/runtimePlatformLocale.ts'
-      - 'frontend/tooling/platformEnglish.json'
-      - 'frontend/tooling/excelEnglish.json'
-      - 'backend/app/mail*.py'
-      - 'backend/app/customer*.py'
-      - 'backend/app/google_sheets.py'
-      - 'backend/app/mail_english*'
-      - 'backend/app/mail_probe.py'
-      - 'frontend/src/MailEnglishApp.vue'
-      - 'frontend/src/views/MailView.vue'
-      - 'frontend/src/components/Mail*.vue'
-      - 'frontend/src/components/Receipt*.vue'
-      - 'frontend/src/components/Customer*.vue'
-      - 'frontend/src/services/mail*.ts'
-      - 'frontend/tooling/mailEnglish*'
-      - 'frontend/tooling/check-mail-english.mjs'
-      - 'frontend/tooling/check-platform-english.mjs'
-      - 'frontend/vite.config.ts'
-      - 'packaging/mail-reconcile.spec'
-      - 'packaging/smoke_mail_exe.py'
-      - 'packaging/Mail-Reconciliation-Guide.txt'
+    inputs:
+      fast_build:
+        description: "快速打包：复用同一提交已通过的 Windows Tests；仍检查 EXE 启动"
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -53,4 +18,4 @@ jobs:
     uses: ./.github/workflows/build-windows-exe.yml
     secrets: inherit
     with:
-      fast_build: false
+      fast_build: ${{ inputs.fast_build }}
