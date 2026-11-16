@@ -102,6 +102,7 @@ dd { margin: 8px 0 0; font-weight: 600; line-height: 1.6; overflow-wrap: anywher
 }
 .el-input__wrapper, .el-select__wrapper { min-height: 40px; }
 .standard-box { padding: 20px 0; margin-top: 4px; border-top: 1px solid var(--border); }
+.standard-box summary { cursor: pointer; font-weight: 600; }
 .standard-box ul { padding-left: 18px; margin: 12px 0 0; color: var(--ink-muted); font-size: 14px; line-height: 1.8; }
 .standard-box li + li { margin-top: 6px; }
 .analyze-button { width: 100%; margin-top: 12px; min-height: 44px; font-weight: 600; }

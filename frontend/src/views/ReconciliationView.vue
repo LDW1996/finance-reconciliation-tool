@@ -34,6 +34,7 @@
             :company-code="companyCodeText"
             :checking="isInspecting"
             :checking-text="t('dropStatusChecking')"
+            :replace-text="t('replaceFile')"
             :uploaded-text="t('uploaded')"
             :pending-text="t('pendingUpload')"
             :upload-prompt="t('uploadPrompt')"
@@ -126,16 +127,6 @@
             </el-form-item>
           </el-form>
 
-          <div class="standard-box">
-            <h3>{{ t('formatRequirements') }}</h3>
-            <ul>
-              <li>{{ t('requiredFields') }}</li>
-              <li>{{ t('twoCompanies') }}</li>
-              <li>{{ t('numericAmount') }}</li>
-              <li>{{ t('blankAllocation') }}</li>
-            </ul>
-          </div>
-
           <el-button
             class="analyze-button"
             type="primary"
@@ -147,6 +138,16 @@
           >
             {{ t('startAnalysis') }}
           </el-button>
+
+          <details class="standard-box">
+            <summary>{{ t('formatRequirements') }}</summary>
+            <ul>
+              <li>{{ t('requiredFields') }}</li>
+              <li>{{ t('twoCompanies') }}</li>
+              <li>{{ t('numericAmount') }}</li>
+              <li>{{ t('blankAllocation') }}</li>
+            </ul>
+          </details>
 
           <el-alert
             v-if="errorMessage"

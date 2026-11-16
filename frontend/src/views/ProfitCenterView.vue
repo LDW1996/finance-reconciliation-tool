@@ -75,15 +75,42 @@
 
       <template v-else>
         <section class="pc-card">
-          <div class="pc-card-head"><h3 class="pc-card-title">{{ $platformText('上传报表文件') }}</h3></div>
           <div class="pc-card-body">
+            <div class="pc-field">
+              <label class="pc-label" for="profit-report-month">{{ $platformText('上报月份') }}</label>
+              <el-select id="profit-report-month" v-model="month" class="pc-month" :disabled="running" filterable allow-create default-first-option>
+                <el-option v-for="item in monthOptions" :key="item" :label="item" :value="item" />
+              </el-select>
+              <p v-if="!monthTokens" class="pc-hint pc-hint--warn" role="status">
+                {{ $platformText('请选择二月至十二月，或按此格式输入') }} YYYY-MM
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section class="pc-card">
+          <div class="pc-card-head"><h3 class="pc-card-title">{{ $platformText('按清单上传报表') }}</h3></div>
+          <div class="pc-card-body">
+            <div v-if="config && monthTokens" class="pc-checklist">
+              <section v-for="group in reportChecklist" :key="group.period" class="pc-checklist-group">
+                <h4>{{ group.label }} · {{ group.period }}</h4>
+                <ul>
+                  <li v-for="[key, label] in group.files" :key="key">
+                    <span>{{ label }}</span>
+                    <el-tag size="small" :type="fileCounts.has(key) ? 'success' : 'warning'">
+                      {{ fileCounts.has(key) ? $platformText('已上传') : $platformText('待上传') }}
+                    </el-tag>
+                  </li>
+                </ul>
+              </section>
+            </div>
             <el-upload
               ref="uploadRef"
               class="pc-upload"
               drag
               multiple
               :auto-upload="false"
-              :disabled="running"
+              :disabled="running || !config || !monthTokens"
               :show-file-list="false"
               accept=".xlsx,.xls,.xlsm"
               :on-change="handleFileChange"
@@ -109,12 +136,6 @@
               <p v-if="files.length && duplicateFiles.length" class="pc-hint pc-hint--warn">
                 {{ $platformText('重复上传，仅取第一份') }}：{{ duplicateFiles.join('；') }}
               </p>
-              <p v-if="files.length && missingDataFiles.length" class="pc-hint pc-hint--warn" role="status">
-                {{ $platformText('缺少必需数据源') }}：{{ missingDataFiles.join('；') }}
-              </p>
-              <p v-else-if="files.length && monthTokens" class="pc-hint pc-hint--ok">
-                {{ $platformText('必需数据源已齐') }}
-              </p>
             </div>
 
             <div class="pc-required">
@@ -134,18 +155,8 @@
         </section>
 
         <section class="pc-card">
-          <div class="pc-card-head"><h3 class="pc-card-title">{{ $platformText('上报参数') }}</h3></div>
+          <div class="pc-card-head"><h3 class="pc-card-title">{{ $platformText('生成上报结果') }}</h3></div>
           <div class="pc-card-body">
-            <div class="pc-field">
-              <label class="pc-label">{{ $platformText('上报月份') }}</label>
-              <el-select v-model="month" class="pc-month" :disabled="running" filterable allow-create default-first-option>
-                <el-option v-for="item in monthOptions" :key="item" :label="item" :value="item" />
-              </el-select>
-              <p v-if="!monthTokens" class="pc-hint pc-hint--warn" role="status">
-                {{ $platformText('请选择二月至十二月，或按此格式输入') }} YYYY-MM
-              </p>
-            </div>
-
             <div class="pc-field">
               <div class="pc-subhead">{{ $platformText('高管工资录入') }}</div>
               <p class="pc-hint">{{ $platformText('留空不阻塞，结果中标待手工录入') }}</p>
@@ -159,7 +170,7 @@
 
             <div class="pc-actions">
               <el-button type="primary" size="large" :loading="running" :disabled="!canRun" @click="handleRun">
-                {{ running ? $platformText('执行中') : $platformText('执行') }}
+                {{ running ? $platformText('执行中') : $platformText('生成结果') }}
               </el-button>
             </div>
           </div>
@@ -330,6 +341,16 @@ const requiredData = computed(() => {
   }
   requirements.set('indonesia', `${platformText('印尼汇总表')} ${tokens.period}`)
   return requirements
+})
+
+const reportChecklist = computed(() => {
+  const tokens = monthTokens.value
+  if (!tokens) return []
+  const entries = [...requiredData.value]
+  return [
+    { label: platformText('上月'), period: tokens.prevPeriod, files: entries.filter(([key]) => key.endsWith(`:${tokens.prevPeriod}`)) },
+    { label: platformText('本月'), period: tokens.period, files: entries.filter(([key]) => key === 'indonesia' || key.endsWith(`:${tokens.period}`)) },
+  ]
 })
 
 const fileChecks = computed<FileCheck[]>(() => {
@@ -563,12 +584,16 @@ onMounted(() => {
 .pc-file-name { overflow-wrap: anywhere; }
 .pc-file-main { flex: 1; min-width: 0; }
 .pc-file-msg { display: block; font-size: 12px; font-weight: 400; }
-.pc-hint--ok { color: #1e7e34; }
 .pc-empty { padding: 8px 0; margin: 0; color: var(--ink-muted); font-size: 13px; }
 .pc-clear { margin-top: 10px; }
 .pc-field + .pc-field { margin-top: 8px; }
 .pc-label { display: block; margin-bottom: 8px; font-size: 13px; font-weight: 600; color: #465566; }
-.pc-month { width: 100%; }
+.pc-month { width: min(100%, 240px); }
+.pc-checklist { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 16px; margin-bottom: 16px; }
+.pc-checklist-group { padding: 14px 16px; border: 1px solid var(--border); border-radius: 8px; }
+.pc-checklist-group h4 { margin: 0 0 8px; }
+.pc-checklist-group ul { list-style: none; margin: 0; padding: 0; }
+.pc-checklist-group li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 5px 0; font-size: 13px; }
 .pc-hint { margin: 14px 0 0; color: var(--ink-muted); font-size: 13px; line-height: 1.6; }
 .pc-hint--first { margin: 0 0 16px; }
 .pc-hint--warn { color: #c0392b; }

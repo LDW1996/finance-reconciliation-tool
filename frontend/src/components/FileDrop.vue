@@ -7,25 +7,31 @@
       <el-tag v-else effect="plain">{{ pendingText }}</el-tag>
     </div>
 
-    <el-upload
-      ref="uploadRef"
-      drag
-      :auto-upload="false"
-      :show-file-list="false"
-      accept=".xlsx,.xls"
-      :on-change="handleChange"
-    >
-      <el-icon class="upload-icon"><UploadFilled /></el-icon>
-      <div class="upload-text">{{ uploadPrompt }}</div>
-      <template #tip>
-        <div class="upload-tip">{{ supportedText }}</div>
-      </template>
-    </el-upload>
+    <div class="file-picker" :class="{ 'has-file': file }">
+      <strong v-if="file" class="selected-filename">{{ file.name }}</strong>
+      <el-upload
+        ref="uploadRef"
+        :drag="!file"
+        :auto-upload="false"
+        :show-file-list="false"
+        accept=".xlsx,.xls"
+        :on-change="handleChange"
+      >
+        <el-button v-if="file">{{ replaceText }}</el-button>
+        <template v-else>
+          <el-icon class="upload-icon"><UploadFilled /></el-icon>
+          <div class="upload-text">{{ uploadPrompt }}</div>
+        </template>
+        <template #tip>
+          <div v-if="!file" class="upload-tip">{{ supportedText }}</div>
+        </template>
+      </el-upload>
+    </div>
 
-    <dl class="file-status">
+    <dl v-if="!file" class="file-status">
       <div class="status-item">
         <dt>{{ filenameLabel }}</dt>
-        <dd>{{ file?.name ?? notSelectedText }}</dd>
+        <dd>{{ notSelectedText }}</dd>
       </div>
       <div class="status-item">
         <dt>{{ companyCodeLabel }}</dt>
@@ -50,6 +56,7 @@ defineProps<{
   checkingText: string
   uploadedText: string
   pendingText: string
+  replaceText: string
   uploadPrompt: string
   supportedText: string
   filenameLabel: string
@@ -69,3 +76,21 @@ function handleChange(uploadFile: UploadFile) {
   emit('selected', raw)
 }
 </script>
+
+<style scoped>
+.file-picker.has-file {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.selected-filename {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.has-file :deep(.el-upload) {
+  width: auto;
+}
+</style>
