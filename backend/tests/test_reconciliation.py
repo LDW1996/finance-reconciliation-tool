@@ -4,6 +4,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 from openpyxl import load_workbook
+from openpyxl.styles import PatternFill
 
 from app.reconciliation import (
     REQUIRED_COLUMNS,
@@ -254,3 +255,32 @@ def test_amount_discrepancy_marks_all_source_rows_coffee_without_counting_as_mat
             assert all(c.fill.patternType=='solid' and c.fill.fgColor.rgb=='FFD7B899' for c in row)
         elif row[1].value=='ONLY':
             assert all(c.fill.patternType is None for c in row)
+
+
+
+def test_blank_assignments_do_not_receive_coffee_fill():
+    rows = [
+        {"公司代码or伙伴公司": company, "分配": key, "原币金额": amount}
+        for company, key, amount in [
+            ("1703", None, 1000),
+            ("2615", "   ", -100),
+            ("1703", "DIFF", 1000),
+            ("2615", "DIFF", -100),
+        ]
+    ]
+    source = workbook_bytes(rows)
+    workbook = load_workbook(source)
+    workbook.active["A2"].fill = PatternFill("solid", fgColor="FFABCDEF")
+    source = BytesIO()
+    workbook.save(source)
+    source.seek(0)
+
+    result = reconcile_combined_workbook(source, "blank.xlsx", output_mode="marked")
+    sheet = load_workbook(BytesIO(result.excel_bytes)).active
+
+    assert sheet["A2"].fill.fgColor.rgb == "FFABCDEF"
+    assert all(cell.fill.patternType is None for cell in sheet[2][1:])
+    assert all(cell.fill.patternType is None for cell in sheet[3])
+    for row in (sheet[4], sheet[5]):
+        assert all(cell.fill.fgColor.rgb == "FFD7B899" for cell in row)
+    assert result.summary["金额差异"]["明细行数"] == 4

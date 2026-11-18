@@ -519,7 +519,11 @@ def _write_marked_data_excel(
         "金额差异": PatternFill("solid", fgColor="FFD7B899"),
     }
     for excel_row, key in enumerate(_normalize_match_key(raw_data[match_field]), start=2):
-        fill = fills.get(match_type_by_key.get(key, ""))
+        match_type = match_type_by_key.get(key, "")
+        assignment = raw_data[match_field].iloc[excel_row - 2]
+        if match_type == "金额差异" and (pd.isna(assignment) or not str(assignment).strip()):
+            continue
+        fill = fills.get(match_type)
         if fill:
             for cell in data_sheet[excel_row]:
                 cell.fill = fill
