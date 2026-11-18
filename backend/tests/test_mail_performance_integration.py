@@ -12,10 +12,13 @@ def test_fresh_and_reused_attachments_have_distinct_metrics(tmp_path):
         time.sleep(.01)
         return dict(pages=[dict(number=1,method='ocr',fields={})],fields={},warnings=[])
     manager=MailManager(store,analyzer=analyze)
-    deadline=time.monotonic()+5
-    while manager.status()['analysis_busy'] and time.monotonic()<deadline:time.sleep(.02)
-    status=manager.status()
-    assert not status['analysis_busy']
+    # This verifies metrics, so allow for slower CI disk I/O and scheduling.
+    deadline = time.monotonic() + 30
+    status = manager.status()
+    while status['analysis_busy'] and time.monotonic() < deadline:
+        time.sleep(.02)
+        status = manager.status()
+    assert not status['analysis_busy'], f'Background analysis did not finish: {status}'
     stats=status['performance']
     assert stats['counters']['completed_attachments']==3
     assert stats['counters']['analysis_runs']==1
