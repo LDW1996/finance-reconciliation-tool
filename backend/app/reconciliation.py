@@ -98,8 +98,10 @@ def localize_message(message: str, locale: str) -> str:
         return f"Kolom wajib tidak ditemukan: {_translate_source_fields(columns, locale)}. Periksa template file."
     if message.startswith("原币金额存在 "):
         count = message.split("原币金额存在 ", 1)[1].split(" 行", 1)[0]
+        rows = message.partition("Excel 行号：")[2].rstrip("）")
+        suffix = f" (Excel: {rows})" if rows else ""
         return (f"{count} row(s) in 原币金额 could not be read as numbers. Check the amount column."
-                if locale == "en" else f"{count} baris pada 原币金额 tidak dapat dibaca sebagai angka. Periksa kolom jumlah.")
+                if locale == "en" else f"{count} baris pada 原币金额 tidak dapat dibaca sebagai angka. Periksa kolom jumlah.") + suffix
     if message.startswith("公司代码or伙伴公司必须且只能包含两家公司代码"):
         codes = message.split("当前识别到：", 1)[-1]
         return (f"公司代码or伙伴公司 must contain exactly two company codes. Detected: {codes}."
@@ -154,7 +156,7 @@ def read_excel(file_obj: BinaryIO | BytesIO, filename: str) -> pd.DataFrame:
         raise ReconciliationError("文件格式错误，请选择Excel文件")
 
     try:
-        return pd.read_excel(file_obj)
+        return pd.read_excel(file_obj, keep_default_na=False)
     except Exception as exc:
         raise ReconciliationError("Excel读取失败，请检查文件是否损坏或格式是否正确") from exc
 
@@ -187,7 +189,7 @@ def inspect_combined_workbook(
         return report
 
     try:
-        df = pd.read_excel(workbook_file)
+        df = pd.read_excel(workbook_file, keep_default_na=False)
     except Exception:
         errors.append("Excel读取失败，请检查文件是否损坏或格式是否正确")
         report["errors"] = [localize_message(message, locale) for message in errors]
@@ -213,10 +215,10 @@ def inspect_combined_workbook(
         visible_codes = "、".join(company_codes) if company_codes else "无"
         errors.append(f"公司代码or伙伴公司必须且只能包含两家公司代码，当前识别到：{visible_codes}")
 
-    amount_values = pd.to_numeric(df[amount_field], errors="coerce")
-    invalid_amounts = int(amount_values.isna().sum() - df[amount_field].isna().sum())
-    if invalid_amounts > 0:
-        errors.append(f"原币金额存在 {invalid_amounts} 行无法识别为数字，请检查金额列")
+    try:
+        _validated_amounts(df[amount_field])
+    except ReconciliationError as exc:
+        errors.append(exc.user_message)
 
     normalized_allocations = _normalize_match_key(df[match_field])
     blank_allocations = int((normalized_allocations == "空白").sum())
@@ -228,6 +230,20 @@ def inspect_combined_workbook(
     report["errors"] = [localize_message(message, locale) for message in errors]
     report["warnings"] = [localize_message(message, locale) for message in warnings]
     return report
+
+
+def _validated_amounts(values: pd.Series) -> pd.Series:
+    # Check cell values before coercion: dates and booleans can convert to numbers.
+    blank = values.map(lambda value: isinstance(value, str) and not value.strip())
+    amounts = pd.to_numeric(values.mask(blank, 0), errors="coerce")
+    valid = amounts.map(math.isfinite) & values.map(
+        lambda value: isinstance(value, (str, int, float)) and not isinstance(value, bool)
+    )
+    if not valid.all():
+        rows = values.index[~valid] + 2
+        shown = ", ".join(str(row) for row in rows[:10])
+        raise ReconciliationError(f"原币金额存在 {len(rows)} 行无法识别为数字，请检查金额列（Excel 行号：{shown}）")
+    return amounts
 
 
 def validate_dataframe(df: pd.DataFrame, label: str) -> None:
@@ -332,7 +348,7 @@ def reconcile_combined_workbook(
 
     company_a_code, company_b_code = company_codes
     work["_匹配键"] = _normalize_match_key(work[match_field])
-    work[amount_field] = pd.to_numeric(work[amount_field], errors="coerce").fillna(0)
+    work[amount_field] = _validated_amounts(work[amount_field])
 
     grouped = (
         work.groupby(["_匹配键", company_field], dropna=False)
@@ -417,8 +433,11 @@ def reconcile_combined_workbook(
         difference_summary = _build_difference_summary(
             grouped, status_by_key, company_a_code, company_b_code, company_field
         )
+        source_detail = detail.copy()
+        for column in df.columns:
+            source_detail[column] = df[column]
         excel_bytes = _write_combined_result_excel(
-            summary, matched, differences, unmatched, exceptions, difference_summary, detail, tolerance, locale
+            summary, matched, differences, unmatched, exceptions, difference_summary, source_detail, tolerance, locale
         )
     return ReconciliationResult(
         company_a_code=company_a_code,
@@ -600,8 +619,6 @@ def _write_combined_result_excel(
 
 def _format_export_dataframe(frame: pd.DataFrame) -> pd.DataFrame:
     result = frame.copy()
-    if "分配" in result.columns:
-        result["分配"] = result["分配"].replace({"空白": "24"})
     if "行项目" in result.columns:
         result["行项目"] = result["行项目"].map(_format_line_item)
     for column in result.columns:
@@ -620,13 +637,6 @@ def _format_export_dataframe(frame: pd.DataFrame) -> pd.DataFrame:
             "供应商",
         }:
             result[column] = result[column].map(_format_identifier)
-    computed_columns = {"匹配状态", "匹配类型", "未匹配说明"}
-    computed_columns.update(column for column in result.columns if "原币金额合计" in str(column))
-    computed_columns.add("两公司原币金额合计")
-    for column in result.columns:
-        if column in computed_columns:
-            continue
-        result[column] = result[column].where(pd.notna(result[column]), "24").replace("", "24")
     return result
 
 
@@ -900,7 +910,7 @@ def _prepare(df: pd.DataFrame, match_field: str, amount_field: str, side: str) -
     work = df.copy()
     work[match_field] = work[match_field].astype(str).str.strip()
     work = work[work[match_field] != ""]
-    work[amount_field] = pd.to_numeric(work[amount_field], errors="coerce").fillna(0)
+    work[amount_field] = _validated_amounts(work[amount_field])
 
     grouped = work.groupby(match_field, as_index=False).agg(
         **{

@@ -215,7 +215,7 @@ def test_inspect_combined_workbook_reports_format_errors_without_tracebacks():
 
     assert report["valid"] is False
     assert "公司代码or伙伴公司必须且只能包含两家公司代码，当前识别到：1703" in report["errors"]
-    assert "原币金额存在 1 行无法识别为数字，请检查金额列" in report["errors"]
+    assert "原币金额存在 1 行无法识别为数字，请检查金额列（Excel 行号：2）" in report["errors"]
 
 
 def test_inspect_combined_workbook_rejects_missing_columns_and_wrong_extension():
@@ -284,3 +284,39 @@ def test_blank_assignments_do_not_receive_coffee_fill():
     for row in (sheet[4], sheet[5]):
         assert all(cell.fill.fgColor.rgb == "FFD7B899" for cell in row)
     assert result.summary["金额差异"]["明细行数"] == 4
+
+@pytest.mark.parametrize("invalid", ["bad", "inf", "NaN", "N/A"])
+def test_analysis_rejects_invalid_amount_at_excel_row(invalid):
+    rows = [
+        {"公司代码or伙伴公司": "1703", "分配": "A", "原币金额": 0},
+        {"公司代码or伙伴公司": "2615", "分配": "A", "原币金额": invalid},
+    ]
+    report = inspect_combined_workbook(workbook_bytes(rows), "data.xlsx")
+    assert not report["valid"]
+    with pytest.raises(ReconciliationError, match="Excel 行号：3") as error:
+        reconcile_combined_workbook(workbook_bytes(rows), "data.xlsx")
+    assert error.value.user_message in report["errors"]
+
+
+def test_source_export_distinguishes_blank_cells_from_24():
+    rows = [
+        {"公司代码or伙伴公司": "1703", "分配": None, "文本": None, "原币金额": 0},
+        {"公司代码or伙伴公司": "2615", "分配": 24, "文本": 24, "原币金额": 0},
+    ]
+    result = reconcile_combined_workbook(workbook_bytes(rows), "data.xlsx")
+    source = load_workbook(BytesIO(result.excel_bytes))["原始数据"]
+    assert [source[cell].value for cell in ("B2", "C2", "B3", "C3")] == [None, None, 24, 24]
+
+
+
+def test_blank_amount_counts_as_zero_but_exports_as_blank():
+    rows = [
+        {"公司代码or伙伴公司": "1703", "分配": "A", "原币金额": None},
+        {"公司代码or伙伴公司": "2615", "分配": "A", "原币金额": 0},
+    ]
+    assert inspect_combined_workbook(workbook_bytes(rows), "data.xlsx")["valid"]
+    result = reconcile_combined_workbook(workbook_bytes(rows), "data.xlsx")
+    assert result.summary["完全一致"]["明细行数"] == 2
+    source = load_workbook(BytesIO(result.excel_bytes))["原始数据"]
+    assert source["C2"].value is None
+    assert source["C3"].value == 0
